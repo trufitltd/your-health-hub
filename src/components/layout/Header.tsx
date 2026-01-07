@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Stethoscope, Calendar, Phone, User } from 'lucide-react';
+import { Menu, X, Stethoscope, Calendar, Phone, User, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
+import { toast } from '@/components/ui/use-toast';
 
 const navLinks = [
   { href: '/', label: 'Home' },
@@ -17,6 +20,18 @@ export function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
+  const { user, signOut, isLoading } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      toast({ title: 'Signed out', description: 'You have been signed out.' });
+      navigate('/');
+    } catch (error: any) {
+      toast({ title: 'Error', description: error?.message ?? 'Failed to sign out' });
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -71,17 +86,36 @@ export function Header() {
 
           {/* Desktop CTA */}
           <div className="hidden md:flex items-center gap-3">
-            <Link to="/auth">
-              <Button variant="ghost" size="sm">
-                <User className="w-4 h-4 mr-1" />
-                Login
-              </Button>
-            </Link>
-            <Link to="/auth?mode=register">
-              <Button variant="gradient" size="sm">
-                Get Started
-              </Button>
-            </Link>
+            {!isLoading && user ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-foreground">
+                  {user.email}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSignOut}
+                  className="flex items-center gap-1"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign Out
+                </Button>
+              </div>
+            ) : (
+              <>
+                <Link to="/auth">
+                  <Button variant="ghost" size="sm">
+                    <User className="w-4 h-4 mr-1" />
+                    Login
+                  </Button>
+                </Link>
+                <Link to="/auth?mode=register">
+                  <Button variant="gradient" size="sm">
+                    Get Started
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile Menu Toggle */}
@@ -124,16 +158,36 @@ export function Header() {
                 </Link>
               ))}
               <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-border">
-                <Link to="/auth">
-                  <Button variant="outline" className="w-full">
-                    Login
-                  </Button>
-                </Link>
-                <Link to="/auth?mode=register">
-                  <Button variant="gradient" className="w-full">
-                    Get Started
-                  </Button>
-                </Link>
+                {!isLoading && user ? (
+                  <>
+                    <div className="px-4 py-2 rounded-lg bg-muted">
+                      <p className="text-sm font-medium text-foreground">
+                        {user.email}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={handleSignOut}
+                    >
+                      <LogOut className="w-4 h-4 mr-2" />
+                      Sign Out
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Link to="/auth">
+                      <Button variant="outline" className="w-full">
+                        Login
+                      </Button>
+                    </Link>
+                    <Link to="/auth?mode=register">
+                      <Button variant="gradient" className="w-full">
+                        Get Started
+                      </Button>
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </motion.div>
