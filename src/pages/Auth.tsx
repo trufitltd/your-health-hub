@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/components/ui/use-toast';
 
 type AuthMode = 'login' | 'register';
 type UserRole = 'patient' | 'doctor';
@@ -23,16 +25,72 @@ export default function AuthPage() {
   
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [role, setRole] = useState<UserRole>('patient');
+  const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    // Simulate API call
-    setTimeout(() => {
+
+    try {
+      if (mode === 'register') {
+        // Sign up with Supabase
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: name,
+              role,
+            },
+          },
+        });
+
+        if (error) {
+          toast({ title: 'Registration failed', description: error.message });
+          setIsLoading(false);
+          return;
+        }
+
+        toast({
+          title: 'Account created',
+          description: 'Please check your email to confirm your account.',
+        });
+
+        setIsLoading(false);
+        setMode('login');
+      } else {
+        // Sign in with Supabase
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (error) {
+          toast({ title: 'Sign in failed', description: error.message });
+          setIsLoading(false);
+          return;
+        }
+
+        // Get user role from metadata
+        const userRole = data?.user?.user_metadata?.role || 'patient';
+        localStorage.setItem('userRole', userRole);
+
+        toast({ title: 'Signed in', description: 'Welcome back!' });
+        setIsLoading(false);
+
+        // Redirect based on role
+        navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
+      }
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({ title: 'Error', description: message });
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
   return (
@@ -105,6 +163,8 @@ export default function AuthPage() {
                     placeholder="Enter your full name"
                     className="pl-10 h-12"
                     required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                   />
                 </div>
               </div>
@@ -120,6 +180,8 @@ export default function AuthPage() {
                   placeholder="Enter your email"
                   className="pl-10 h-12"
                   required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
             </div>
@@ -134,6 +196,8 @@ export default function AuthPage() {
                   placeholder={mode === 'register' ? 'Create a password' : 'Enter your password'}
                   className="pl-10 pr-10 h-12"
                   required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                 />
                 <button
                   type="button"
