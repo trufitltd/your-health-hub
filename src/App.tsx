@@ -22,7 +22,6 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-<<<<<<< HEAD
       <AuthProvider>
         <BrowserRouter>
           <Routes>
@@ -40,23 +39,6 @@ const App = () => (
           </Routes>
         </BrowserRouter>
       </AuthProvider>
-=======
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/services" element={<Services />} />
-          <Route path="/specialists" element={<Specialists />} />
-          <Route path="/booking" element={<Booking />} />
-          <Route path="/contact" element={<Contact />} />
-          <Route path="/install" element={<Install />} />
-          <Route path="/patient-portal" element={<PatientPortal />} />
-          <Route path="/doctor-portal" element={<DoctorPortal />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
->>>>>>> 18a84b69e2ce66b90473e8b40e9ac042d2c0aac5
     </TooltipProvider>
   </QueryClientProvider>
 );
