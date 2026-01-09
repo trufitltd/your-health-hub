@@ -28,8 +28,9 @@ export function Header() {
       await signOut();
       toast({ title: 'Signed out', description: 'You have been signed out.' });
       navigate('/');
-    } catch (error: any) {
-      toast({ title: 'Error', description: error?.message ?? 'Failed to sign out' });
+    } catch (error: unknown) {
+      const message = error && typeof error === 'object' && 'message' in error ? (error as { message?: string }).message : 'Failed to sign out';
+      toast({ title: 'Error', description: message });
     }
   };
 
