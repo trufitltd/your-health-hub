@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   Calendar, Clock, Video, MessageSquare, FileText, 
   User, Bell, Settings, LogOut, ChevronRight, Star,
@@ -14,6 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
+import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/components/ui/use-toast';
 
 // Dummy Doctor Data
 const doctorData = {
@@ -199,6 +201,25 @@ const recentReviews = [
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
+  const { user, role } = useAuth();
+  const navigate = useNavigate();
+
+  const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
+  const displayInitials = displayName
+    .split(' ')
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
+  const requireAuth = () => {
+    if (!user) {
+      toast({ title: 'Please sign in', description: 'You must be signed in to access this feature.' });
+      navigate('/auth');
+      return false;
+    }
+    return true;
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -262,12 +283,12 @@ const DoctorPortal = () => {
 
               <div className="flex items-center gap-3">
                 <Avatar className="w-9 h-9">
-                  <AvatarImage src={doctorData.avatar} />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">EC</AvatarFallback>
+                  <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
+                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
                 </Avatar>
                 <div className="hidden md:block">
-                  <p className="text-sm font-medium">{doctorData.name}</p>
-                  <p className="text-xs text-muted-foreground">{doctorData.specialty}</p>
+                  <p className="text-sm font-medium">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                  <p className="text-xs text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
                 </div>
               </div>
             </div>
@@ -830,11 +851,12 @@ const DoctorPortal = () => {
                     <div className="space-y-6">
                       <div className="flex items-center gap-4">
                         <Avatar className="w-20 h-20">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl">EC</AvatarFallback>
+                          <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
+                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{displayInitials}</AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-semibold text-lg">{doctorData.name}</p>
-                          <p className="text-muted-foreground">{doctorData.specialty}</p>
+                          <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                          <p className="text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
                           <Button size="sm" variant="outline" className="mt-2">
                             Change Photo
                           </Button>
@@ -844,23 +866,23 @@ const DoctorPortal = () => {
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
                           <label className="text-sm font-medium">Full Name</label>
-                          <Input defaultValue={doctorData.name} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.full_name ?? doctorData.name} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Email</label>
-                          <Input defaultValue={doctorData.email} className="mt-1" />
+                          <Input defaultValue={user?.email ?? doctorData.email} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Phone</label>
-                          <Input defaultValue={doctorData.phone} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.phone ?? doctorData.phone} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Specialty</label>
-                          <Input defaultValue={doctorData.specialty} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.specialty ?? doctorData.specialty} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Experience</label>
-                          <Input defaultValue={doctorData.experience} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.experience ?? doctorData.experience} className="mt-1" />
                         </div>
                       </div>
 
