@@ -9,6 +9,7 @@ import { useDoctors, useAvailableSlots, checkSlotAvailability } from '@/hooks/us
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { SlotSelectionModal } from '@/components/SlotSelectionModal';
+import { JoinConsultationButton } from '@/components/consultation';
 import {
   Dialog,
   DialogContent,
@@ -549,21 +550,26 @@ const PatientPortal = () => {
                                 <p className="text-sm text-muted-foreground">{apt.type}</p>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <div className="flex items-center gap-2 mb-1">
+                            <div className="flex flex-col items-end gap-2">
+                              <div className="flex items-center gap-2">
                                 <Calendar className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                                 <Clock className="w-4 h-4 text-muted-foreground ml-2" />
                                 <span className="text-sm">{apt.time}</span>
                               </div>
-                              <div className="flex items-center gap-2 justify-end">
-                                {apt.type === 'Video' ? (
-                                  <Video className="w-4 h-4 text-primary" />
-                                ) : (
-                                  <Phone className="w-4 h-4 text-primary" />
-                                )}
+                              <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
                               </div>
+                              {(apt.status === 'confirmed' || apt.status === 'pending') && (
+                                <JoinConsultationButton
+                                  appointmentId={apt.id}
+                                  consultationType={apt.type}
+                                  participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                  status={apt.status}
+                                  variant="default"
+                                  size="sm"
+                                />
+                              )}
                             </div>
                           </div>
                         ))}
