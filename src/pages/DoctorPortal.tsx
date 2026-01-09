@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
+import { JoinConsultationButton } from '@/components/consultation';
 
 // Dummy Doctor Data
 const doctorData = {
@@ -572,14 +573,26 @@ const DoctorPortal = () => {
                               <div>{getStatusBadge(apt.status)}</div>
                             </div>
                             {apt.status === 'upcoming' && (
-                              <Button size="sm" className="gradient-primary">
-                                Start Call
-                              </Button>
+                              <JoinConsultationButton
+                                appointmentId={apt.id.toString()}
+                                consultationType={apt.type === 'Video Call' ? 'Video' : 'Audio'}
+                                participantName={apt.patient}
+                                status={apt.status}
+                                variant="default"
+                                size="sm"
+                                className="gradient-primary"
+                              />
                             )}
                             {apt.status === 'in-progress' && (
-                              <Button size="sm" className="bg-success hover:bg-success/90">
-                                Continue
-                              </Button>
+                              <JoinConsultationButton
+                                appointmentId={apt.id.toString()}
+                                consultationType={apt.type === 'Video Call' ? 'Video' : 'Audio'}
+                                participantName={apt.patient}
+                                status={apt.status}
+                                variant="default"
+                                size="sm"
+                                className="bg-success hover:bg-success/90"
+                              />
                             )}
                             {apt.status === 'completed' && (
                               <Button size="sm" variant="outline">
