@@ -2,6 +2,23 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 
 import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
+import { useAppointments } from '@/hooks/useAppointments';
+import { useDoctors, useAvailableSlots, checkSlotAvailability } from '@/hooks/useAvailableSlots';
+import { toast } from '@/components/ui/use-toast';
+import { supabase } from '@/integrations/supabase/client';
+import { SlotSelectionModal } from '@/components/SlotSelectionModal';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { 
   Calendar, Clock, Video, MessageSquare, FileText, 
   User, Bell, Settings, LogOut, ChevronRight, Star,
@@ -132,6 +149,137 @@ const notifications = [
 
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
+  const { user } = useAuth();
+  const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
+  const navigate = useNavigate();
+
+  const displayName = user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
+  const initials = displayName
+    .split(' ')
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
+  // Helper to resolve doctor name from doctor_id (falls back to specialist_name)
+  const getDoctorNameById = (doctorId?: string | null, fallback?: string) => {
+    if (!doctorId) return fallback ?? '';
+    const typedDoctors = (doctors || []) as Array<{ id?: string; name?: string }>;
+    const found = typedDoctors.find((d) => d.id === doctorId);
+    return found?.name ?? fallback ?? '';
+  };
+
+  const requireAuthForBooking = () => {
+    if (!user) {
+      toast({ title: 'Please sign in', description: 'You must be signed in to book appointments.' });
+      navigate('/auth');
+      return false;
+    }
+    return true;
+  };
+
+  const handleBookAppointment = () => {
+    if (!requireAuthForBooking()) return;
+    // TODO: Open booking modal or navigate to detailed booking flow
+    toast({ title: 'Booking', description: 'Booking flow not implemented yet.' });
+  };
+
+  const handleNewAppointment = () => {
+    if (!requireAuthForBooking()) return;
+    navigate('/booking');
+  };
+
+  // Booking modal state
+  const [bookingOpen, setBookingOpen] = useState(false);
+  const [slotSelectionOpen, setSlotSelectionOpen] = useState(false);
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+  const [specialistName, setSpecialistName] = useState('');
+  const [bookingDate, setBookingDate] = useState('');
+  const [bookingTime, setBookingTime] = useState('');
+  const [bookingType, setBookingType] = useState<'Video' | 'Audio'>('Video');
+  const [bookingNotes, setBookingNotes] = useState('');
+  const [isBooking, setIsBooking] = useState(false);
+
+  // Fetch available slots and doctors
+  const { data: allSlots = [], isLoading: slotsLoading } = useAvailableSlots();
+  const { data: doctors = [], isLoading: doctorsLoading } = useDoctors();
+
+  const openBooking = () => {
+    if (!requireAuthForBooking()) return;
+    setSlotSelectionOpen(true);
+  };
+
+  const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
+    // Check if slot is available (conflict check)
+    try {
+      const isAvailable = await checkSlotAvailability(doctor.id, date, time);
+      if (!isAvailable) {
+        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
+        return;
+      }
+
+      setSelectedDoctorId(doctor.id);
+      setSpecialistName(doctor.name);
+      setBookingDate(date);
+      setBookingTime(time);
+      setSlotSelectionOpen(false);
+      setBookingOpen(true);
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : 'Failed to check slot availability';
+      toast({ title: 'Error', description: String(message) });
+    }
+  };
+
+  const createBooking = async () => {
+    if (!requireAuthForBooking()) return;
+    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId) {
+      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
+      return;
+    }
+
+    setIsBooking(true);
+    try {
+      // Final conflict check before insertion
+      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
+      if (!isAvailable) {
+        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
+        setIsBooking(false);
+        return;
+      }
+
+      const payload: Record<string, unknown> = {
+        patient_id: user?.id,
+        patient_name: displayName,
+        specialist_name: specialistName,
+        doctor_id: selectedDoctorId,
+        date: bookingDate,
+        time: bookingTime,
+        type: bookingType,
+        notes: bookingNotes,
+        status: 'pending',
+      };
+
+      const { data, error } = await supabase.from('appointments').insert([payload]).select();
+      if (error) {
+        throw error;
+      }
+
+      toast({ title: 'Booked', description: 'Your appointment request has been submitted.' });
+      setBookingOpen(false);
+      setSpecialistName('');
+      setBookingDate('');
+      setBookingTime('');
+      setBookingNotes('');
+      setSelectedDoctorId(null);
+      // Refresh appointments list
+      invalidateAppointments();
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({ title: 'Booking failed', description: message });
+    } finally {
+      setIsBooking(false);
+    }
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -178,14 +326,14 @@ const PatientPortal = () => {
               </Button>
 
               <div className="flex items-center gap-3">
-                <Avatar className="w-9 h-9">
-                  <AvatarImage src={patientData.avatar} />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">SJ</AvatarFallback>
-                </Avatar>
-                <div className="hidden md:block">
-                  <p className="text-sm font-medium">{patientData.name}</p>
-                  <p className="text-xs text-muted-foreground">Patient</p>
-                </div>
+                    <Avatar className="w-9 h-9">
+                      <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
+                    </Avatar>
+                    <div className="hidden md:block">
+                      <p className="text-sm font-medium">{displayName}</p>
+                      <p className="text-xs text-muted-foreground">Patient</p>
+                    </div>
               </div>
             </div>
           </div>
@@ -246,20 +394,77 @@ const PatientPortal = () => {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h1 className="text-2xl md:text-3xl font-bold mb-2">
-                    Welcome back, {patientData.name.split(' ')[0]}! 👋
+                    Welcome back, {displayName.split(' ')[0]}! 👋
                   </h1>
                   <p className="text-primary-foreground/80">
-                    You have {upcomingAppointments.length} upcoming appointments this week.
+                    You have {appointments.filter(apt => new Date(apt.date) >= new Date()).length} upcoming appointments.
                   </p>
                 </div>
-                <Link to="/booking">
-                  <Button variant="secondary" size="lg" className="gap-2">
-                    <Plus className="w-5 h-5" />
-                    Book Appointment
-                  </Button>
-                </Link>
+                <Button onClick={openBooking} variant="secondary" size="lg" className="gap-2">
+                  <Plus className="w-5 h-5" />
+                  Book Appointment
+                </Button>
               </div>
             </motion.div>
+
+            {/* Slot Selection Modal */}
+            <SlotSelectionModal
+              open={slotSelectionOpen}
+              onOpenChange={setSlotSelectionOpen}
+              slots={allSlots}
+              isLoading={slotsLoading || doctorsLoading}
+              onSlotSelect={handleSlotSelect}
+            />
+
+            {/* Booking Confirmation Modal */}
+            <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Confirm Appointment</DialogTitle>
+                  <DialogDescription>Review and confirm your appointment details.</DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-4 py-4">
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-sm font-medium">Selected Slot</p>
+                    <div className="mt-2 space-y-1 text-sm">
+                      <div><span className="text-muted-foreground">Doctor:</span> {specialistName}</div>
+                      <div><span className="text-muted-foreground">Date:</span> {new Date(bookingDate).toLocaleDateString()}</div>
+                      <div><span className="text-muted-foreground">Time:</span> {bookingTime}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Type</Label>
+                    <select className="w-full p-2 border rounded" value={bookingType} onChange={(e) => setBookingType(e.target.value as 'Video' | 'Audio')}>
+                      <option value="Video">Video Call</option>
+                      <option value="Audio">Audio Call</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Additional Notes (Optional)</Label>
+                    <textarea
+                      className="w-full p-2 border rounded text-sm"
+                      rows={3}
+                      value={bookingNotes}
+                      onChange={(e) => setBookingNotes(e.target.value)}
+                      placeholder="Any additional information for the doctor..."
+                    />
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => {
+                    setBookingOpen(false);
+                    setSlotSelectionOpen(true);
+                  }}>
+                    Back
+                  </Button>
+                  <Button variant="outline" onClick={() => setBookingOpen(false)}>Cancel</Button>
+                  <Button onClick={createBooking} disabled={isBooking}>{isBooking ? 'Submitting...' : 'Confirm Booking'}</Button>
+                </DialogFooter>
+                <DialogClose />
+              </DialogContent>
+            </Dialog>
 
             {/* Quick Stats */}
             <div className="grid sm:grid-cols-3 gap-4">
@@ -312,40 +517,58 @@ const PatientPortal = () => {
                     </Button>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      {upcomingAppointments.slice(0, 3).map((apt) => (
-                        <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
-                          <div className="flex items-center gap-4">
-                            <Avatar>
-                              <AvatarImage src={apt.avatar} />
-                              <AvatarFallback className="bg-primary/10 text-primary">
-                                {apt.doctor.split(' ').map(n => n[0]).join('')}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-medium">{apt.doctor}</p>
-                              <p className="text-sm text-muted-foreground">{apt.specialty}</p>
+                    {appointmentsLoading ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">Loading appointments...</p>
+                      </div>
+                    ) : appointments.length === 0 ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">No upcoming appointments</p>
+                        <Button onClick={openBooking} variant="outline" size="sm" className="mt-4 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Book Now
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {appointments.slice(0, 3).map((apt) => (
+                          <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
+                            <div className="flex items-center gap-4">
+                              <Avatar>
+                                <AvatarImage src="" />
+                                <AvatarFallback className="bg-primary/10 text-primary">
+                                  {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                    .split(' ')
+                                    .map((n) => n[0])
+                                    .join('')
+                                    .slice(0, 2)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <p className="font-medium">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
+                                <p className="text-sm text-muted-foreground">{apt.type}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Calendar className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                <Clock className="w-4 h-4 text-muted-foreground ml-2" />
+                                <span className="text-sm">{apt.time}</span>
+                              </div>
+                              <div className="flex items-center gap-2 justify-end">
+                                {apt.type === 'Video' ? (
+                                  <Video className="w-4 h-4 text-primary" />
+                                ) : (
+                                  <Phone className="w-4 h-4 text-primary" />
+                                )}
+                                {getStatusBadge(apt.status)}
+                              </div>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Calendar className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                              <Clock className="w-4 h-4 text-muted-foreground ml-2" />
-                              <span className="text-sm">{apt.time}</span>
-                            </div>
-                            <div className="flex items-center gap-2 justify-end">
-                              {apt.type === 'Video Call' ? (
-                                <Video className="w-4 h-4 text-primary" />
-                              ) : (
-                                <Phone className="w-4 h-4 text-primary" />
-                              )}
-                              {getStatusBadge(apt.status)}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -415,66 +638,83 @@ const PatientPortal = () => {
                       <CardTitle>All Appointments</CardTitle>
                       <CardDescription>Manage your scheduled appointments</CardDescription>
                     </div>
-                    <Link to="/booking">
-                      <Button className="gap-2">
-                        <Plus className="w-4 h-4" />
-                        New Appointment
-                      </Button>
-                    </Link>
+                    <Button onClick={openBooking} className="gap-2">
+                      <Plus className="w-4 h-4" />
+                      New Appointment
+                    </Button>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      {upcomingAppointments.map((apt) => (
-                        <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
-                          <div className="flex items-center gap-4">
-                            <Avatar className="w-12 h-12">
-                              <AvatarImage src={apt.avatar} />
-                              <AvatarFallback className="bg-primary/10 text-primary">
-                                {apt.doctor.split(' ').map(n => n[0]).join('')}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-semibold">{apt.doctor}</p>
-                              <p className="text-sm text-muted-foreground">{apt.specialty}</p>
-                              <div className="flex items-center gap-3 mt-1">
-                                <span className="text-xs flex items-center gap-1">
-                                  <Calendar className="w-3 h-3" />
-                                  {new Date(apt.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                                </span>
-                                <span className="text-xs flex items-center gap-1">
-                                  <Clock className="w-3 h-3" />
-                                  {apt.time}
-                                </span>
+                    {appointmentsLoading ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">Loading appointments...</p>
+                      </div>
+                    ) : appointments.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                        <p className="text-muted-foreground">No appointments yet</p>
+                        <Button onClick={openBooking} className="mt-4 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Book Your First Appointment
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {appointments.map((apt) => (
+                          <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
+                            <div className="flex items-center gap-4">
+                              <Avatar className="w-12 h-12">
+                                <AvatarImage src="" />
+                                <AvatarFallback className="bg-primary/10 text-primary">
+                                  {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                    .split(' ')
+                                    .map((n) => n[0])
+                                    .join('')
+                                    .slice(0, 2)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
+                                <p className="text-sm text-muted-foreground">{apt.type}</p>
+                                <div className="flex items-center gap-3 mt-1">
+                                  <span className="text-xs flex items-center gap-1">
+                                    <Calendar className="w-3 h-3" />
+                                    {new Date(apt.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                                  </span>
+                                  <span className="text-xs flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    {apt.time}
+                                  </span>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="text-right">
-                              <div className="flex items-center gap-2 mb-2">
-                                {apt.type === 'Video Call' ? (
-                                  <Badge variant="outline" className="gap-1">
-                                    <Video className="w-3 h-3" /> Video
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className="gap-1">
-                                    <Phone className="w-3 h-3" /> Audio
-                                  </Badge>
-                                )}
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <div className="flex items-center gap-2 mb-2">
+                                  {apt.type === 'Video' ? (
+                                    <Badge variant="outline" className="gap-1">
+                                      <Video className="w-3 h-3" /> Video
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="gap-1">
+                                      <Phone className="w-3 h-3" /> Audio
+                                    </Badge>
+                                  )}
+                                </div>
+                                {getStatusBadge(apt.status)}
                               </div>
-                              {getStatusBadge(apt.status)}
-                            </div>
-                            <Button size="sm" variant="outline">
-                              Reschedule
-                            </Button>
-                            {apt.status === 'confirmed' && (
-                              <Button size="sm" className="gradient-primary">
-                                Join Call
+                              <Button size="sm" variant="outline">
+                                Reschedule
                               </Button>
-                            )}
+                              {apt.status === 'confirmed' && (
+                                <Button size="sm" className="gradient-primary">
+                                  Join Call
+                                </Button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -628,11 +868,12 @@ const PatientPortal = () => {
                     <div className="space-y-6">
                       <div className="flex items-center gap-4">
                         <Avatar className="w-20 h-20">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl">SJ</AvatarFallback>
+                          <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
+                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{initials}</AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-semibold text-lg">{patientData.name}</p>
-                          <p className="text-muted-foreground">{patientData.email}</p>
+                          <p className="font-semibold text-lg">{displayName}</p>
+                          <p className="text-muted-foreground">{user?.email ?? patientData.email}</p>
                           <Button size="sm" variant="outline" className="mt-2">
                             Change Photo
                           </Button>
@@ -642,23 +883,23 @@ const PatientPortal = () => {
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
                           <label className="text-sm font-medium">Full Name</label>
-                          <Input defaultValue={patientData.name} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.full_name ?? patientData.name} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Email</label>
-                          <Input defaultValue={patientData.email} className="mt-1" />
+                          <Input defaultValue={user?.email ?? patientData.email} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Phone</label>
-                          <Input defaultValue={patientData.phone} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.phone ?? patientData.phone} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Date of Birth</label>
-                          <Input type="date" defaultValue={patientData.dateOfBirth} className="mt-1" />
+                          <Input type="date" defaultValue={user?.user_metadata?.dateOfBirth ?? patientData.dateOfBirth} className="mt-1" />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Blood Type</label>
-                          <Input defaultValue={patientData.bloodType} className="mt-1" />
+                          <Input defaultValue={user?.user_metadata?.bloodType ?? patientData.bloodType} className="mt-1" />
                         </div>
                       </div>
 
