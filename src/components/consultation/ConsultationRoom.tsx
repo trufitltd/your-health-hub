@@ -24,7 +24,7 @@ interface Message {
 
 interface ConsultationRoomProps {
   appointmentId: string;
-  consultationType: 'video' | 'audio';
+  consultationType: 'video' | 'audio' | 'chat';
   participantName: string;
   participantRole: 'doctor' | 'patient';
   onEndCall: () => void;
@@ -38,10 +38,10 @@ export function ConsultationRoom({
   onEndCall
 }: ConsultationRoomProps) {
   const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
-  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-  const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
+  const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(consultationType !== 'chat');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(consultationType === 'chat');
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [callDuration, setCallDuration] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -55,6 +55,13 @@ export function ConsultationRoom({
   // Simulate connection and initialize local media
   useEffect(() => {
     const initializeMedia = async () => {
+      if (consultationType === 'chat') {
+        setTimeout(() => {
+          setConnectionStatus('connected');
+        }, 1000);
+        return;
+      }
+
       try {
         const constraints: MediaStreamConstraints = {
           video: consultationType === 'video',
@@ -189,22 +196,21 @@ export function ConsultationRoom({
           <div>
             <h2 className="font-semibold text-sm">{participantName}</h2>
             <div className="flex items-center gap-2">
-              <Badge 
-                variant="outline" 
+              <Badge
+                variant="outline"
                 className={
-                  connectionStatus === 'connected' 
-                    ? 'bg-success/10 text-success border-success/20' 
+                  connectionStatus === 'connected'
+                    ? 'bg-success/10 text-success border-success/20'
                     : connectionStatus === 'connecting'
-                    ? 'bg-warning/10 text-warning border-warning/20'
-                    : 'bg-destructive/10 text-destructive border-destructive/20'
+                      ? 'bg-warning/10 text-warning border-warning/20'
+                      : 'bg-destructive/10 text-destructive border-destructive/20'
                 }
               >
-                <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                  connectionStatus === 'connected' ? 'bg-success' :
-                  connectionStatus === 'connecting' ? 'bg-warning animate-pulse' : 'bg-destructive'
-                }`} />
-                {connectionStatus === 'connected' ? 'Connected' : 
-                 connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+                <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${connectionStatus === 'connected' ? 'bg-success' :
+                    connectionStatus === 'connecting' ? 'bg-warning animate-pulse' : 'bg-destructive'
+                  }`} />
+                {connectionStatus === 'connected' ? 'Connected' :
+                  connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
               </Badge>
               {connectionStatus === 'connected' && (
                 <span className="text-xs text-muted-foreground">{formatDuration(callDuration)}</span>
@@ -216,8 +222,8 @@ export function ConsultationRoom({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button 
-                  variant="ghost" 
+                <Button
+                  variant="ghost"
                   size="icon"
                   onClick={() => setIsFullscreen(!isFullscreen)}
                 >
@@ -232,106 +238,110 @@ export function ConsultationRoom({
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Video/Audio area */}
-        <div className="flex-1 relative bg-muted/50 p-4">
-          {/* Remote participant (main view) */}
-          <div className="w-full h-full rounded-2xl overflow-hidden bg-card relative">
-            {consultationType === 'video' ? (
-              <>
-                {/* Simulated remote video - in production this would be the actual remote stream */}
+        {/* Video/Audio area - Hidden if chat only and chat is open (or maybe just hidden completely for chat type) */}
+        {consultationType !== 'chat' && (
+          <div className={`flex-1 relative bg-muted/50 p-4 ${isChatOpen ? 'hidden md:block' : ''}`}>
+            {/* Remote participant (main view) */}
+            <div className="w-full h-full rounded-2xl overflow-hidden bg-card relative">
+              {consultationType === 'video' ? (
+                <>
+                  {/* Simulated remote video - in production this would be the actual remote stream */}
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
+                    <div className="text-center">
+                      <Avatar className="w-32 h-32 mx-auto mb-4">
+                        <AvatarFallback className="bg-primary text-primary-foreground text-4xl">
+                          {participantInitials}
+                        </AvatarFallback>
+                      </Avatar>
+                      {connectionStatus === 'connecting' ? (
+                        <p className="text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
+                      ) : (
+                        <p className="text-muted-foreground">Video stream placeholder</p>
+                      )}
+                    </div>
+                  </div>
+                  <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover hidden" />
+                </>
+              ) : (
+                /* Audio-only view */
                 <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
-                  <div className="text-center">
-                    <Avatar className="w-32 h-32 mx-auto mb-4">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-4xl">
-                        {participantInitials}
-                      </AvatarFallback>
-                    </Avatar>
-                    {connectionStatus === 'connecting' ? (
-                      <p className="text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
-                    ) : (
-                      <p className="text-muted-foreground">Video stream placeholder</p>
-                    )}
-                  </div>
+                  <motion.div
+                    className="text-center"
+                    animate={connectionStatus === 'connected' ? { scale: [1, 1.05, 1] } : {}}
+                    transition={{ repeat: Infinity, duration: 2 }}
+                  >
+                    <div className="relative">
+                      <Avatar className="w-40 h-40 mx-auto mb-4">
+                        <AvatarFallback className="bg-primary text-primary-foreground text-5xl">
+                          {participantInitials}
+                        </AvatarFallback>
+                      </Avatar>
+                      {connectionStatus === 'connected' && (
+                        <motion.div
+                          className="absolute inset-0 rounded-full border-4 border-primary/30"
+                          animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
+                          transition={{ repeat: Infinity, duration: 1.5 }}
+                        />
+                      )}
+                    </div>
+                    <h3 className="text-xl font-semibold mb-1">{participantName}</h3>
+                    <p className="text-muted-foreground">
+                      {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
+                    </p>
+                  </motion.div>
                 </div>
-                <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover hidden" />
-              </>
-            ) : (
-              /* Audio-only view */
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
-                <motion.div 
-                  className="text-center"
-                  animate={connectionStatus === 'connected' ? { scale: [1, 1.05, 1] } : {}}
-                  transition={{ repeat: Infinity, duration: 2 }}
+              )}
+
+              {/* Local video (picture-in-picture) */}
+              {consultationType === 'video' && (
+                <motion.div
+                  drag
+                  dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                  className="absolute bottom-4 right-4 w-48 h-36 rounded-xl overflow-hidden bg-card shadow-lg border-2 border-background"
                 >
-                  <div className="relative">
-                    <Avatar className="w-40 h-40 mx-auto mb-4">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-5xl">
-                        {participantInitials}
-                      </AvatarFallback>
-                    </Avatar>
-                    {connectionStatus === 'connected' && (
-                      <motion.div 
-                        className="absolute inset-0 rounded-full border-4 border-primary/30"
-                        animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
-                        transition={{ repeat: Infinity, duration: 1.5 }}
-                      />
-                    )}
-                  </div>
-                  <h3 className="text-xl font-semibold mb-1">{participantName}</h3>
-                  <p className="text-muted-foreground">
-                    {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
-                  </p>
+                  {isVideoEnabled ? (
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover mirror"
+                      style={{ transform: 'scaleX(-1)' }}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-muted">
+                      <User className="w-12 h-12 text-muted-foreground" />
+                    </div>
+                  )}
+                  {!isAudioEnabled && (
+                    <div className="absolute bottom-2 left-2">
+                      <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5">
+                        <MicOff className="w-3 h-3" />
+                      </Badge>
+                    </div>
+                  )}
                 </motion.div>
-              </div>
-            )}
-
-            {/* Local video (picture-in-picture) */}
-            {consultationType === 'video' && (
-              <motion.div 
-                drag
-                dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
-                className="absolute bottom-4 right-4 w-48 h-36 rounded-xl overflow-hidden bg-card shadow-lg border-2 border-background"
-              >
-                {isVideoEnabled ? (
-                  <video 
-                    ref={localVideoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted 
-                    className="w-full h-full object-cover mirror"
-                    style={{ transform: 'scaleX(-1)' }}
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center bg-muted">
-                    <User className="w-12 h-12 text-muted-foreground" />
-                  </div>
-                )}
-                {!isAudioEnabled && (
-                  <div className="absolute bottom-2 left-2">
-                    <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5">
-                      <MicOff className="w-3 h-3" />
-                    </Badge>
-                  </div>
-                )}
-              </motion.div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Chat sidebar */}
+        {/* Chat sidebar - Always visible for chat type, togglable for others */}
         <AnimatePresence>
-          {isChatOpen && (
+          {(isChatOpen || consultationType === 'chat') && (
             <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 360, opacity: 1 }}
+              initial={consultationType === 'chat' ? { width: '100%', opacity: 1 } : { width: 0, opacity: 0 }}
+              animate={{ width: consultationType === 'chat' ? '100%' : 360, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
-              className="border-l border-border bg-card flex flex-col overflow-hidden"
+              className={`border-l border-border bg-card flex flex-col overflow-hidden ${consultationType === 'chat' ? 'w-full border-l-0' : ''}`}
             >
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-semibold">Chat</h3>
-                <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)}>
-                  <X className="w-4 h-4" />
-                </Button>
+                {consultationType !== 'chat' && (
+                  <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
 
               <ScrollArea ref={chatScrollRef} className="flex-1 p-4">
@@ -350,11 +360,10 @@ export function ConsultationRoom({
                       >
                         <div className={`max-w-[80%] ${message.sender === 'user' ? 'order-1' : ''}`}>
                           <div
-                            className={`rounded-2xl px-4 py-2 ${
-                              message.sender === 'user'
+                            className={`rounded-2xl px-4 py-2 ${message.sender === 'user'
                                 ? 'bg-primary text-primary-foreground rounded-br-sm'
                                 : 'bg-muted rounded-bl-sm'
-                            }`}
+                              }`}
                           >
                             <p className="text-sm">{message.content}</p>
                           </div>
@@ -369,7 +378,7 @@ export function ConsultationRoom({
               </ScrollArea>
 
               <div className="p-4 border-t border-border">
-                <form 
+                <form
                   onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
                   className="flex gap-2"
                 >
@@ -392,65 +401,69 @@ export function ConsultationRoom({
       {/* Controls bar */}
       <div className="flex items-center justify-center gap-3 p-4 border-t border-border bg-card">
         <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={isAudioEnabled ? 'secondary' : 'destructive'}
-                size="icon"
-                className="w-12 h-12 rounded-full"
-                onClick={toggleAudio}
-              >
-                {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
-          </Tooltip>
+          {consultationType !== 'chat' && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isAudioEnabled ? 'secondary' : 'destructive'}
+                    size="icon"
+                    className="w-12 h-12 rounded-full"
+                    onClick={toggleAudio}
+                  >
+                    {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
+              </Tooltip>
 
-          {consultationType === 'video' && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={isVideoEnabled ? 'secondary' : 'destructive'}
-                  size="icon"
-                  className="w-12 h-12 rounded-full"
-                  onClick={toggleVideo}
-                >
-                  {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}</TooltipContent>
-            </Tooltip>
+              {consultationType === 'video' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={isVideoEnabled ? 'secondary' : 'destructive'}
+                      size="icon"
+                      className="w-12 h-12 rounded-full"
+                      onClick={toggleVideo}
+                    >
+                      {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}</TooltipContent>
+                </Tooltip>
+              )}
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isSpeakerEnabled ? 'secondary' : 'destructive'}
+                    size="icon"
+                    className="w-12 h-12 rounded-full"
+                    onClick={() => setIsSpeakerEnabled(!isSpeakerEnabled)}
+                  >
+                    {isSpeakerEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isChatOpen ? 'default' : 'secondary'}
+                    size="icon"
+                    className="w-12 h-12 rounded-full"
+                    onClick={() => setIsChatOpen(!isChatOpen)}
+                  >
+                    <MessageSquare className="w-5 h-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Chat</TooltipContent>
+              </Tooltip>
+
+              <div className="w-px h-8 bg-border mx-2" />
+            </>
           )}
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={isSpeakerEnabled ? 'secondary' : 'destructive'}
-                size="icon"
-                className="w-12 h-12 rounded-full"
-                onClick={() => setIsSpeakerEnabled(!isSpeakerEnabled)}
-              >
-                {isSpeakerEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={isChatOpen ? 'default' : 'secondary'}
-                size="icon"
-                className="w-12 h-12 rounded-full"
-                onClick={() => setIsChatOpen(!isChatOpen)}
-              >
-                <MessageSquare className="w-5 h-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Chat</TooltipContent>
-          </Tooltip>
-
-          <div className="w-px h-8 bg-border mx-2" />
 
           <Tooltip>
             <TooltipTrigger asChild>

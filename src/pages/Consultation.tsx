@@ -14,12 +14,12 @@ const Consultation = () => {
   const { user, role } = useAuth();
 
   const [phase, setPhase] = useState<ConsultationPhase>('loading');
-  
+
   // Get consultation type from URL params or default to video
-  const consultationType = (searchParams.get('type') as 'video' | 'audio') || 'video';
-  
+  const consultationType = (searchParams.get('type') as 'video' | 'audio' | 'chat') || 'video';
+
   // Get participant info from URL params (in production, this would come from the database)
-  const participantName = searchParams.get('participant') || 
+  const participantName = searchParams.get('participant') ||
     (role === 'doctor' ? 'Sarah Johnson' : 'Dr. Emily Chen');
 
   useEffect(() => {
@@ -58,9 +58,9 @@ const Consultation = () => {
     setPhase('ended');
     toast({
       title: 'Consultation Ended',
-      description: 'Thank you for using MyEdoctorOnline.'
+      description: 'Thank you for using MyEdoctor.'
     });
-    
+
     // Redirect based on role
     setTimeout(() => {
       if (role === 'doctor') {

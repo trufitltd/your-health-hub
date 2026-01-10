@@ -22,7 +22,7 @@ const benefits = [
 export default function AuthPage() {
   const [searchParams] = useSearchParams();
   const initialMode = searchParams.get('mode') === 'register' ? 'register' : 'login';
-  
+
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [role, setRole] = useState<UserRole>('patient');
   const [name, setName] = useState('');
@@ -109,7 +109,7 @@ export default function AuthPage() {
               <Stethoscope className="w-5 h-5 text-primary-foreground" />
             </div>
             <span className="text-xl font-bold">
-              MyE<span className="text-primary">Doctor</span>Online
+              MyE<span className="text-primary">Doctor</span>
             </span>
           </Link>
 
@@ -273,7 +273,7 @@ export default function AuthPage() {
             Your Health, Our Priority
           </h2>
           <p className="text-primary-foreground/80 mb-8">
-            Join MyEdoctorOnline and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.
+            Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.
           </p>
 
           <ul className="space-y-4">

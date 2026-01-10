@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Stethoscope, Calendar, Phone, User, LogOut } from 'lucide-react';
+import { Menu, X, Stethoscope, Calendar, Phone, User, LogOut, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -20,7 +20,7 @@ export function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
-  const { user, signOut, isLoading } = useAuth();
+  const { user, role, signOut, isLoading } = useAuth();
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -46,6 +46,8 @@ export function Header() {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
+  const dashboardLink = role === 'doctor' ? '/doctor-portal' : '/patient-portal';
+
   return (
     <header
       className={cn(
@@ -63,7 +65,7 @@ export function Header() {
               </div>
             </div>
             <span className="text-xl font-bold text-foreground">
-              MyE<span className="text-primary">Doctor</span>Online
+              MyE<span className="text-primary">Doctor</span>
             </span>
           </Link>
 
@@ -89,9 +91,12 @@ export function Header() {
           <div className="hidden md:flex items-center gap-3">
             {!isLoading && user ? (
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  {user.email}
-                </span>
+                <Link to={dashboardLink}>
+                  <Button variant="default" size="sm" className="gap-2">
+                    <LayoutDashboard className="w-4 h-4" />
+                    Dashboard
+                  </Button>
+                </Link>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -166,6 +171,12 @@ export function Header() {
                         {user.email}
                       </p>
                     </div>
+                    <Link to={dashboardLink}>
+                      <Button variant="default" className="w-full justify-start gap-2">
+                        <LayoutDashboard className="w-4 h-4" />
+                        Dashboard
+                      </Button>
+                    </Link>
                     <Button
                       variant="outline"
                       className="w-full justify-start"

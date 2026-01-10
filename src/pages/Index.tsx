@@ -4,6 +4,9 @@ import { ArrowRight, Calendar, Video, Shield, Clock, Star, Users, Heart } from '
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout';
 import heroDoctor from '@/assets/hero-doctor.jpg';
+import heroDoctor2 from '@/assets/myedoctor_hero.png';
+import heroDoctor3 from '@/assets/myedoctor_hero2.png';
+
 
 const features = [
   {
@@ -51,7 +54,7 @@ const Index = () => {
         <div className="absolute inset-0 gradient-subtle" />
         <div className="absolute top-20 right-0 w-[600px] h-[600px] bg-primary/5 rounded-full blur-3xl" />
         <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-accent/5 rounded-full blur-3xl" />
-        
+
         <div className="container mx-auto px-4 relative z-10">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             {/* Content */}
@@ -96,13 +99,13 @@ const Index = () => {
             >
               <div className="relative rounded-3xl overflow-hidden shadow-2xl">
                 <img
-                  src={heroDoctor}
+                  src={heroDoctor3}
                   alt="Doctor using tablet for telemedicine consultation"
                   className="w-full h-auto object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-foreground/20 to-transparent" />
               </div>
-              
+
               {/* Floating Cards */}
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
@@ -272,7 +275,7 @@ const Index = () => {
                 Ready to Start Your Health Journey?
               </h2>
               <p className="text-primary-foreground/80 text-lg mb-8 max-w-2xl mx-auto">
-                Join thousands of patients who trust MyEdoctorOnline for their healthcare needs. Book your first consultation today.
+                Join thousands of patients who trust MyEdoctor for their healthcare needs. Book your first consultation today.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link to="/auth?mode=register">

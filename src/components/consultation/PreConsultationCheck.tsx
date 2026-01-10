@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Video, Mic, Speaker, CheckCircle, XCircle, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Video, Mic, Speaker, CheckCircle, XCircle, RefreshCw, AlertTriangle, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 
 interface PreConsultationCheckProps {
-  consultationType: 'video' | 'audio';
+  consultationType: 'video' | 'audio' | 'chat';
   onComplete: () => void;
   onCancel: () => void;
 }
@@ -17,21 +17,23 @@ interface DeviceCheck {
   camera: CheckStatus;
   microphone: CheckStatus;
   speaker: CheckStatus;
+  connection: CheckStatus;
 }
 
-export function PreConsultationCheck({ 
-  consultationType, 
-  onComplete, 
-  onCancel 
+export function PreConsultationCheck({
+  consultationType,
+  onComplete,
+  onCancel
 }: PreConsultationCheckProps) {
   const [checks, setChecks] = useState<DeviceCheck>({
     camera: consultationType === 'video' ? 'pending' : 'success',
-    microphone: 'pending',
-    speaker: 'pending'
+    microphone: consultationType !== 'chat' ? 'pending' : 'success',
+    speaker: consultationType !== 'chat' ? 'pending' : 'success',
+    connection: 'pending'
   });
   const [isTestingAudio, setIsTestingAudio] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
-  
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -49,7 +51,16 @@ export function PreConsultationCheck({
 
   const runDeviceChecks = async () => {
     setPermissionError(null);
-    
+
+    // Check connection (for all types)
+    setChecks(prev => ({ ...prev, connection: 'checking' }));
+    await new Promise(resolve => setTimeout(resolve, 800));
+    setChecks(prev => ({ ...prev, connection: 'success' }));
+
+    if (consultationType === 'chat') {
+      return;
+    }
+
     // Check microphone
     setChecks(prev => ({ ...prev, microphone: 'checking' }));
     try {
@@ -91,13 +102,13 @@ export function PreConsultationCheck({
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
-    
+
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
-    
+
     oscillator.frequency.value = 440;
     gainNode.gain.value = 0.3;
-    
+
     oscillator.start();
     setTimeout(() => {
       oscillator.stop();
@@ -138,7 +149,7 @@ export function PreConsultationCheck({
             {/* Progress bar */}
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-muted-foreground">Device checks</span>
+                <span className="text-muted-foreground">Checks</span>
                 <span className="font-medium">{Math.round(progress)}%</span>
               </div>
               <Progress value={progress} className="h-2" />
@@ -173,6 +184,14 @@ export function PreConsultationCheck({
 
             {/* Device checks list */}
             <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                <div className="flex items-center gap-3">
+                  <MessageSquare className="w-5 h-5 text-muted-foreground" />
+                  <span className="font-medium">Connection</span>
+                </div>
+                {getStatusIcon(checks.connection)}
+              </div>
+
               {consultationType === 'video' && (
                 <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                   <div className="flex items-center gap-3">
@@ -183,32 +202,36 @@ export function PreConsultationCheck({
                 </div>
               )}
 
-              <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                <div className="flex items-center gap-3">
-                  <Mic className="w-5 h-5 text-muted-foreground" />
-                  <span className="font-medium">Microphone</span>
-                </div>
-                {getStatusIcon(checks.microphone)}
-              </div>
+              {consultationType !== 'chat' && (
+                <>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <Mic className="w-5 h-5 text-muted-foreground" />
+                      <span className="font-medium">Microphone</span>
+                    </div>
+                    {getStatusIcon(checks.microphone)}
+                  </div>
 
-              <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                <div className="flex items-center gap-3">
-                  <Speaker className="w-5 h-5 text-muted-foreground" />
-                  <span className="font-medium">Speaker</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={testSpeaker}
-                    disabled={isTestingAudio}
-                    className="text-xs"
-                  >
-                    {isTestingAudio ? 'Playing...' : 'Test'}
-                  </Button>
-                  {getStatusIcon(checks.speaker)}
-                </div>
-              </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <Speaker className="w-5 h-5 text-muted-foreground" />
+                      <span className="font-medium">Speaker</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={testSpeaker}
+                        disabled={isTestingAudio}
+                        className="text-xs"
+                      >
+                        {isTestingAudio ? 'Playing...' : 'Test'}
+                      </Button>
+                      {getStatusIcon(checks.speaker)}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Error message */}
@@ -233,8 +256,8 @@ export function PreConsultationCheck({
                   Retry
                 </Button>
               ) : (
-                <Button 
-                  onClick={onComplete} 
+                <Button
+                  onClick={onComplete}
                   disabled={!allChecksComplete}
                   className="flex-1"
                 >
