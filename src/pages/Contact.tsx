@@ -18,7 +18,7 @@ const contactInfo = [
   {
     icon: Mail,
     title: 'Email',
-    value: 'support@myedoctoronline.com',
+    value: 'support@myedoctor.com',
     desc: 'We reply within 24 hours',
   },
   {
@@ -60,10 +60,10 @@ export default function ContactPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    
+
     // Simulate API call
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    
+
     setIsSubmitting(false);
     toast.success('Message sent successfully! We\'ll get back to you soon.');
   };

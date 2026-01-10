@@ -71,7 +71,7 @@ export default function InstallPage() {
               <Smartphone className="w-10 h-10 text-primary-foreground" />
             </div>
             <h1 className="text-3xl md:text-4xl font-bold mb-4">
-              Install MyEdoctorOnline
+              Install MyEdoctor
             </h1>
             <p className="text-muted-foreground">
               Get the full app experience on your device. No app store required!
@@ -87,7 +87,7 @@ export default function InstallPage() {
               <Check className="w-16 h-16 text-success mx-auto mb-4" />
               <h2 className="text-xl font-semibold text-success mb-2">Already Installed!</h2>
               <p className="text-muted-foreground">
-                MyEdoctorOnline is installed on your device. You can access it from your home screen.
+                MyEdoctor is installed on your device. You can access it from your home screen.
               </p>
             </motion.div>
           ) : (

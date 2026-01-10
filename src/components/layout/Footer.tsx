@@ -41,16 +41,16 @@ export function Footer() {
                 <Stethoscope className="w-5 h-5 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold">
-                MyE<span className="text-primary">Doctor</span>Online
+                MyE<span className="text-primary">Doctor</span>
               </span>
             </Link>
             <p className="text-primary-foreground/70 text-sm mb-6 max-w-xs">
               Your trusted telemedicine platform connecting you with certified doctors and specialists from the comfort of your home.
             </p>
             <div className="space-y-3">
-              <a href="mailto:support@myedoctoronline.com" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
+              <a href="mailto:support@myedoctor.com" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
                 <Mail className="w-4 h-4" />
-                support@myedoctoronline.com
+                support@myedoctor.com
               </a>
               <a href="tel:+1234567890" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
                 <Phone className="w-4 h-4" />
@@ -107,7 +107,7 @@ export function Footer() {
         {/* Bottom */}
         <div className="border-t border-primary-foreground/10 mt-12 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="text-sm text-primary-foreground/50">
-            © {new Date().getFullYear()} MyEdoctorOnline. All rights reserved.
+            © {new Date().getFullYear()} MyEdoctor. All rights reserved.
           </p>
           <div className="flex items-center gap-4">
             {socialLinks.map((social) => (

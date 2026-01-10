@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
-import { 
-  Calendar, Clock, Video, MessageSquare, FileText, 
+import {
+  Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
-  Heart, Activity, Users, Phone, DollarSign, 
+  Heart, Activity, Users, Phone, Banknote,
   TrendingUp, CheckCircle, XCircle, BarChart3
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ import { JoinConsultationButton } from '@/components/consultation';
 // Dummy Doctor Data
 const doctorData = {
   name: 'Dr. Emily Chen',
-  email: 'emily.chen@myedoctoronline.com',
+  email: 'emily.chen@myedoctor.com',
   phone: '+1 (555) 987-6543',
   specialty: 'Cardiologist',
   experience: '12 years',
@@ -259,7 +259,7 @@ const DoctorPortal = () => {
                 <Heart className="w-5 h-5 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold">
-                MyE<span className="text-primary">Doctor</span>Online
+                MyE<span className="text-primary">Doctor</span>
               </span>
             </Link>
 
@@ -268,13 +268,13 @@ const DoctorPortal = () => {
               <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
                 <span className="text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
-                <Switch 
-                  checked={isAvailable} 
+                <Switch
+                  checked={isAvailable}
                   onCheckedChange={setIsAvailable}
                   className="ml-1"
                 />
               </div>
-              
+
               <Button variant="ghost" size="icon" className="relative">
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
@@ -310,36 +310,34 @@ const DoctorPortal = () => {
                     { id: 'requests', label: 'Requests', icon: Bell, badge: stats.pendingRequests },
                     { id: 'patients', label: 'My Patients', icon: Users },
                     { id: 'availability', label: 'Availability', icon: Clock },
-                    { id: 'earnings', label: 'Earnings', icon: DollarSign },
+                    { id: 'earnings', label: 'Earnings', icon: Banknote },
                     { id: 'reviews', label: 'Reviews', icon: Star },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                        activeTab === item.id
-                          ? 'bg-primary text-primary-foreground'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                      }`}
+                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === item.id
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                        }`}
                     >
                       <div className="flex items-center gap-3">
                         <item.icon className="w-5 h-5" />
                         {item.label}
                       </div>
                       {item.badge && (
-                        <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
-                          activeTab === item.id 
-                            ? 'bg-primary-foreground text-primary' 
-                            : 'bg-accent text-accent-foreground'
-                        }`}>
+                        <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
+                          ? 'bg-primary-foreground text-primary'
+                          : 'bg-accent text-accent-foreground'
+                          }`}>
                           {item.badge}
                         </span>
                       )}
                     </button>
                   ))}
                 </nav>
-                
+
                 <div className="mt-6 pt-6 border-t border-border">
                   <Link to="/">
                     <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground">
@@ -363,7 +361,7 @@ const DoctorPortal = () => {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h1 className="text-2xl md:text-3xl font-bold mb-2">
-                    Good morning, Dr. Chen! 👋
+                    Welcome back, Dr {displayName.split(' ')[0]}! 👋
                   </h1>
                   <p className="text-primary-foreground/80">
                     You have {todaySchedule.filter(s => s.status === 'upcoming').length} consultations scheduled today.
@@ -429,9 +427,8 @@ const DoctorPortal = () => {
                     <CardContent>
                       <div className="space-y-3">
                         {todaySchedule.slice(0, 4).map((apt) => (
-                          <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${
-                            apt.status === 'in-progress' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
-                          }`}>
+                          <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${apt.status === 'in-progress' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
+                            }`}>
                             <div className="flex items-center gap-3">
                               <Avatar className="w-10 h-10">
                                 <AvatarFallback className="bg-primary/10 text-primary text-sm">
@@ -505,11 +502,10 @@ const DoctorPortal = () => {
                             {[...Array(5)].map((_, i) => (
                               <Star
                                 key={i}
-                                className={`w-4 h-4 ${
-                                  i < review.rating
-                                    ? 'text-warning fill-warning'
-                                    : 'text-muted'
-                                }`}
+                                className={`w-4 h-4 ${i < review.rating
+                                  ? 'text-warning fill-warning'
+                                  : 'text-muted'
+                                  }`}
                               />
                             ))}
                           </div>
@@ -535,13 +531,12 @@ const DoctorPortal = () => {
                   <CardContent>
                     <div className="space-y-4">
                       {todaySchedule.map((apt) => (
-                        <div key={apt.id} className={`flex items-center justify-between p-4 rounded-xl border ${
-                          apt.status === 'in-progress' 
-                            ? 'border-primary bg-primary/5' 
-                            : apt.status === 'completed'
+                        <div key={apt.id} className={`flex items-center justify-between p-4 rounded-xl border ${apt.status === 'in-progress'
+                          ? 'border-primary bg-primary/5'
+                          : apt.status === 'completed'
                             ? 'border-success/30 bg-success/5'
                             : 'border-border'
-                        }`}>
+                          }`}>
                           <div className="flex items-center gap-4">
                             <div className="text-center w-20">
                               <p className="text-sm font-semibold">{apt.time}</p>
@@ -745,11 +740,11 @@ const DoctorPortal = () => {
                     <CardContent className="pt-6">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 rounded-xl bg-success/10 flex items-center justify-center">
-                          <DollarSign className="w-6 h-6 text-success" />
+                          <Banknote className="w-6 h-6 text-success" />
                         </div>
                         <div>
                           <p className="text-sm text-muted-foreground">This Month</p>
-                          <p className="text-2xl font-bold">${stats.earnings.toLocaleString()}</p>
+                          <p className="text-2xl font-bold">₦{stats.earnings.toLocaleString()}</p>
                         </div>
                       </div>
                     </CardContent>
@@ -833,11 +828,10 @@ const DoctorPortal = () => {
                               {[...Array(5)].map((_, i) => (
                                 <Star
                                   key={i}
-                                  className={`w-4 h-4 ${
-                                    i < review.rating
-                                      ? 'text-warning fill-warning'
-                                      : 'text-muted'
-                                  }`}
+                                  className={`w-4 h-4 ${i < review.rating
+                                    ? 'text-warning fill-warning'
+                                    : 'text-muted'
+                                    }`}
                                 />
                               ))}
                             </div>

@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { Video, Phone } from 'lucide-react';
+import { Video, Phone, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 
 interface JoinConsultationButtonProps {
   appointmentId: string;
-  consultationType: 'Video' | 'Audio' | 'video' | 'audio';
+  consultationType: 'Video' | 'Audio' | 'Chat' | 'video' | 'audio' | 'chat';
   participantName: string;
   status?: string;
   variant?: 'default' | 'outline' | 'ghost' | 'secondary';
@@ -23,8 +23,8 @@ export function JoinConsultationButton({
   className = ''
 }: JoinConsultationButtonProps) {
   const navigate = useNavigate();
-  
-  const normalizedType = consultationType.toLowerCase() as 'video' | 'audio';
+
+  const normalizedType = consultationType.toLowerCase() as 'video' | 'audio' | 'chat';
   const isJoinable = !status || status === 'confirmed' || status === 'in-progress' || status === 'upcoming';
 
   const handleJoin = () => {
@@ -50,10 +50,12 @@ export function JoinConsultationButton({
     >
       {normalizedType === 'video' ? (
         <Video className="w-4 h-4" />
+      ) : normalizedType === 'chat' ? (
+        <MessageSquare className="w-4 h-4" />
       ) : (
         <Phone className="w-4 h-4" />
       )}
-      Join {normalizedType === 'video' ? 'Video' : 'Audio'} Call
+      Join {normalizedType === 'video' ? 'Video' : normalizedType === 'chat' ? 'Chat' : 'Audio'} Call
     </Button>
   );
 }
