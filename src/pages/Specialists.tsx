@@ -94,7 +94,7 @@ export default function SpecialistsPage() {
 
   const filteredDoctors = doctors.filter((doctor) => {
     const matchesSearch = doctor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         doctor.specialty.toLowerCase().includes(searchQuery.toLowerCase());
+      doctor.specialty.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesSpecialty = selectedSpecialty === 'All Specialties' || doctor.specialty === selectedSpecialty;
     return matchesSearch && matchesSpecialty;
   });
@@ -203,7 +203,7 @@ export default function SpecialistsPage() {
 
                 <div className="flex items-center justify-between pt-4 border-t border-border">
                   <div>
-                    <span className="text-2xl font-bold text-primary">${doctor.price}</span>
+                    <span className="text-2xl font-bold text-primary">₦{doctor.price}</span>
                     <span className="text-sm text-muted-foreground">/session</span>
                   </div>
                   <Link to={`/booking?doctor=${doctor.id}`}>

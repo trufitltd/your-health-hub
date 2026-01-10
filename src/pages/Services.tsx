@@ -1,12 +1,12 @@
 import { motion } from 'framer-motion';
 import { Layout } from '@/components/layout';
-import { 
-  Video, 
-  Phone, 
-  MessageSquare, 
-  Calendar, 
-  FileText, 
-  Shield, 
+import {
+  Video,
+  Phone,
+  MessageSquare,
+  Calendar,
+  FileText,
+  Shield,
   Clock,
   Users,
   Heart,
@@ -241,7 +241,7 @@ export default function ServicesPage() {
               Ready to Get Started?
             </h2>
             <p className="text-muted-foreground mb-8 max-w-xl mx-auto">
-              Join thousands of patients who trust MyEdoctorOnline for their healthcare needs.
+              Join thousands of patients who trust MyEdoctor for their healthcare needs.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link to="/booking">
