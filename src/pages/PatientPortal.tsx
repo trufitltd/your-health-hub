@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 
 import { Link } from 'react-router-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useAppointments } from '@/hooks/useAppointments';
 import { useDoctors, useAvailableSlots, checkSlotAvailability } from '@/hooks/useAvailableSlots';
@@ -20,8 +20,8 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { 
-  Calendar, Clock, Video, MessageSquare, FileText, 
+import {
+  Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Pill, Phone, Plus, Search
 } from 'lucide-react';
@@ -31,6 +31,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { MessagesTab } from '@/components/patient-portal/MessagesTab';
 
 // Dummy Patient Data
 const patientData = {
@@ -197,9 +198,35 @@ const PatientPortal = () => {
   const [specialistName, setSpecialistName] = useState('');
   const [bookingDate, setBookingDate] = useState('');
   const [bookingTime, setBookingTime] = useState('');
-  const [bookingType, setBookingType] = useState<'Video' | 'Audio'>('Video');
+  const [bookingType, setBookingType] = useState<'Video' | 'Audio' | 'Chat'>('Video');
   const [bookingNotes, setBookingNotes] = useState('');
   const [isBooking, setIsBooking] = useState(false);
+  const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Handle external booking requests
+  useEffect(() => {
+    if (searchParams.get('action') === 'book') {
+      setSlotSelectionOpen(true);
+      // Clean up the URL without refreshing
+      setSearchParams(params => {
+        const newParams = new URLSearchParams(params);
+        newParams.delete('action');
+        return newParams;
+      }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  const resetBookingState = () => {
+    setSpecialistName('');
+    setBookingDate('');
+    setBookingTime('');
+    setBookingNotes('');
+    setSelectedDoctorId(null);
+    setRescheduleAppointmentId(null);
+    setBookingOpen(false);
+  };
 
   // Fetch available slots and doctors
   const { data: allSlots = [], isLoading: slotsLoading } = useAvailableSlots();
@@ -207,6 +234,7 @@ const PatientPortal = () => {
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
+    resetBookingState();
     setSlotSelectionOpen(true);
   };
 
@@ -266,17 +294,92 @@ const PatientPortal = () => {
       }
 
       toast({ title: 'Booked', description: 'Your appointment request has been submitted.' });
-      setBookingOpen(false);
-      setSpecialistName('');
-      setBookingDate('');
-      setBookingTime('');
-      setBookingNotes('');
-      setSelectedDoctorId(null);
+      resetBookingState();
       // Refresh appointments list
       invalidateAppointments();
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
       toast({ title: 'Booking failed', description: message });
+    } finally {
+      setIsBooking(false);
+    }
+  };
+
+  const initReschedule = (apt: unknown) => {
+    if (!requireAuthForBooking()) return;
+    const aptData = apt as unknown as { id?: string };
+    setRescheduleAppointmentId(aptData.id ?? null);
+    // We don't pre-fill doctor/date/time because the user wants to CHANGE them.
+    // But we could pre-fill the doctor if we wanted to restrict rescheduling to the same doctor.
+    // For now, let's allow full flexibility as per the "Book Appointment" flow.
+    setSlotSelectionOpen(true);
+  };
+
+  const rescheduleBooking = async () => {
+    if (!requireAuthForBooking()) return;
+    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId) {
+      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
+      return;
+    }
+
+    setIsBooking(true);
+    try {
+      // Final conflict check before update
+      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
+      if (!isAvailable) {
+        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
+        setIsBooking(false);
+        return;
+      }
+
+      const payload = {
+        doctor_id: selectedDoctorId,
+        specialist_name: specialistName,
+        date: bookingDate,
+        time: bookingTime,
+        type: bookingType,
+        notes: bookingNotes,
+        status: 'pending', // Reset to pending on reschedule
+      };
+
+      const { error } = await supabase
+        .from('appointments')
+        .update(payload)
+        .eq('id', rescheduleAppointmentId);
+
+      if (error) {
+        throw error;
+      }
+
+      toast({ title: 'Rescheduled', description: 'Your appointment has been rescheduled.' });
+      resetBookingState();
+      // Refresh appointments list
+      invalidateAppointments();
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({ title: 'Reschedule failed', description: message });
+    } finally {
+      setIsBooking(false);
+    }
+  };
+
+  const cancelAppointment = async () => {
+    if (!cancelAppointmentId) return;
+    setIsBooking(true);
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ status: 'cancelled' })
+        .eq('id', cancelAppointmentId);
+
+      if (error) throw error;
+
+      toast({ title: 'Cancelled', description: 'Appointment has been cancelled.' });
+      setCancelAppointmentId(null);
+      invalidateAppointments();
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({ title: 'Cancellation failed', description: message });
     } finally {
       setIsBooking(false);
     }
@@ -290,6 +393,8 @@ const PatientPortal = () => {
         return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
       case 'completed':
         return <Badge variant="secondary">Completed</Badge>;
+      case 'cancelled':
+        return <Badge variant="destructive">Cancelled</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -313,12 +418,12 @@ const PatientPortal = () => {
             <div className="flex items-center gap-4">
               <div className="relative hidden md:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input 
-                  placeholder="Search doctors, appointments..." 
+                <Input
+                  placeholder="Search doctors, appointments..."
                   className="pl-10 w-64 bg-muted/50"
                 />
               </div>
-              
+
               <Button variant="ghost" size="icon" className="relative">
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
@@ -327,14 +432,14 @@ const PatientPortal = () => {
               </Button>
 
               <div className="flex items-center gap-3">
-                    <Avatar className="w-9 h-9">
-                      <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
-                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
-                    </Avatar>
-                    <div className="hidden md:block">
-                      <p className="text-sm font-medium">{displayName}</p>
-                      <p className="text-xs text-muted-foreground">Patient</p>
-                    </div>
+                <Avatar className="w-9 h-9">
+                  <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
+                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
+                </Avatar>
+                <div className="hidden md:block">
+                  <p className="text-sm font-medium">{displayName}</p>
+                  <p className="text-xs text-muted-foreground">Patient</p>
+                </div>
               </div>
             </div>
           </div>
@@ -360,18 +465,17 @@ const PatientPortal = () => {
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                        activeTab === item.id
-                          ? 'bg-primary text-primary-foreground'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                      }`}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === item.id
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                        }`}
                     >
                       <item.icon className="w-5 h-5" />
                       {item.label}
                     </button>
                   ))}
                 </nav>
-                
+
                 <div className="mt-6 pt-6 border-t border-border">
                   <Link to="/">
                     <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground">
@@ -421,7 +525,7 @@ const PatientPortal = () => {
             <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Confirm Appointment</DialogTitle>
+                  <DialogTitle>{rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Appointment'}</DialogTitle>
                   <DialogDescription>Review and confirm your appointment details.</DialogDescription>
                 </DialogHeader>
 
@@ -436,9 +540,10 @@ const PatientPortal = () => {
                   </div>
                   <div>
                     <Label>Type</Label>
-                    <select className="w-full p-2 border rounded" value={bookingType} onChange={(e) => setBookingType(e.target.value as 'Video' | 'Audio')}>
+                    <select className="w-full p-2 border rounded" value={bookingType} onChange={(e) => setBookingType(e.target.value as 'Video' | 'Audio' | 'Chat')}>
                       <option value="Video">Video Call</option>
                       <option value="Audio">Audio Call</option>
+                      <option value="Chat">Chat Consultation</option>
                     </select>
                   </div>
                   <div>
@@ -461,9 +566,27 @@ const PatientPortal = () => {
                     Back
                   </Button>
                   <Button variant="outline" onClick={() => setBookingOpen(false)}>Cancel</Button>
-                  <Button onClick={createBooking} disabled={isBooking}>{isBooking ? 'Submitting...' : 'Confirm Booking'}</Button>
+                  <Button onClick={rescheduleAppointmentId ? rescheduleBooking : createBooking} disabled={isBooking}>
+                    {isBooking ? 'Submitting...' : (rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Booking')}
+                  </Button>
                 </DialogFooter>
                 <DialogClose />
+              </DialogContent>
+            </Dialog>
+
+            {/* Cancellation Confirmation Modal */}
+            <Dialog open={!!cancelAppointmentId} onOpenChange={(open) => !open && setCancelAppointmentId(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Cancel Appointment</DialogTitle>
+                  <DialogDescription>Are you sure you want to cancel this appointment? This action cannot be undone.</DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>No, Keep It</Button>
+                  <Button variant="destructive" onClick={cancelAppointment} disabled={isBooking}>
+                    {isBooking ? 'Cancelling...' : 'Yes, Cancel Appointment'}
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 
@@ -600,11 +723,10 @@ const PatientPortal = () => {
                               {[...Array(5)].map((_, i) => (
                                 <Star
                                   key={i}
-                                  className={`w-3 h-3 ${
-                                    i < consultation.rating
-                                      ? 'text-warning fill-warning'
-                                      : 'text-muted'
-                                  }`}
+                                  className={`w-3 h-3 ${i < consultation.rating
+                                    ? 'text-warning fill-warning'
+                                    : 'text-muted'
+                                    }`}
                                 />
                               ))}
                             </div>
@@ -696,9 +818,13 @@ const PatientPortal = () => {
                             <div className="flex items-center gap-3">
                               <div className="text-right">
                                 <div className="flex items-center gap-2 mb-2">
-                                  {apt.type === 'Video' ? (
+                                  {(apt as unknown as { type?: string }).type === 'Video' ? (
                                     <Badge variant="outline" className="gap-1">
                                       <Video className="w-3 h-3" /> Video
+                                    </Badge>
+                                  ) : (apt as unknown as { type?: string }).type === 'Chat' ? (
+                                    <Badge variant="outline" className="gap-1">
+                                      <MessageSquare className="w-3 h-3" /> Chat
                                     </Badge>
                                   ) : (
                                     <Badge variant="outline" className="gap-1">
@@ -708,9 +834,14 @@ const PatientPortal = () => {
                                 </div>
                                 {getStatusBadge(apt.status)}
                               </div>
-                              <Button size="sm" variant="outline">
+                              <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
                                 Reschedule
                               </Button>
+                              {apt.status === 'pending' && (
+                                <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                  Cancel
+                                </Button>
+                              )}
                               {apt.status === 'confirmed' && (
                                 <Button size="sm" className="gradient-primary">
                                   Join Call
@@ -747,11 +878,10 @@ const PatientPortal = () => {
                                 {[...Array(5)].map((_, i) => (
                                   <Star
                                     key={i}
-                                    className={`w-4 h-4 ${
-                                      i < consultation.rating
-                                        ? 'text-warning fill-warning'
-                                        : 'text-muted'
-                                    }`}
+                                    className={`w-4 h-4 ${i < consultation.rating
+                                      ? 'text-warning fill-warning'
+                                      : 'text-muted'
+                                      }`}
                                   />
                                 ))}
                               </div>
@@ -831,19 +961,7 @@ const PatientPortal = () => {
 
               {/* Messages Tab */}
               <TabsContent value="messages" className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Messages</CardTitle>
-                    <CardDescription>Chat with your healthcare providers</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center py-12">
-                      <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                      <p className="text-muted-foreground">No messages yet</p>
-                      <p className="text-sm text-muted-foreground mt-1">Messages from your doctors will appear here</p>
-                    </div>
-                  </CardContent>
-                </Card>
+                <MessagesTab />
               </TabsContent>
 
               {/* Records Tab */}
