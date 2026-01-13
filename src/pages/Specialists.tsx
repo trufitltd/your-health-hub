@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Layout } from '@/components/layout';
 import { Search, Star, Clock, Calendar, MapPin, Video, ArrowRight } from 'lucide-react';
@@ -91,6 +91,11 @@ const doctors = [
 export default function SpecialistsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSpecialty, setSelectedSpecialty] = useState('All Specialties');
+
+  // Scroll to top when page mounts
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
 
   const filteredDoctors = doctors.filter((doctor) => {
     const matchesSearch = doctor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
