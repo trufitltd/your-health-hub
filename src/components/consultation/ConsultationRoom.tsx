@@ -205,6 +205,10 @@ export function ConsultationRoom({
             setHasRemoteStream(true);
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
+              remoteVideoRef.current.onloadedmetadata = () => {
+                console.log('Remote video metadata loaded, attempting play');
+                remoteVideoRef.current?.play().catch(e => console.error('Remote video play failed:', e));
+              };
               console.log('Remote video element srcObject set');
             }
           });
@@ -458,6 +462,7 @@ export function ConsultationRoom({
                     ref={remoteVideoRef} 
                     autoPlay 
                     playsInline 
+                    muted={false}
                     className={`w-full h-full object-cover ${hasRemoteStream ? 'block' : 'hidden'}`}
                   />
                   {/* Fallback when no remote stream */}
