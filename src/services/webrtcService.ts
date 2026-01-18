@@ -17,6 +17,7 @@ export class WebRTCService {
   private onErrorCallback?: (error: Error) => void;
   private unsubscribe?: () => void;
   private processedSignals = new Set<string>();
+  private candidateQueue: RTCIceCandidate[] = [];
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
     this.sessionId = sessionId;
@@ -26,7 +27,7 @@ export class WebRTCService {
 
   async initializePeer(localStream: MediaStream) {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
-    
+
     this.peerConnection = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -68,10 +69,12 @@ export class WebRTCService {
 
     if (this.isInitiator) {
       console.log('Creating offer as initiator');
-      const offer = await this.peerConnection.createOffer();
-      await this.peerConnection.setLocalDescription(offer);
-      await this.sendSignal({ type: 'offer', offer });
+      await this.createOffer();
     }
+
+    // Always announce readiness so the other peer knows we are online
+    // This handles cases where one peer refreshes or joins late
+    await this.sendSignal({ type: 'ready' });
   }
 
   private async sendSignal(signalData: any) {
@@ -98,7 +101,7 @@ export class WebRTCService {
   private subscribeToSignals() {
     console.log('Subscribing to WebRTC signals for session:', this.sessionId);
     const channel = supabase.channel(`webrtc_signals_${this.sessionId}`);
-    
+
     channel.on('postgres_changes', {
       event: 'INSERT',
       schema: 'public',
@@ -113,7 +116,7 @@ export class WebRTCService {
         await this.handleSignal(signal.signal_data);
       }
     });
-    
+
     channel.subscribe((status) => {
       console.log('Channel subscription status:', status);
     });
@@ -147,11 +150,11 @@ export class WebRTCService {
             if (this.processedSignals.has(signal.id)) {
               continue;
             }
-            
+
             console.log('Processing polled signal:', signal.signal_data.type);
             this.processedSignals.add(signal.id);
             await this.handleSignal(signal.signal_data);
-            
+
             // Delete processed signal immediately
             await supabase.from('webrtc_signals').delete().eq('id', signal.id);
           }
@@ -184,24 +187,69 @@ export class WebRTCService {
       if (signalData.type === 'offer' && this.peerConnection.signalingState === 'stable') {
         console.log('Received offer, creating answer');
         await this.peerConnection.setRemoteDescription(signalData.offer);
+        await this.flushCandidateQueue(); // Flush any queued candidates
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
         await this.sendSignal({ type: 'answer', answer });
       } else if (signalData.type === 'answer' && this.peerConnection.signalingState === 'have-local-offer') {
         console.log('Received answer');
         await this.peerConnection.setRemoteDescription(signalData.answer);
+        await this.flushCandidateQueue(); // Flush any queued candidates
       } else if (signalData.type === 'ice-candidate') {
         console.log('Received ICE candidate');
-        try {
-          await this.peerConnection.addIceCandidate(signalData.candidate);
-        } catch (error) {
-          console.warn('Failed to add ICE candidate:', error);
+        if (this.peerConnection.remoteDescription) {
+          try {
+            await this.peerConnection.addIceCandidate(signalData.candidate);
+          } catch (error) {
+            console.warn('Failed to add ICE candidate:', error);
+          }
+        } else {
+          console.log('Remote description not set yet, queuing candidate');
+          this.candidateQueue.push(signalData.candidate);
+        }
+      } else if (signalData.type === 'ready') {
+        console.log('Received ready signal from peer');
+        // If we are the initiator (doctor) and the peer is ready, send an offer
+        // regardless of whether we already sent one (they might have refreshed)
+        if (this.isInitiator) {
+          console.log('Peer is ready, creating offer');
+          await this.createOffer();
         }
       } else {
         console.log('Ignoring signal due to wrong state:', signalData.type, 'State:', this.peerConnection.signalingState);
       }
     } catch (error) {
       console.error('Error handling signal:', error);
+    }
+  }
+
+  private async flushCandidateQueue() {
+    if (!this.peerConnection || this.candidateQueue.length === 0) return;
+
+    console.log(`Flushing ${this.candidateQueue.length} queued ICE candidates`);
+    while (this.candidateQueue.length > 0) {
+      const candidate = this.candidateQueue.shift();
+      if (candidate) {
+        try {
+          await this.peerConnection.addIceCandidate(candidate);
+        } catch (error) {
+          console.warn('Failed to add queued ICE candidate:', error);
+        }
+      }
+    }
+  }
+
+
+
+  private async createOffer() {
+    if (!this.peerConnection) return;
+
+    try {
+      const offer = await this.peerConnection.createOffer();
+      await this.peerConnection.setLocalDescription(offer);
+      await this.sendSignal({ type: 'offer', offer });
+    } catch (error) {
+      console.error('Error creating offer:', error);
     }
   }
 
