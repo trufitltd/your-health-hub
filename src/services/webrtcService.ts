@@ -140,8 +140,8 @@ export class WebRTCService {
     
     channel.subscribe((status) => {
       console.log('Channel subscription status:', status);
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        console.log('Real-time subscription failed, trying polling fallback');
+      if (status === 'SUBSCRIBED') {
+        // Start polling immediately as backup
         this.startPollingFallback();
       }
     });
@@ -154,6 +154,12 @@ export class WebRTCService {
 
   private startPollingFallback() {
     console.log('Starting polling fallback for signals');
+    
+    // Prevent multiple polling intervals
+    if ((this as any).pollInterval) {
+      return;
+    }
+    
     const pollInterval = setInterval(async () => {
       try {
         const { data, error } = await supabase
@@ -171,6 +177,7 @@ export class WebRTCService {
         if (data && data.length > 0) {
           console.log('Found signals via polling:', data.length);
           for (const signal of data) {
+            console.log('Processing polled signal:', signal.signal_data.type);
             await this.handleSignal(signal.signal_data);
             // Delete processed signal to avoid reprocessing
             await supabase.from('webrtc_signals').delete().eq('id', signal.id);
@@ -179,7 +186,7 @@ export class WebRTCService {
       } catch (err) {
         console.error('Polling fallback error:', err);
       }
-    }, 2000);
+    }, 1000); // Poll every 1 second
 
     // Store interval to clear it later
     (this as any).pollInterval = pollInterval;
