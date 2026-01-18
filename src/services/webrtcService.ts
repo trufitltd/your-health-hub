@@ -27,11 +27,7 @@ export class WebRTCService {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
     
     this.peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ],
-      iceCandidatePoolSize: 10
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
 
     // Add local stream
@@ -59,17 +55,6 @@ export class WebRTCService {
     // Handle connection state changes
     this.peerConnection.onconnectionstatechange = () => {
       console.log('Connection state:', this.peerConnection?.connectionState);
-      if (this.peerConnection?.connectionState === 'failed') {
-        console.log('Connection failed, attempting restart');
-        this.restartIce();
-      }
-    };
-
-    this.peerConnection.onerror = (event) => {
-      console.error('WebRTC connection error:', event);
-      if (this.onErrorCallback) {
-        this.onErrorCallback(new Error('WebRTC connection error'));
-      }
     };
 
     // Start signaling
@@ -80,19 +65,6 @@ export class WebRTCService {
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
       await this.sendSignal({ type: 'offer', offer });
-    }
-  }
-
-  private async restartIce() {
-    if (this.peerConnection && this.isInitiator) {
-      console.log('Restarting ICE connection');
-      try {
-        const offer = await this.peerConnection.createOffer({ iceRestart: true });
-        await this.peerConnection.setLocalDescription(offer);
-        await this.sendSignal({ type: 'offer', offer });
-      } catch (error) {
-        console.error('ICE restart failed:', error);
-      }
     }
   }
 
@@ -133,17 +105,11 @@ export class WebRTCService {
       if (signal.sender_id !== this.userId && this.peerConnection) {
         console.log('Processing signal from other participant');
         await this.handleSignal(signal.signal_data);
-      } else {
-        console.log('Ignoring own signal or no peer connection');
       }
     });
     
     channel.subscribe((status) => {
       console.log('Channel subscription status:', status);
-      if (status === 'SUBSCRIBED') {
-        // Start polling immediately as backup
-        this.startPollingFallback();
-      }
     });
 
     return () => {
@@ -152,45 +118,7 @@ export class WebRTCService {
     };
   }
 
-  private startPollingFallback() {
-    console.log('Starting polling fallback for signals');
-    
-    // Prevent multiple polling intervals
-    if ((this as any).pollInterval) {
-      return;
-    }
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        const { data, error } = await supabase
-          .from('webrtc_signals')
-          .select('*')
-          .eq('session_id', this.sessionId)
-          .neq('sender_id', this.userId)
-          .order('created_at', { ascending: true });
 
-        if (error) {
-          console.error('Polling error:', error);
-          return;
-        }
-
-        if (data && data.length > 0) {
-          console.log('Found signals via polling:', data.length);
-          for (const signal of data) {
-            console.log('Processing polled signal:', signal.signal_data.type);
-            await this.handleSignal(signal.signal_data);
-            // Delete processed signal to avoid reprocessing
-            await supabase.from('webrtc_signals').delete().eq('id', signal.id);
-          }
-        }
-      } catch (err) {
-        console.error('Polling fallback error:', err);
-      }
-    }, 1000); // Poll every 1 second
-
-    // Store interval to clear it later
-    (this as any).pollInterval = pollInterval;
-  }
 
   private async handleSignal(signalData: any) {
     if (!this.peerConnection) return;
@@ -235,9 +163,6 @@ export class WebRTCService {
   destroy() {
     if (this.unsubscribe) {
       this.unsubscribe();
-    }
-    if ((this as any).pollInterval) {
-      clearInterval((this as any).pollInterval);
     }
     if (this.peerConnection) {
       this.peerConnection.close();
