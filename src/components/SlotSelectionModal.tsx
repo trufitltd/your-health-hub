@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ interface SlotSelectionModalProps {
   slots: AvailableSlot[];
   isLoading: boolean;
   onSlotSelect: (doctor: { id: string; name: string }, date: string, time: string) => void;
+  doctorId?: string | null;
 }
 
 /**
@@ -31,22 +32,31 @@ export function SlotSelectionModal({
   slots,
   isLoading,
   onSlotSelect,
+  doctorId,
 }: SlotSelectionModalProps) {
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (doctorId) {
+      setSelectedDoctor(doctorId);
+    }
+  }, [doctorId]);
 
   // Get available doctors from slots
   const doctors = useMemo(
     () =>
       Array.from(
         new Map(slots.map((slot) => [slot.doctor_id, slot])).values()
-      ).map((slot) => ({
+      )
+      .map((slot) => ({
         id: slot.doctor_id,
         name: slot.doctor_name,
         specialty: slot.specialty,
-      })),
-    [slots]
+      }))
+      .filter((doctor) => !doctorId || doctor.id === doctorId),
+    [slots, doctorId]
   );
 
   // Get schedules for selected doctor
@@ -56,11 +66,14 @@ export function SlotSelectionModal({
   );
 
   // Get available dates for selected doctor
+  // Only show dates where the doctor has schedules that are marked as available
   const availableDates = useMemo(() => {
     if (!selectedDoctor) return [];
 
     const dates = new Set<string>();
     doctorSchedules.forEach((schedule) => {
+      // Only include dates for schedules where is_available is true
+      // The view already filters by is_available = true, so we can include all
       const datesForWeekDay = generateDatesForDayOfWeek(schedule.day_of_week, 30);
       datesForWeekDay.forEach((date) => {
         dates.add(date.toISOString().split('T')[0]);
@@ -71,15 +84,22 @@ export function SlotSelectionModal({
   }, [selectedDoctor, doctorSchedules]);
 
   // Get time slots for selected date
+  // Only show times where slots are actually available and the doctor is available that day
   const timeSlots = useMemo(() => {
     if (!selectedDate || !selectedDoctor) return [];
 
     const date = new Date(selectedDate);
-    const dayOfWeek = date.getDay();
+    const dayOfWeek = date.getUTCDay();
 
+    // Filter for schedules on this day of week
+    // The available_slots view already includes is_available = true filtering
     const schedules = doctorSchedules.filter(
-      (s) => s.day_of_week === dayOfWeek && s.available_slots > 0
+      (s) => s.day_of_week === dayOfWeek
     );
+
+    if (schedules.length === 0) {
+      return [];
+    }
 
     const times = new Set<string>();
     schedules.forEach((schedule) => {

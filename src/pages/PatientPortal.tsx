@@ -151,9 +151,14 @@ const notifications = [
 
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/');
+  };
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
   const initials = displayName
@@ -202,6 +207,7 @@ const PatientPortal = () => {
   const [bookingNotes, setBookingNotes] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -225,6 +231,7 @@ const PatientPortal = () => {
     setBookingNotes('');
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
+    setRescheduleDoctorId(null);
     setBookingOpen(false);
   };
 
@@ -307,8 +314,9 @@ const PatientPortal = () => {
 
   const initReschedule = (apt: unknown) => {
     if (!requireAuthForBooking()) return;
-    const aptData = apt as unknown as { id?: string };
+    const aptData = apt as unknown as { id?: string; doctor_id?: string };
     setRescheduleAppointmentId(aptData.id ?? null);
+    setRescheduleDoctorId(aptData.doctor_id ?? null);
     // We don't pre-fill doctor/date/time because the user wants to CHANGE them.
     // But we could pre-fill the doctor if we wanted to restrict rescheduling to the same doctor.
     // For now, let's allow full flexibility as per the "Book Appointment" flow.
@@ -395,6 +403,8 @@ const PatientPortal = () => {
         return <Badge variant="secondary">Completed</Badge>;
       case 'cancelled':
         return <Badge variant="destructive">Cancelled</Badge>;
+      case 'rejected':
+        return <Badge variant="destructive">Rejected</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -411,7 +421,7 @@ const PatientPortal = () => {
                 <Heart className="w-5 h-5 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold">
-                MyE<span className="text-primary">Doctor</span>Online
+                MyE<span className="text-primary">Doctor</span>
               </span>
             </Link>
 
@@ -477,12 +487,14 @@ const PatientPortal = () => {
                 </nav>
 
                 <div className="mt-6 pt-6 border-t border-border">
-                  <Link to="/">
-                    <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground">
-                      <LogOut className="w-5 h-5" />
-                      Sign Out
-                    </Button>
-                  </Link>
+                  <Button 
+                    onClick={handleSignOut}
+                    variant="ghost" 
+                    className="w-full justify-start gap-3 text-muted-foreground"
+                  >
+                    <LogOut className="w-5 h-5" />
+                    Sign Out
+                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -502,7 +514,12 @@ const PatientPortal = () => {
                     Welcome back, {displayName.split(' ')[0]}! 👋
                   </h1>
                   <p className="text-primary-foreground/80">
-                    You have {appointments.filter(apt => new Date(apt.date) >= new Date()).length} upcoming appointments.
+                    You have {appointments.filter(apt => {
+                      const appointmentDate = new Date(apt.date);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                    }).length} upcoming appointments.
                   </p>
                 </div>
                 <Button onClick={openBooking} variant="secondary" size="lg" className="gap-2">
@@ -519,6 +536,7 @@ const PatientPortal = () => {
               slots={allSlots}
               isLoading={slotsLoading || doctorsLoading}
               onSlotSelect={handleSlotSelect}
+              doctorId={rescheduleDoctorId}
             />
 
             {/* Booking Confirmation Modal */}
@@ -645,7 +663,12 @@ const PatientPortal = () => {
                       <div className="text-center py-8">
                         <p className="text-muted-foreground">Loading appointments...</p>
                       </div>
-                    ) : appointments.length === 0 ? (
+                    ) : appointments.filter(apt => {
+                      const appointmentDate = new Date(apt.date);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                    }).length === 0 ? (
                       <div className="text-center py-8">
                         <p className="text-muted-foreground">No upcoming appointments</p>
                         <Button onClick={openBooking} variant="outline" size="sm" className="mt-4 gap-2">
@@ -655,7 +678,12 @@ const PatientPortal = () => {
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {appointments.slice(0, 3).map((apt) => (
+                        {appointments.filter(apt => {
+                          const appointmentDate = new Date(apt.date);
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                        }).slice(0, 3).map((apt) => (
                           <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
                             <div className="flex items-center gap-4">
                               <Avatar>
