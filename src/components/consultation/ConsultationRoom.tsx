@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
   Maximize2, Minimize2, Settings, Volume2, VolumeX,
-  Send, Paperclip, MoreVertical, X, User
+  Send, Paperclip, MoreVertical, X, User, AlertCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,6 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/components/ui/use-toast';
+import { consultationService, type ConsultationMessage as ConsultationMessageType } from '@/services/consultationService';
+import { supabase } from '@/integrations/supabase/client';
 
 interface Message {
   id: string;
@@ -37,6 +41,7 @@ export function ConsultationRoom({
   participantRole,
   onEndCall
 }: ConsultationRoomProps) {
+  const { user } = useAuth();
   const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
   const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
   const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(consultationType !== 'chat');
@@ -46,19 +51,116 @@ export function ConsultationRoom({
   const [callDuration, setCallDuration] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [hasRemoteStream, setHasRemoteStream] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  // Simulate connection and initialize local media
+  // Initialize consultation session and load existing messages
+  useEffect(() => {
+    const initializeSession = async () => {
+      if (!user || !appointmentId) {
+        setError('Missing user or appointment information');
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        // Get or create consultation session
+        let session = await consultationService.getSessionByAppointmentId(appointmentId);
+        
+        if (!session) {
+          // Get appointment data to find the real patient and doctor IDs
+          const { data: appointmentData, error: appointmentError } = await supabase
+            .from('appointments')
+            .select('patient_id, doctor_id')
+            .eq('id', appointmentId)
+            .single();
+            
+          if (appointmentError) {
+            throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
+          }
+          
+          session = await consultationService.createSession(
+            appointmentId,
+            appointmentData.patient_id,
+            appointmentData.doctor_id,
+            consultationType
+          );
+        }
+
+        setSessionId(session.id);
+
+        // Load existing messages
+        const existingMessages = await consultationService.getMessages(session.id);
+        setMessages(existingMessages.map(msg => ({
+          id: msg.id,
+          sender: msg.sender_id === user?.id ? 'user' : 'remote',
+          senderName: msg.sender_name,
+          content: msg.content,
+          timestamp: new Date(msg.created_at),
+          type: msg.message_type as 'text' | 'file'
+        })));
+
+        // Subscribe to real-time messages
+        const unsubscribe = consultationService.subscribeToMessages(
+          session.id,
+          (dbMessage) => {
+            if (dbMessage.sender_id !== user?.id) {
+              setMessages(prev => [...prev, {
+                id: dbMessage.id,
+                sender: 'remote',
+                senderName: dbMessage.sender_name,
+                content: dbMessage.content,
+                timestamp: new Date(dbMessage.created_at),
+                type: dbMessage.message_type as 'text' | 'file'
+              }]);
+            }
+          },
+          (err) => {
+            console.error('Error receiving message:', err);
+            toast({
+              title: 'Error',
+              description: 'Failed to receive messages',
+              variant: 'destructive'
+            });
+          }
+        );
+
+        unsubscribeRef.current = unsubscribe;
+        setConnectionStatus('connected');
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Failed to initialize session';
+        setError(errorMsg);
+        toast({
+          title: 'Error',
+          description: errorMsg,
+          variant: 'destructive'
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeSession();
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [user, appointmentId, participantRole, consultationType]);
+
+  // Initialize local media
   useEffect(() => {
     const initializeMedia = async () => {
       if (consultationType === 'chat') {
-        setTimeout(() => {
-          setConnectionStatus('connected');
-        }, 1000);
         return;
       }
 
@@ -74,14 +176,14 @@ export function ConsultationRoom({
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
-
-        // Simulate connection delay
-        setTimeout(() => {
-          setConnectionStatus('connected');
-        }, 2000);
       } catch (error) {
         console.error('Failed to get media devices:', error);
-        setConnectionStatus('disconnected');
+        setError('Unable to access camera/microphone');
+        toast({
+          title: 'Error',
+          description: 'Unable to access camera or microphone',
+          variant: 'destructive'
+        });
       }
     };
 
@@ -103,6 +205,20 @@ export function ConsultationRoom({
     }, 1000);
 
     return () => clearInterval(timer);
+  }, [connectionStatus]);
+
+  // Simulate remote stream connection after a delay
+  useEffect(() => {
+    if (connectionStatus === 'connected') {
+      const timer = setTimeout(() => {
+        setHasRemoteStream(true);
+        // Simulate remote video by duplicating local stream
+        if (remoteVideoRef.current && localStreamRef.current) {
+          remoteVideoRef.current.srcObject = localStreamRef.current.clone();
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
   }, [connectionStatus]);
 
   // Auto scroll chat
@@ -138,44 +254,68 @@ export function ConsultationRoom({
     }
   }, []);
 
-  const handleSendMessage = () => {
-    if (!newMessage.trim()) return;
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !sessionId || !user) return;
 
-    const message: Message = {
-      id: Date.now().toString(),
-      sender: 'user',
-      senderName: participantRole === 'doctor' ? 'Dr. You' : 'You',
-      content: newMessage,
-      timestamp: new Date(),
-      type: 'text'
-    };
-
-    setMessages(prev => [...prev, message]);
+    const messageContent = newMessage;
     setNewMessage('');
 
-    // Simulate response after a delay
-    setTimeout(() => {
-      const response: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: 'remote',
-        senderName: participantName,
-        content: getSimulatedResponse(newMessage),
+    try {
+      // Send message to database
+      await consultationService.sendMessage(
+        sessionId,
+        user.id,
+        participantRole === 'doctor' ? 'doctor' : 'patient',
+        user.user_metadata?.full_name || user.email || 'User',
+        messageContent
+      );
+
+      // Optimistically add message to UI
+      const message: Message = {
+        id: Date.now().toString(),
+        sender: 'user',
+        senderName: 'You',
+        content: messageContent,
         timestamp: new Date(),
         type: 'text'
       };
-      setMessages(prev => [...prev, response]);
-    }, 1500);
+      setMessages(prev => [...prev, message]);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
+      toast({
+        title: 'Error',
+        description: errorMsg,
+        variant: 'destructive'
+      });
+      // Restore message in input if failed
+      setNewMessage(messageContent);
+    }
   };
 
-  const getSimulatedResponse = (message: string): string => {
-    const responses = [
-      "I understand. Can you tell me more about your symptoms?",
-      "That's helpful information. Let me note that down.",
-      "I see. How long have you been experiencing this?",
-      "Thank you for sharing. Any other concerns?",
-      "Good to know. I'll include this in my assessment."
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
+  const handleEndCall = async () => {
+    if (sessionId) {
+      try {
+        await consultationService.endSession(sessionId, callDuration);
+        toast({
+          title: 'Success',
+          description: 'Consultation ended successfully'
+        });
+      } catch (err) {
+        console.error('Error ending session:', err);
+      }
+    }
+    
+    // Stop all media tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    
+    // Clean up subscriptions
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+    }
+    
+    onEndCall();
   };
 
   const participantInitials = participantName
@@ -184,6 +324,24 @@ export function ConsultationRoom({
     .slice(0, 2)
     .join('')
     .toUpperCase();
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full bg-background">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3 text-destructive mb-4">
+              <AlertCircle className="w-6 h-6" />
+              <h3 className="font-semibold">Error</h3>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">{error}</p>
+            <Button onClick={onEndCall} className="w-full">Go Back</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-col bg-background ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[calc(100vh-4rem)]'}`}>
@@ -245,22 +403,30 @@ export function ConsultationRoom({
             <div className="w-full h-full rounded-2xl overflow-hidden bg-card relative">
               {consultationType === 'video' ? (
                 <>
-                  {/* Simulated remote video - in production this would be the actual remote stream */}
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
-                    <div className="text-center">
-                      <Avatar className="w-32 h-32 mx-auto mb-4">
-                        <AvatarFallback className="bg-primary text-primary-foreground text-4xl">
-                          {participantInitials}
-                        </AvatarFallback>
-                      </Avatar>
-                      {connectionStatus === 'connecting' ? (
-                        <p className="text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
-                      ) : (
-                        <p className="text-muted-foreground">Video stream placeholder</p>
-                      )}
+                  {/* Remote video stream */}
+                  <video 
+                    ref={remoteVideoRef} 
+                    autoPlay 
+                    playsInline 
+                    className="w-full h-full object-cover" 
+                  />
+                  {/* Fallback when no remote stream */}
+                  {!hasRemoteStream && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
+                      <div className="text-center">
+                        <Avatar className="w-32 h-32 mx-auto mb-4">
+                          <AvatarFallback className="bg-primary text-primary-foreground text-4xl">
+                            {participantInitials}
+                          </AvatarFallback>
+                        </Avatar>
+                        {connectionStatus === 'connecting' ? (
+                          <p className="text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
+                        ) : (
+                          <p className="text-muted-foreground">Waiting for {participantName} to join...</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover hidden" />
+                  )}
                 </>
               ) : (
                 /* Audio-only view */
@@ -471,7 +637,7 @@ export function ConsultationRoom({
                 variant="destructive"
                 size="icon"
                 className="w-14 h-14 rounded-full"
-                onClick={onEndCall}
+                onClick={handleEndCall}
               >
                 <Phone className="w-6 h-6 rotate-[135deg]" />
               </Button>

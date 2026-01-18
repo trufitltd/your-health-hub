@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
+import { createDefaultSchedule } from '@/services/scheduleService';
 
 type AuthMode = 'login' | 'register';
 type UserRole = 'patient' | 'doctor';
@@ -56,10 +57,28 @@ export default function AuthPage() {
           return;
         }
 
-        toast({
-          title: 'Account created',
-          description: 'Please check your email to confirm your account.',
-        });
+        // If doctor, create default schedule
+        if (role === 'doctor' && data.user?.id) {
+          try {
+            await createDefaultSchedule(data.user.id);
+            toast({
+              title: 'Account created',
+              description: 'Default schedule created. Check your email to confirm your account.',
+            });
+          } catch (scheduleErr) {
+            console.error('Error creating default schedule:', scheduleErr);
+            // Don't fail signup if schedule creation fails
+            toast({
+              title: 'Account created',
+              description: 'Please check your email to confirm your account.',
+            });
+          }
+        } else {
+          toast({
+            title: 'Account created',
+            description: 'Please check your email to confirm your account.',
+          });
+        }
 
         setIsLoading(false);
         setMode('login');
