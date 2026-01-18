@@ -16,6 +16,7 @@ export class WebRTCService {
   private isInitiator: boolean;
   private onStreamCallback?: (stream: MediaStream) => void;
   private onErrorCallback?: (error: Error) => void;
+  private unsubscribe?: () => void;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
     this.sessionId = sessionId;
@@ -48,7 +49,7 @@ export class WebRTCService {
     });
 
     // Listen for incoming signals
-    this.subscribeToSignals();
+    this.unsubscribe = this.subscribeToSignals();
   }
 
   private async sendSignal(signalData: any) {
@@ -66,23 +67,24 @@ export class WebRTCService {
   }
 
   private subscribeToSignals() {
-    const subscription = supabase
-      .channel(`webrtc_signals_${this.sessionId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'webrtc_signals',
-        filter: `session_id=eq.${this.sessionId}`
-      }, (payload) => {
-        const signal = payload.new as WebRTCSignal;
-        if (signal.sender_id !== this.userId && this.peer) {
-          this.peer.signal(signal.signal_data);
-        }
-      })
-      .subscribe();
+    const channel = supabase.channel(`webrtc_signals_${this.sessionId}`);
+    
+    channel.on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'webrtc_signals',
+      filter: `session_id=eq.${this.sessionId}`
+    }, (payload) => {
+      const signal = payload.new as WebRTCSignal;
+      if (signal.sender_id !== this.userId && this.peer) {
+        this.peer.signal(signal.signal_data);
+      }
+    });
+    
+    channel.subscribe();
 
     return () => {
-      subscription.unsubscribe();
+      channel.unsubscribe();
     };
   }
 
@@ -95,6 +97,9 @@ export class WebRTCService {
   }
 
   destroy() {
+    if (this.unsubscribe) {
+      this.unsubscribe();
+    }
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
