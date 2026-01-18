@@ -870,10 +870,15 @@ const PatientPortal = () => {
                                   Cancel
                                 </Button>
                               )}
-                              {apt.status === 'confirmed' && (
-                                <Button size="sm" className="gradient-primary">
-                                  Join Call
-                                </Button>
+                              {(apt.status === 'confirmed' || apt.status === 'pending') && (
+                                <JoinConsultationButton
+                                  appointmentId={apt.id}
+                                  consultationType={apt.type}
+                                  participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                  status={apt.status}
+                                  variant="default"
+                                  size="sm"
+                                />
                               )}
                             </div>
                           </div>
