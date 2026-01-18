@@ -112,10 +112,51 @@ export class WebRTCService {
       console.log('Channel subscription status:', status);
     });
 
+    // Start polling as backup since real-time often fails
+    this.startPolling();
+
     return () => {
       console.log('Unsubscribing from WebRTC signals');
       channel.unsubscribe();
+      this.stopPolling();
     };
+  }
+
+  private startPolling() {
+    console.log('Starting signal polling');
+    const poll = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('webrtc_signals')
+          .select('*')
+          .eq('session_id', this.sessionId)
+          .neq('sender_id', this.userId)
+          .order('created_at', { ascending: true });
+
+        if (!error && data && data.length > 0) {
+          console.log('Found signals via polling:', data.length);
+          for (const signal of data) {
+            console.log('Processing polled signal:', signal.signal_data.type);
+            await this.handleSignal(signal.signal_data);
+            // Delete processed signal
+            await supabase.from('webrtc_signals').delete().eq('id', signal.id);
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    };
+
+    // Poll immediately and then every 2 seconds
+    poll();
+    (this as any).pollInterval = setInterval(poll, 2000);
+  }
+
+  private stopPolling() {
+    if ((this as any).pollInterval) {
+      clearInterval((this as any).pollInterval);
+      (this as any).pollInterval = null;
+    }
   }
 
 
@@ -161,6 +202,7 @@ export class WebRTCService {
   }
 
   destroy() {
+    this.stopPolling();
     if (this.unsubscribe) {
       this.unsubscribe();
     }
