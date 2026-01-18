@@ -201,10 +201,11 @@ export function ConsultationRoom({
           const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
           
           webrtc.onStream((remoteStream) => {
-            console.log('Setting remote stream');
+            console.log('Setting remote stream, tracks:', remoteStream.getTracks().length);
             setHasRemoteStream(true);
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
+              console.log('Remote video element srcObject set');
             }
           });
 
@@ -457,7 +458,7 @@ export function ConsultationRoom({
                     ref={remoteVideoRef} 
                     autoPlay 
                     playsInline 
-                    className="w-full h-full object-cover" 
+                    className={`w-full h-full object-cover ${hasRemoteStream ? 'block' : 'hidden'}`}
                   />
                   {/* Fallback when no remote stream */}
                   {!hasRemoteStream && (
