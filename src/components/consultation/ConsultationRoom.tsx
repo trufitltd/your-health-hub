@@ -212,14 +212,46 @@ export function ConsultationRoom({
     if (connectionStatus === 'connected') {
       const timer = setTimeout(() => {
         setHasRemoteStream(true);
-        // Simulate remote video by duplicating local stream
-        if (remoteVideoRef.current && localStreamRef.current) {
-          remoteVideoRef.current.srcObject = localStreamRef.current.clone();
+        // Create a canvas-based simulation for remote video
+        if (remoteVideoRef.current && consultationType === 'video') {
+          const canvas = document.createElement('canvas');
+          canvas.width = 640;
+          canvas.height = 480;
+          const ctx = canvas.getContext('2d');
+          
+          // Create animated gradient background
+          let frame = 0;
+          const animate = () => {
+            if (ctx) {
+              const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+              gradient.addColorStop(0, `hsl(${(frame * 2) % 360}, 50%, 60%)`);
+              gradient.addColorStop(1, `hsl(${(frame * 2 + 180) % 360}, 50%, 40%)`);
+              
+              ctx.fillStyle = gradient;
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              
+              // Add participant name overlay
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.font = 'bold 24px Arial';
+              ctx.textAlign = 'center';
+              ctx.fillText(participantName, canvas.width / 2, canvas.height / 2 - 20);
+              
+              ctx.font = '16px Arial';
+              ctx.fillText('(Simulated Video)', canvas.width / 2, canvas.height / 2 + 20);
+              
+              frame++;
+            }
+            requestAnimationFrame(animate);
+          };
+          
+          animate();
+          const stream = canvas.captureStream(30);
+          remoteVideoRef.current.srcObject = stream;
         }
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [connectionStatus]);
+  }, [connectionStatus, participantName, consultationType]);
 
   // Auto scroll chat
   useEffect(() => {
