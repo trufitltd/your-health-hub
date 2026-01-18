@@ -204,16 +204,17 @@ export function ConsultationRoom({
 
       } catch (error) {
         console.error('Failed to get media devices:', error);
-        setError('Unable to access camera/microphone');
         toast({
-          title: 'Error',
-          description: 'Unable to access camera or microphone',
+          title: 'Media Access Error',
+          description: error instanceof Error ? error.message : 'Unable to access camera or microphone',
           variant: 'destructive'
         });
       }
     };
 
-    initializeMedia();
+    if (sessionId && connectionStatus === 'connected') {
+      initializeMedia();
+    }
 
     return () => {
       if (localStreamRef.current) {
@@ -223,7 +224,7 @@ export function ConsultationRoom({
         webrtcService.destroy();
       }
     };
-  }, [consultationType, sessionId, user, participantRole]);
+  }, [consultationType, sessionId, user, participantRole, connectionStatus]);
 
   // Call duration timer
   useEffect(() => {
