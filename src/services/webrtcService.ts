@@ -27,7 +27,11 @@ export class WebRTCService {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
     
     this.peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ],
+      iceCandidatePoolSize: 10
     });
 
     // Add local stream
@@ -52,6 +56,15 @@ export class WebRTCService {
       }
     };
 
+    // Handle connection state changes
+    this.peerConnection.onconnectionstatechange = () => {
+      console.log('Connection state:', this.peerConnection?.connectionState);
+      if (this.peerConnection?.connectionState === 'failed') {
+        console.log('Connection failed, attempting restart');
+        this.restartIce();
+      }
+    };
+
     this.peerConnection.onerror = (event) => {
       console.error('WebRTC connection error:', event);
       if (this.onErrorCallback) {
@@ -67,6 +80,19 @@ export class WebRTCService {
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
       await this.sendSignal({ type: 'offer', offer });
+    }
+  }
+
+  private async restartIce() {
+    if (this.peerConnection && this.isInitiator) {
+      console.log('Restarting ICE connection');
+      try {
+        const offer = await this.peerConnection.createOffer({ iceRestart: true });
+        await this.peerConnection.setLocalDescription(offer);
+        await this.sendSignal({ type: 'offer', offer });
+      } catch (error) {
+        console.error('ICE restart failed:', error);
+      }
     }
   }
 
@@ -176,7 +202,12 @@ export class WebRTCService {
         await this.peerConnection.setRemoteDescription(signalData.answer);
       } else if (signalData.type === 'ice-candidate') {
         console.log('Received ICE candidate');
-        await this.peerConnection.addIceCandidate(signalData.candidate);
+        try {
+          await this.peerConnection.addIceCandidate(signalData.candidate);
+        } catch (error) {
+          console.warn('Failed to add ICE candidate:', error);
+          // Don't throw error for failed ICE candidates as this is common
+        }
       }
     } catch (error) {
       console.error('Error handling signal:', error);
