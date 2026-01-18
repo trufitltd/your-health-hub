@@ -16,6 +16,7 @@ export class WebRTCService {
   private onStreamCallback?: (stream: MediaStream) => void;
   private onErrorCallback?: (error: Error) => void;
   private unsubscribe?: () => void;
+  private processedSignals = new Set<string>();
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
     this.sessionId = sessionId;
@@ -131,14 +132,22 @@ export class WebRTCService {
           .select('*')
           .eq('session_id', this.sessionId)
           .neq('sender_id', this.userId)
-          .order('created_at', { ascending: true });
+          .order('created_at', { ascending: true })
+          .limit(10); // Limit to prevent processing too many at once
 
         if (!error && data && data.length > 0) {
           console.log('Found signals via polling:', data.length);
           for (const signal of data) {
+            // Skip if already processed
+            if (this.processedSignals.has(signal.id)) {
+              continue;
+            }
+            
             console.log('Processing polled signal:', signal.signal_data.type);
+            this.processedSignals.add(signal.id);
             await this.handleSignal(signal.signal_data);
-            // Delete processed signal
+            
+            // Delete processed signal immediately
             await supabase.from('webrtc_signals').delete().eq('id', signal.id);
           }
         }
@@ -147,9 +156,9 @@ export class WebRTCService {
       }
     };
 
-    // Poll immediately and then every 2 seconds
+    // Poll immediately and then every 3 seconds (slower to reduce load)
     poll();
-    (this as any).pollInterval = setInterval(poll, 2000);
+    (this as any).pollInterval = setInterval(poll, 3000);
   }
 
   private stopPolling() {
@@ -164,16 +173,16 @@ export class WebRTCService {
   private async handleSignal(signalData: any) {
     if (!this.peerConnection) return;
 
-    console.log('Handling signal:', signalData.type);
+    console.log('Handling signal:', signalData.type, 'Connection state:', this.peerConnection.signalingState);
 
     try {
-      if (signalData.type === 'offer') {
+      if (signalData.type === 'offer' && this.peerConnection.signalingState === 'stable') {
         console.log('Received offer, creating answer');
         await this.peerConnection.setRemoteDescription(signalData.offer);
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
         await this.sendSignal({ type: 'answer', answer });
-      } else if (signalData.type === 'answer') {
+      } else if (signalData.type === 'answer' && this.peerConnection.signalingState === 'have-local-offer') {
         console.log('Received answer');
         await this.peerConnection.setRemoteDescription(signalData.answer);
       } else if (signalData.type === 'ice-candidate') {
@@ -182,14 +191,12 @@ export class WebRTCService {
           await this.peerConnection.addIceCandidate(signalData.candidate);
         } catch (error) {
           console.warn('Failed to add ICE candidate:', error);
-          // Don't throw error for failed ICE candidates as this is common
         }
+      } else {
+        console.log('Ignoring signal due to wrong state:', signalData.type, 'State:', this.peerConnection.signalingState);
       }
     } catch (error) {
       console.error('Error handling signal:', error);
-      if (this.onErrorCallback) {
-        this.onErrorCallback(error as Error);
-      }
     }
   }
 
