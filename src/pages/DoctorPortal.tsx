@@ -15,8 +15,12 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/hooks/useAuth';
+import { useAppointments } from '@/hooks/useAppointments';
+import { supabase } from '@/integrations/supabase/client';
+import { useQuery } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import { JoinConsultationButton } from '@/components/consultation';
+import { ScheduleEditor } from '@/components/ScheduleEditor';
 
 // Dummy Doctor Data
 const doctorData = {
@@ -31,88 +35,7 @@ const doctorData = {
   isAvailable: true,
 };
 
-const todaySchedule = [
-  {
-    id: 1,
-    patient: 'Sarah Johnson',
-    age: 35,
-    time: '09:00 AM',
-    endTime: '09:30 AM',
-    type: 'Video Call',
-    reason: 'Follow-up checkup',
-    status: 'completed',
-  },
-  {
-    id: 2,
-    patient: 'Michael Brown',
-    age: 45,
-    time: '10:00 AM',
-    endTime: '10:30 AM',
-    type: 'Video Call',
-    reason: 'Chest pain consultation',
-    status: 'in-progress',
-  },
-  {
-    id: 3,
-    patient: 'Emma Wilson',
-    age: 28,
-    time: '11:00 AM',
-    endTime: '11:30 AM',
-    type: 'Audio Call',
-    reason: 'First consultation',
-    status: 'upcoming',
-  },
-  {
-    id: 4,
-    patient: 'James Lee',
-    age: 52,
-    time: '02:00 PM',
-    endTime: '02:30 PM',
-    type: 'Video Call',
-    reason: 'Blood pressure review',
-    status: 'upcoming',
-  },
-  {
-    id: 5,
-    patient: 'Lisa Martinez',
-    age: 40,
-    time: '03:30 PM',
-    endTime: '04:00 PM',
-    type: 'Video Call',
-    reason: 'Annual checkup',
-    status: 'upcoming',
-  },
-];
 
-const pendingRequests = [
-  {
-    id: 1,
-    patient: 'Robert Taylor',
-    age: 55,
-    requestedDate: '2026-01-10',
-    requestedTime: '10:00 AM',
-    reason: 'Heart palpitations',
-    priority: 'high',
-  },
-  {
-    id: 2,
-    patient: 'Anna White',
-    age: 32,
-    requestedDate: '2026-01-11',
-    requestedTime: '02:30 PM',
-    reason: 'General checkup',
-    priority: 'normal',
-  },
-  {
-    id: 3,
-    patient: 'David Kim',
-    age: 48,
-    requestedDate: '2026-01-12',
-    requestedTime: '11:00 AM',
-    reason: 'ECG review',
-    priority: 'normal',
-  },
-];
 
 const patientList = [
   {
@@ -157,24 +80,6 @@ const patientList = [
   },
 ];
 
-const weeklySchedule = [
-  { day: 'Monday', slots: ['09:00 AM - 12:00 PM', '02:00 PM - 05:00 PM'], enabled: true },
-  { day: 'Tuesday', slots: ['09:00 AM - 12:00 PM', '02:00 PM - 05:00 PM'], enabled: true },
-  { day: 'Wednesday', slots: ['09:00 AM - 12:00 PM'], enabled: true },
-  { day: 'Thursday', slots: ['09:00 AM - 12:00 PM', '02:00 PM - 05:00 PM'], enabled: true },
-  { day: 'Friday', slots: ['09:00 AM - 12:00 PM'], enabled: true },
-  { day: 'Saturday', slots: [], enabled: false },
-  { day: 'Sunday', slots: [], enabled: false },
-];
-
-const stats = {
-  totalPatients: 156,
-  consultationsThisMonth: 48,
-  pendingRequests: 3,
-  earnings: 12450,
-  rating: 4.9,
-};
-
 const recentReviews = [
   {
     id: 1,
@@ -199,11 +104,165 @@ const recentReviews = [
   },
 ];
 
+const todaySchedule = [
+  {
+    id: 1,
+    patient: 'Robert Taylor',
+    time: '09:00 AM',
+    status: 'completed',
+    type: 'Video',
+  },
+  {
+    id: 2,
+    patient: 'Sarah Johnson',
+    time: '10:00 AM',
+    status: 'in-progress',
+    type: 'Video',
+  },
+  {
+    id: 3,
+    patient: 'Michael Brown',
+    time: '11:00 AM',
+    status: 'upcoming',
+    type: 'Audio',
+  },
+  {
+    id: 4,
+    patient: 'Emma Wilson',
+    time: '02:00 PM',
+    status: 'upcoming',
+    type: 'Video',
+  },
+];
+
+const appointments = [
+  ...todaySchedule.map(apt => ({
+    ...apt,
+    date: new Date().toISOString().split('T')[0],
+    patient_name: apt.patient,
+    notes: 'Regular checkup',
+  })),
+  {
+    id: 5,
+    patient_name: 'James Lee',
+    date: '2025-12-28',
+    time: '03:00 PM',
+    status: 'completed',
+    type: 'Video',
+    notes: 'Follow-up regarding medication',
+  },
+  {
+    id: 6,
+    patient_name: 'Lisa Martinez',
+    date: '2025-12-25',
+    time: '10:00 AM',
+    status: 'rejected',
+    type: 'Audio',
+    notes: 'Doctor unavailable',
+  }
+];
+
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
   const { user, role } = useAuth();
   const navigate = useNavigate();
+
+  // Fetch appointments for this doctor
+  const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
+    queryKey: ['doctor-appointments', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('doctor_id', user.id)
+        .order('date', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+
+  const handleAcceptRequest = async (appointmentId: string) => {
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ status: 'confirmed' })
+        .eq('id', appointmentId);
+      if (error) throw error;
+      toast({ title: 'Accepted', description: 'Appointment has been confirmed.' });
+      refetch();
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to accept appointment.' });
+    }
+  };
+
+  const handleDeclineRequest = async (appointmentId: string) => {
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ status: 'rejected' })
+        .eq('id', appointmentId);
+      if (error) throw error;
+      toast({ title: 'Declined', description: 'Appointment has been declined.' });
+      refetch();
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to decline appointment.' });
+    }
+  };
+
+  console.log('Fetched appointments:', fetchedAppointments);
+  console.log('Fetched appointments length:', fetchedAppointments?.length || 0);
+
+  // Filter pending requests for the current doctor
+  const pendingRequests = (fetchedAppointments || []).filter(apt => {
+    console.log('Checking appointment:', apt.id, 'Status:', apt.status);
+    return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
+  }).map(apt => ({
+    id: apt.id,
+    patient: apt.patient_name || 'Unknown Patient',
+    age: 'N/A',
+    requestedDate: apt.date,
+    requestedTime: apt.time,
+    reason: apt.notes || 'No reason provided',
+    priority: 'normal',
+  }));
+  
+  // If no pending requests, create some test data
+  if (pendingRequests.length === 0) {
+    pendingRequests.push(
+      {
+        id: 'test-1',
+        patient: 'Test Patient 1',
+        age: '30',
+        requestedDate: '2026-01-10',
+        requestedTime: '10:00 AM',
+        reason: 'General consultation',
+        priority: 'normal',
+      },
+      {
+        id: 'test-2', 
+        patient: 'Test Patient 2',
+        age: '45',
+        requestedDate: '2026-01-11',
+        requestedTime: '2:00 PM',
+        reason: 'Follow-up appointment',
+        priority: 'high',
+      }
+    );
+  }
+  
+  console.log('Final pending requests:', pendingRequests);
+
+  // Move stats calculation after pendingRequests
+  const stats = {
+    totalPatients: 156,
+    consultationsThisMonth: 48,
+    pendingRequests: pendingRequests.length,
+    earnings: 12450,
+    rating: 4.9,
+  };
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
   const displayInitials = displayName
@@ -306,8 +365,9 @@ const DoctorPortal = () => {
                 <nav className="space-y-1">
                   {[
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
-                    { id: 'schedule', label: 'Today\'s Schedule', icon: Calendar },
+                    { id: 'schedule', label: 'My Appointments', icon: Calendar },
                     { id: 'requests', label: 'Requests', icon: Bell, badge: stats.pendingRequests },
+                    { id: 'declined', label: 'Declined Appointments', icon: XCircle },
                     { id: 'patients', label: 'My Patients', icon: Users },
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
@@ -467,10 +527,10 @@ const DoctorPortal = () => {
                               <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
                             </div>
                             <div className="flex gap-2">
-                              <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive">
+                              <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
                                 <XCircle className="w-4 h-4" />
                               </Button>
-                              <Button size="icon" variant="ghost" className="h-8 w-8 text-success">
+                              <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
                                 <CheckCircle className="w-4 h-4" />
                               </Button>
                             </div>
@@ -525,12 +585,12 @@ const DoctorPortal = () => {
               <TabsContent value="schedule" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Today's Appointments</CardTitle>
-                    <CardDescription>January 6, 2026</CardDescription>
+                    <CardTitle>My Appointments</CardTitle>
+                    <CardDescription>All your confirmed and completed appointments</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {todaySchedule.map((apt) => (
+                      {fetchedAppointments.filter(apt => apt.status === 'confirmed' || apt.status === 'completed').map((apt) => (
                         <div key={apt.id} className={`flex items-center justify-between p-4 rounded-xl border ${apt.status === 'in-progress'
                           ? 'border-primary bg-primary/5'
                           : apt.status === 'completed'
@@ -540,23 +600,22 @@ const DoctorPortal = () => {
                           <div className="flex items-center gap-4">
                             <div className="text-center w-20">
                               <p className="text-sm font-semibold">{apt.time}</p>
-                              <p className="text-xs text-muted-foreground">{apt.endTime}</p>
+                              <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString()}</p>
                             </div>
                             <div className="w-px h-12 bg-border" />
                             <Avatar className="w-12 h-12">
                               <AvatarFallback className="bg-primary/10 text-primary">
-                                {apt.patient.split(' ').map(n => n[0]).join('')}
+                                {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
                               </AvatarFallback>
                             </Avatar>
                             <div>
-                              <p className="font-semibold">{apt.patient}</p>
-                              <p className="text-sm text-muted-foreground">{apt.age} years old</p>
-                              <p className="text-sm text-muted-foreground">{apt.reason}</p>
+                              <p className="font-semibold">{apt.patient_name}</p>
+                              <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
                             <div className="text-right">
-                              {apt.type === 'Video Call' ? (
+                              {apt.type === 'Video' ? (
                                 <Badge variant="outline" className="gap-1 mb-2">
                                   <Video className="w-3 h-3" /> Video
                                 </Badge>
@@ -567,26 +626,15 @@ const DoctorPortal = () => {
                               )}
                               <div>{getStatusBadge(apt.status)}</div>
                             </div>
-                            {apt.status === 'upcoming' && (
+                            {apt.status === 'confirmed' && (
                               <JoinConsultationButton
-                                appointmentId={apt.id.toString()}
-                                consultationType={apt.type === 'Video Call' ? 'Video' : 'Audio'}
-                                participantName={apt.patient}
+                                appointmentId={apt.id}
+                                consultationType={apt.type}
+                                participantName={apt.patient_name || ''}
                                 status={apt.status}
                                 variant="default"
                                 size="sm"
                                 className="gradient-primary"
-                              />
-                            )}
-                            {apt.status === 'in-progress' && (
-                              <JoinConsultationButton
-                                appointmentId={apt.id.toString()}
-                                consultationType={apt.type === 'Video Call' ? 'Video' : 'Audio'}
-                                participantName={apt.patient}
-                                status={apt.status}
-                                variant="default"
-                                size="sm"
-                                className="bg-success hover:bg-success/90"
                               />
                             )}
                             {apt.status === 'completed' && (
@@ -636,10 +684,10 @@ const DoctorPortal = () => {
                               <p className="text-sm text-muted-foreground">{request.requestedTime}</p>
                             </div>
                             <div className="flex gap-2">
-                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleDeclineRequest(request.id)}>
                                 Decline
                               </Button>
-                              <Button size="sm" className="bg-success hover:bg-success/90">
+                              <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(request.id)}>
                                 Accept
                               </Button>
                             </div>
@@ -652,6 +700,38 @@ const DoctorPortal = () => {
               </TabsContent>
 
               {/* Patients Tab */}
+              <TabsContent value="declined" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Declined Appointments</CardTitle>
+                    <CardDescription>A list of all appointments you have declined.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {fetchedAppointments.filter(apt => apt.status === 'rejected').map((apt) => (
+                        <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl border border-destructive/20 bg-destructive/5">
+                          <div className="flex items-center gap-4">
+                            <Avatar className="w-12 h-12">
+                              <AvatarFallback className="bg-destructive/10 text-destructive">
+                                {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="font-semibold">{apt.patient_name}</p>
+                              <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
+                            </div>
+                          </div>
+                          <div className="text-right text-sm">
+                            <p className="font-medium text-destructive">Declined</p>
+                            <p className="text-muted-foreground">{new Date(apt.date).toLocaleDateString()}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
               <TabsContent value="patients" className="space-y-6">
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
@@ -695,213 +775,188 @@ const DoctorPortal = () => {
                 </Card>
               </TabsContent>
 
-              {/* Availability Tab */}
+
               <TabsContent value="availability" className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Weekly Availability</CardTitle>
-                    <CardDescription>Set your consultation hours</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {weeklySchedule.map((day) => (
-                        <div key={day.day} className="flex items-center justify-between p-4 rounded-xl border border-border">
+                {user && user.id ? (
+                  <ScheduleEditor doctorId={user.id} />
+                ) : (
+                  <Card>
+                    <CardContent className="pt-6">
+                      <p className="text-muted-foreground">Please sign in to manage your schedule.</p>
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+
+
+                  <TabsContent value="earnings" className="space-y-6">
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <Card>
+                        <CardContent className="pt-6">
                           <div className="flex items-center gap-4">
-                            <Switch checked={day.enabled} />
+                            <div className="w-12 h-12 rounded-xl bg-success/10 flex items-center justify-center">
+                              <Banknote className="w-6 h-6 text-success" />
+                            </div>
                             <div>
-                              <p className="font-semibold">{day.day}</p>
-                              {day.enabled && day.slots.length > 0 ? (
-                                <div className="flex gap-2 mt-1">
-                                  {day.slots.map((slot, i) => (
-                                    <Badge key={i} variant="secondary">{slot}</Badge>
+                              <p className="text-sm text-muted-foreground">This Month</p>
+                              <p className="text-2xl font-bold">₦{stats.earnings.toLocaleString()}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                              <TrendingUp className="w-6 h-6 text-primary" />
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">Growth</p>
+                              <p className="text-2xl font-bold">+12%</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-warning/10 flex items-center justify-center">
+                              <Calendar className="w-6 h-6 text-warning" />
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">Consultations</p>
+                              <p className="text-2xl font-bold">{stats.consultationsThisMonth}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Earnings History</CardTitle>
+                        <CardDescription>Your consultation earnings over time</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="h-64 flex items-center justify-center text-muted-foreground">
+                          <BarChart3 className="w-12 h-12 mr-3" />
+                          <span>Earnings chart coming soon</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+
+                  <TabsContent value="reviews" className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle>Patient Reviews</CardTitle>
+                            <CardDescription>Feedback from your consultations</CardDescription>
+                          </div>
+                          <div className="flex items-center gap-3 p-4 rounded-xl bg-muted">
+                            <div className="text-center">
+                              <div className="flex items-center gap-1">
+                                <Star className="w-6 h-6 text-warning fill-warning" />
+                                <span className="text-3xl font-bold">{doctorData.rating}</span>
+                              </div>
+                              <p className="text-sm text-muted-foreground">{doctorData.totalReviews} reviews</p>
+                            </div>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          {recentReviews.map((review) => (
+                            <div key={review.id} className="p-4 rounded-xl border border-border">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="w-8 h-8">
+                                    <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                                      {review.patient[0]}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="font-medium">{review.patient}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  {[...Array(5)].map((_, i) => (
+                                    <Star
+                                      key={i}
+                                      className={`w-4 h-4 ${i < review.rating
+                                        ? 'text-warning fill-warning'
+                                        : 'text-muted'
+                                        }`}
+                                    />
                                   ))}
                                 </div>
-                              ) : (
-                                <p className="text-sm text-muted-foreground">Not available</p>
-                              )}
+                              </div>
+                              <p className="text-sm mb-2">{review.comment}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+
+                  <TabsContent value="settings" className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Profile Settings</CardTitle>
+                        <CardDescription>Manage your doctor profile</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-6">
+                          <div className="flex items-center gap-4">
+                            <Avatar className="w-20 h-20">
+                              <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
+                              <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{displayInitials}</AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                              <p className="text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
+                              <Button size="sm" variant="outline" className="mt-2">
+                                Change Photo
+                              </Button>
                             </div>
                           </div>
-                          {day.enabled && (
-                            <Button size="sm" variant="outline">
-                              Edit Slots
-                            </Button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
 
-              {/* Earnings Tab */}
-              <TabsContent value="earnings" className="space-y-6">
-                <div className="grid md:grid-cols-3 gap-4">
-                  <Card>
-                    <CardContent className="pt-6">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-success/10 flex items-center justify-center">
-                          <Banknote className="w-6 h-6 text-success" />
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">This Month</p>
-                          <p className="text-2xl font-bold">₦{stats.earnings.toLocaleString()}</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="pt-6">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                          <TrendingUp className="w-6 h-6 text-primary" />
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">Growth</p>
-                          <p className="text-2xl font-bold">+12%</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="pt-6">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-warning/10 flex items-center justify-center">
-                          <Calendar className="w-6 h-6 text-warning" />
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">Consultations</p>
-                          <p className="text-2xl font-bold">{stats.consultationsThisMonth}</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Earnings History</CardTitle>
-                    <CardDescription>Your consultation earnings over time</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="h-64 flex items-center justify-center text-muted-foreground">
-                      <BarChart3 className="w-12 h-12 mr-3" />
-                      <span>Earnings chart coming soon</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* Reviews Tab */}
-              <TabsContent value="reviews" className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <CardTitle>Patient Reviews</CardTitle>
-                        <CardDescription>Feedback from your consultations</CardDescription>
-                      </div>
-                      <div className="flex items-center gap-3 p-4 rounded-xl bg-muted">
-                        <div className="text-center">
-                          <div className="flex items-center gap-1">
-                            <Star className="w-6 h-6 text-warning fill-warning" />
-                            <span className="text-3xl font-bold">{doctorData.rating}</span>
-                          </div>
-                          <p className="text-sm text-muted-foreground">{doctorData.totalReviews} reviews</p>
-                        </div>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {recentReviews.map((review) => (
-                        <div key={review.id} className="p-4 rounded-xl border border-border">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-8 h-8">
-                                <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                                  {review.patient[0]}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="font-medium">{review.patient}</span>
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-sm font-medium">Full Name</label>
+                              <Input defaultValue={user?.user_metadata?.full_name ?? doctorData.name} className="mt-1" />
                             </div>
-                            <div className="flex items-center gap-1">
-                              {[...Array(5)].map((_, i) => (
-                                <Star
-                                  key={i}
-                                  className={`w-4 h-4 ${i < review.rating
-                                    ? 'text-warning fill-warning'
-                                    : 'text-muted'
-                                    }`}
-                                />
-                              ))}
+                            <div>
+                              <label className="text-sm font-medium">Email</label>
+                              <Input defaultValue={user?.email ?? doctorData.email} className="mt-1" />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Phone</label>
+                              <Input defaultValue={user?.user_metadata?.phone ?? doctorData.phone} className="mt-1" />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Specialty</label>
+                              <Input defaultValue={user?.user_metadata?.specialty ?? doctorData.specialty} className="mt-1" />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Experience</label>
+                              <Input defaultValue={user?.user_metadata?.experience ?? doctorData.experience} className="mt-1" />
                             </div>
                           </div>
-                          <p className="text-sm mb-2">{review.comment}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
 
-              {/* Settings Tab */}
-              <TabsContent value="settings" className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Profile Settings</CardTitle>
-                    <CardDescription>Manage your doctor profile</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-6">
-                      <div className="flex items-center gap-4">
-                        <Avatar className="w-20 h-20">
-                          <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
-                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{displayInitials}</AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                          <p className="text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
-                          <Button size="sm" variant="outline" className="mt-2">
-                            Change Photo
-                          </Button>
+                          <Button>Save Changes</Button>
                         </div>
-                      </div>
-
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-sm font-medium">Full Name</label>
-                          <Input defaultValue={user?.user_metadata?.full_name ?? doctorData.name} className="mt-1" />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium">Email</label>
-                          <Input defaultValue={user?.email ?? doctorData.email} className="mt-1" />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium">Phone</label>
-                          <Input defaultValue={user?.user_metadata?.phone ?? doctorData.phone} className="mt-1" />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium">Specialty</label>
-                          <Input defaultValue={user?.user_metadata?.specialty ?? doctorData.specialty} className="mt-1" />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium">Experience</label>
-                          <Input defaultValue={user?.user_metadata?.experience ?? doctorData.experience} className="mt-1" />
-                        </div>
-                      </div>
-
-                      <Button>Save Changes</Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
-          </main>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+                </Tabs>
+              </main>
+            </div>
         </div>
-      </div>
     </div>
   );
 };
