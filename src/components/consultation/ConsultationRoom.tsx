@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage as ConsultationMessageType } from '@/services/consultationService';
 import { supabase } from '@/integrations/supabase/client';
+import { WebRTCService } from '@/services/webrtcService';
 
 interface Message {
   id: string;
@@ -55,6 +56,7 @@ export function ConsultationRoom({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
+  const [webrtcService, setWebrtcService] = useState<WebRTCService | null>(null);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -157,10 +159,10 @@ export function ConsultationRoom({
     };
   }, [user, appointmentId, participantRole, consultationType]);
 
-  // Initialize local media
+  // Initialize local media and WebRTC
   useEffect(() => {
     const initializeMedia = async () => {
-      if (consultationType === 'chat') {
+      if (consultationType === 'chat' || !sessionId || !user) {
         return;
       }
 
@@ -176,6 +178,30 @@ export function ConsultationRoom({
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
+
+        // Initialize WebRTC service
+        const isInitiator = participantRole === 'doctor';
+        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+        
+        webrtc.onStream((remoteStream) => {
+          setHasRemoteStream(true);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remoteStream;
+          }
+        });
+
+        webrtc.onError((error) => {
+          console.error('WebRTC error:', error);
+          toast({
+            title: 'Connection Error',
+            description: 'Failed to establish video connection',
+            variant: 'destructive'
+          });
+        });
+
+        await webrtc.initializePeer(stream);
+        setWebrtcService(webrtc);
+
       } catch (error) {
         console.error('Failed to get media devices:', error);
         setError('Unable to access camera/microphone');
@@ -193,8 +219,11 @@ export function ConsultationRoom({
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
       }
+      if (webrtcService) {
+        webrtcService.destroy();
+      }
     };
-  }, [consultationType]);
+  }, [consultationType, sessionId, user, participantRole]);
 
   // Call duration timer
   useEffect(() => {
@@ -207,51 +236,7 @@ export function ConsultationRoom({
     return () => clearInterval(timer);
   }, [connectionStatus]);
 
-  // Simulate remote stream connection after a delay
-  useEffect(() => {
-    if (connectionStatus === 'connected') {
-      const timer = setTimeout(() => {
-        setHasRemoteStream(true);
-        // Create a canvas-based simulation for remote video
-        if (remoteVideoRef.current && consultationType === 'video') {
-          const canvas = document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 480;
-          const ctx = canvas.getContext('2d');
-          
-          // Create animated gradient background
-          let frame = 0;
-          const animate = () => {
-            if (ctx) {
-              const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-              gradient.addColorStop(0, `hsl(${(frame * 2) % 360}, 50%, 60%)`);
-              gradient.addColorStop(1, `hsl(${(frame * 2 + 180) % 360}, 50%, 40%)`);
-              
-              ctx.fillStyle = gradient;
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-              
-              // Add participant name overlay
-              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-              ctx.font = 'bold 24px Arial';
-              ctx.textAlign = 'center';
-              ctx.fillText(participantName, canvas.width / 2, canvas.height / 2 - 20);
-              
-              ctx.font = '16px Arial';
-              ctx.fillText('(Simulated Video)', canvas.width / 2, canvas.height / 2 + 20);
-              
-              frame++;
-            }
-            requestAnimationFrame(animate);
-          };
-          
-          animate();
-          const stream = canvas.captureStream(30);
-          remoteVideoRef.current.srcObject = stream;
-        }
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [connectionStatus, participantName, consultationType]);
+
 
   // Auto scroll chat
   useEffect(() => {
@@ -342,9 +327,13 @@ export function ConsultationRoom({
       localStreamRef.current.getTracks().forEach(track => track.stop());
     }
     
-    // Clean up subscriptions
+    // Clean up subscriptions and WebRTC
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
+    }
+    
+    if (webrtcService) {
+      webrtcService.destroy();
     }
     
     onEndCall();
