@@ -25,7 +25,7 @@ export function JoinConsultationButton({
   const navigate = useNavigate();
 
   const normalizedType = consultationType.toLowerCase() as 'video' | 'audio' | 'chat';
-  const isJoinable = !status || status === 'confirmed' || status === 'in-progress' || status === 'upcoming';
+  const isJoinable = !status || status === 'confirmed' || status === 'pending' || status === 'in-progress' || status === 'upcoming';
 
   const handleJoin = () => {
     if (!isJoinable) {
