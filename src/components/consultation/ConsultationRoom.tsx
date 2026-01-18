@@ -176,6 +176,12 @@ export function ConsultationRoom({
         return;
       }
 
+      // Prevent duplicate initialization
+      if (webrtcService) {
+        console.log('WebRTC already initialized, skipping');
+        return;
+      }
+
       try {
         const constraints: MediaStreamConstraints = {
           video: consultationType === 'video',
@@ -195,6 +201,7 @@ export function ConsultationRoom({
           const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
           
           webrtc.onStream((remoteStream) => {
+            console.log('Setting remote stream');
             setHasRemoteStream(true);
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
@@ -241,6 +248,7 @@ export function ConsultationRoom({
       }
       if (webrtcService) {
         webrtcService.destroy();
+        setWebrtcService(null);
       }
     };
   }, [consultationType, sessionId, user, participantRole, connectionStatus]);
