@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface Doctor {
@@ -26,19 +27,44 @@ export interface AvailableSlot {
 }
 
 /**
- * Fetch all doctors
+ * Fetch all active doctors
  */
 export const useDoctors = () => {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    // Subscribe to doctors table changes
+    const subscription = supabase
+      .channel('doctors-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'doctors' },
+        () => {
+          // Invalidate doctors cache when any doctor changes
+          queryClient.invalidateQueries({ queryKey: ['doctors'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [queryClient]);
+
   return useQuery({
     queryKey: ['doctors'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctors')
-        .select('*')
+        .select('id, name, specialty, email, phone, bio, avatar_url')
+        .eq('is_active', true)
         .order('name');
       
-      if (error) throw error;
-      return data as Doctor[];
+      if (error) {
+        console.error('Error fetching doctors:', error);
+        throw error;
+      }
+      return (data || []) as Doctor[];
     },
   });
 };
@@ -46,8 +72,37 @@ export const useDoctors = () => {
 /**
  * Fetch available slots for a given date range or doctor
  * If no doctorId is provided, returns slots for all doctors
+ * Automatically syncs with real-time changes to schedules
  */
 export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
+  const queryClient = useQueryClient();
+
+  // Subscribe to real-time changes to doctor_schedules
+  useEffect(() => {
+    const subscription = supabase
+      .channel(`schedules-${doctorId || 'all'}`)
+      .on(
+        'postgres_changes',
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'doctor_schedules'
+        },
+        (payload) => {
+          // Invalidate the available-slots cache when schedules change
+          queryClient.invalidateQueries({ 
+            queryKey: ['available-slots', doctorId, daysAhead] 
+          });
+          console.log('Schedule changed, invalidating cache:', payload);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [queryClient, doctorId, daysAhead]);
+
   return useQuery({
     queryKey: ['available-slots', doctorId, daysAhead],
     queryFn: async () => {
@@ -59,11 +114,16 @@ export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
       
       const { data, error } = await query;
       
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching available slots:', error);
+        throw error;
+      }
       
       // Filter to only show slots for dates within daysAhead
       const today = new Date();
       const slots: AvailableSlot[] = data || [];
+      
+      console.log(`Fetched ${slots.length} available slots for doctor ${doctorId || 'all'}`);
       
       return slots.filter(slot => {
         // Generate dates for the day_of_week
@@ -75,6 +135,8 @@ export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
         nextOccurrence: getNextDateForDayOfWeek(slot.day_of_week),
       }));
     },
+    refetchInterval: 30000, // Refetch every 30 seconds to catch schedule changes
+    refetchOnWindowFocus: true, // Refetch when window regains focus
   });
 };
 
@@ -85,12 +147,14 @@ export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
 export function generateDatesForDayOfWeek(dayOfWeek: number, daysAhead: number): Date[] {
   const dates: Date[] = [];
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Use UTC to avoid timezone-related day shifts
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   
   for (let i = 0; i < daysAhead; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + i);
-    if (date.getDay() === dayOfWeek) {
+    const date = new Date(todayUTC);
+    date.setUTCDate(date.getUTCDate() + i);
+    // getUTCDay() returns 0-6 where 0=Sunday, 6=Saturday (same as stored day_of_week)
+    if (date.getUTCDay() === dayOfWeek) {
       dates.push(date);
     }
   }
@@ -99,14 +163,24 @@ export function generateDatesForDayOfWeek(dayOfWeek: number, daysAhead: number):
 }
 
 /**
- * Get the next date that falls on a specific day of week
+ * Get the next date that falls on a specific day of week (UTC-safe)
  */
 export function getNextDateForDayOfWeek(dayOfWeek: number): Date {
   const today = new Date();
-  const daysUntilTarget = (dayOfWeek - today.getDay() + 7) % 7;
-  const nextDate = new Date(today);
-  nextDate.setDate(nextDate.getDate() + (daysUntilTarget === 0 ? 7 : daysUntilTarget));
-  nextDate.setHours(0, 0, 0, 0);
+  // Use UTC to avoid timezone-related day shifts
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  
+  const currentDay = todayUTC.getUTCDay();
+  let daysUntilTarget = (dayOfWeek - currentDay + 7) % 7;
+  
+  // If it's today, return today; otherwise get the next occurrence
+  if (daysUntilTarget === 0) {
+    daysUntilTarget = 0; // Today is the target day
+  }
+  
+  const nextDate = new Date(todayUTC);
+  nextDate.setUTCDate(nextDate.getUTCDate() + daysUntilTarget);
+  
   return nextDate;
 }
 
@@ -118,17 +192,23 @@ export const checkSlotAvailability = async (
   date: string, // YYYY-MM-DD format
   time: string  // HH:MM format
 ): Promise<boolean> => {
-  // Query for existing appointments at this time
-  const { data, error } = await supabase
-    .from('appointments')
-    .select('id')
-    .eq('doctor_id', doctorId)
-    .eq('date', date)
-    .eq('time', time)
-    .neq('status', 'cancelled');
-  
-  if (error) throw error;
-  return (data?.length ?? 0) === 0; // Available if no conflicts
+  try {
+    // Query for existing appointments at this time
+    const { data, error } = await supabase
+      .from('appointments')
+      .select('id')
+      .eq('doctor_id', doctorId)
+      .eq('date', date)
+      .eq('time', time)
+      .not('status', 'in', '(cancelled)');
+    
+    if (error) throw error;
+    return (data?.length ?? 0) === 0; // Available if no conflicts
+  } catch (error) {
+    console.error('Error checking slot availability:', error);
+    // If there's an error, assume available to allow booking
+    return true;
+  }
 };
 
 /**
