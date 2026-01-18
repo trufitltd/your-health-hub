@@ -166,6 +166,16 @@ export function ConsultationRoom({
         return;
       }
 
+      // Check for WebRTC support
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        toast({
+          title: 'Browser Not Supported',
+          description: 'Your browser does not support video calls',
+          variant: 'destructive'
+        });
+        return;
+      }
+
       try {
         const constraints: MediaStreamConstraints = {
           video: consultationType === 'video',
@@ -179,34 +189,43 @@ export function ConsultationRoom({
           localVideoRef.current.srcObject = stream;
         }
 
-        // Initialize WebRTC service
-        const isInitiator = participantRole === 'doctor';
-        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
-        
-        webrtc.onStream((remoteStream) => {
-          setHasRemoteStream(true);
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-          }
-        });
+        // Initialize WebRTC service only after media is ready
+        try {
+          const isInitiator = participantRole === 'doctor';
+          const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+          
+          webrtc.onStream((remoteStream) => {
+            setHasRemoteStream(true);
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = remoteStream;
+            }
+          });
 
-        webrtc.onError((error) => {
-          console.error('WebRTC error:', error);
+          webrtc.onError((error) => {
+            console.error('WebRTC error:', error);
+            toast({
+              title: 'Connection Error',
+              description: 'Failed to establish video connection',
+              variant: 'destructive'
+            });
+          });
+
+          await webrtc.initializePeer(stream);
+          setWebrtcService(webrtc);
+        } catch (webrtcError) {
+          console.error('WebRTC initialization error:', webrtcError);
           toast({
-            title: 'Connection Error',
-            description: 'Failed to establish video connection',
+            title: 'WebRTC Error',
+            description: 'Failed to initialize video connection',
             variant: 'destructive'
           });
-        });
-
-        await webrtc.initializePeer(stream);
-        setWebrtcService(webrtc);
+        }
 
       } catch (error) {
         console.error('Failed to get media devices:', error);
         toast({
           title: 'Media Access Error',
-          description: error instanceof Error ? error.message : 'Unable to access camera or microphone',
+          description: 'Please allow camera and microphone access',
           variant: 'destructive'
         });
       }
