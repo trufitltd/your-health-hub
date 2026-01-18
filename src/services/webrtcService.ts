@@ -1,4 +1,3 @@
-import Peer from 'simple-peer';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface WebRTCSignal {
@@ -10,7 +9,7 @@ export interface WebRTCSignal {
 }
 
 export class WebRTCService {
-  private peer: Peer.Instance | null = null;
+  private peerConnection: RTCPeerConnection | null = null;
   private sessionId: string;
   private userId: string;
   private isInitiator: boolean;
@@ -25,31 +24,43 @@ export class WebRTCService {
   }
 
   async initializePeer(localStream: MediaStream) {
-    this.peer = new Peer({
-      initiator: this.isInitiator,
-      trickle: false,
-      stream: localStream
+    this.peerConnection = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
 
-    this.peer.on('signal', async (data) => {
-      await this.sendSignal(data);
+    // Add local stream
+    localStream.getTracks().forEach(track => {
+      this.peerConnection?.addTrack(track, localStream);
     });
 
-    this.peer.on('stream', (stream) => {
-      if (this.onStreamCallback) {
-        this.onStreamCallback(stream);
+    // Handle remote stream
+    this.peerConnection.ontrack = (event) => {
+      if (this.onStreamCallback && event.streams[0]) {
+        this.onStreamCallback(event.streams[0]);
       }
-    });
+    };
 
-    this.peer.on('error', (err) => {
-      console.error('WebRTC error:', err);
+    // Handle ICE candidates
+    this.peerConnection.onicecandidate = async (event) => {
+      if (event.candidate) {
+        await this.sendSignal({ type: 'ice-candidate', candidate: event.candidate });
+      }
+    };
+
+    this.peerConnection.onerror = (event) => {
       if (this.onErrorCallback) {
-        this.onErrorCallback(err);
+        this.onErrorCallback(new Error('WebRTC connection error'));
       }
-    });
+    };
 
-    // Listen for incoming signals
+    // Start signaling
     this.unsubscribe = this.subscribeToSignals();
+
+    if (this.isInitiator) {
+      const offer = await this.peerConnection.createOffer();
+      await this.peerConnection.setLocalDescription(offer);
+      await this.sendSignal({ type: 'offer', offer });
+    }
   }
 
   private async sendSignal(signalData: any) {
@@ -74,10 +85,10 @@ export class WebRTCService {
       schema: 'public',
       table: 'webrtc_signals',
       filter: `session_id=eq.${this.sessionId}`
-    }, (payload) => {
+    }, async (payload) => {
       const signal = payload.new as WebRTCSignal;
-      if (signal.sender_id !== this.userId && this.peer) {
-        this.peer.signal(signal.signal_data);
+      if (signal.sender_id !== this.userId && this.peerConnection) {
+        await this.handleSignal(signal.signal_data);
       }
     });
     
@@ -86,6 +97,28 @@ export class WebRTCService {
     return () => {
       channel.unsubscribe();
     };
+  }
+
+  private async handleSignal(signalData: any) {
+    if (!this.peerConnection) return;
+
+    try {
+      if (signalData.type === 'offer') {
+        await this.peerConnection.setRemoteDescription(signalData.offer);
+        const answer = await this.peerConnection.createAnswer();
+        await this.peerConnection.setLocalDescription(answer);
+        await this.sendSignal({ type: 'answer', answer });
+      } else if (signalData.type === 'answer') {
+        await this.peerConnection.setRemoteDescription(signalData.answer);
+      } else if (signalData.type === 'ice-candidate') {
+        await this.peerConnection.addIceCandidate(signalData.candidate);
+      }
+    } catch (error) {
+      console.error('Error handling signal:', error);
+      if (this.onErrorCallback) {
+        this.onErrorCallback(error as Error);
+      }
+    }
   }
 
   onStream(callback: (stream: MediaStream) => void) {
@@ -100,9 +133,9 @@ export class WebRTCService {
     if (this.unsubscribe) {
       this.unsubscribe();
     }
-    if (this.peer) {
-      this.peer.destroy();
-      this.peer = null;
+    if (this.peerConnection) {
+      this.peerConnection.close();
+      this.peerConnection = null;
     }
   }
 }
