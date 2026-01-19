@@ -191,17 +191,25 @@ export class WebRTCService {
     console.log('Handling signal:', signalData.type, 'Connection state:', this.peerConnection.signalingState);
 
     try {
-      if (signalData.type === 'offer' && this.peerConnection.signalingState === 'stable') {
+      if (signalData.type === 'offer' && (this.peerConnection.signalingState === 'stable' || this.peerConnection.signalingState === 'have-remote-offer')) {
         console.log('Received offer, creating answer');
-        await this.peerConnection.setRemoteDescription(signalData.offer);
-        await this.flushCandidateQueue(); // Flush any queued candidates
-        const answer = await this.peerConnection.createAnswer();
-        await this.peerConnection.setLocalDescription(answer);
-        await this.sendSignal({ type: 'answer', answer });
-      } else if (signalData.type === 'answer' && this.peerConnection.signalingState === 'have-local-offer') {
+        if (this.peerConnection.signalingState === 'stable') {
+          await this.peerConnection.setRemoteDescription(signalData.offer);
+          await this.flushCandidateQueue(); // Flush any queued candidates
+          const answer = await this.peerConnection.createAnswer();
+          await this.peerConnection.setLocalDescription(answer);
+          await this.sendSignal({ type: 'answer', answer });
+        } else {
+          console.log('Offer received but already have remote offer, skipping');
+        }
+      } else if (signalData.type === 'answer' && (this.peerConnection.signalingState === 'have-local-offer' || this.peerConnection.signalingState === 'stable')) {
         console.log('Received answer');
-        await this.peerConnection.setRemoteDescription(signalData.answer);
-        await this.flushCandidateQueue(); // Flush any queued candidates
+        if (this.peerConnection.signalingState === 'have-local-offer') {
+          await this.peerConnection.setRemoteDescription(signalData.answer);
+          await this.flushCandidateQueue(); // Flush any queued candidates
+        } else {
+          console.log('Answer received but already in stable state, skipping setRemoteDescription');
+        }
       } else if (signalData.type === 'ice-candidate') {
         console.log('Received ICE candidate');
         if (this.peerConnection.remoteDescription) {
