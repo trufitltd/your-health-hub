@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS public.consultation_sessions (
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at TIMESTAMPTZ,
   duration_seconds INT DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended', 'paused')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended', 'paused', 'waiting')),
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   FOREIGN KEY (appointment_id) REFERENCES public.appointments(id) ON DELETE CASCADE

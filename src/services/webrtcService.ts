@@ -15,6 +15,7 @@ export class WebRTCService {
   private isInitiator: boolean;
   private onStreamCallback?: (stream: MediaStream) => void;
   private onErrorCallback?: (error: Error) => void;
+  private onConnectedCallback?: () => void;
   private unsubscribe?: () => void;
   private processedSignals = new Set<string>();
   private candidateQueue: RTCIceCandidate[] = [];
@@ -62,6 +63,12 @@ export class WebRTCService {
     // Handle connection state changes
     this.peerConnection.onconnectionstatechange = () => {
       console.log('Connection state:', this.peerConnection?.connectionState);
+      if (this.peerConnection?.connectionState === 'connected') {
+        console.log('WebRTC connection established!');
+        if (this.onConnectedCallback) {
+          this.onConnectedCallback();
+        }
+      }
     };
 
     // Start signaling
@@ -259,6 +266,10 @@ export class WebRTCService {
 
   onError(callback: (error: Error) => void) {
     this.onErrorCallback = callback;
+  }
+
+  onConnected(callback: () => void) {
+    this.onConnectedCallback = callback;
   }
 
   destroy() {

@@ -4,8 +4,10 @@ import { ConsultationRoom } from '@/components/consultation/ConsultationRoom';
 import { PreConsultationCheck } from '@/components/consultation/PreConsultationCheck';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
+import { Button } from '@/components/ui/button';
+import { supabase } from '@/integrations/supabase/client';
 
-type ConsultationPhase = 'loading' | 'pre-check' | 'in-call' | 'ended';
+type ConsultationPhase = 'loading' | 'pre-check' | 'waiting' | 'in-call' | 'ended';
 
 const Consultation = () => {
   const { appointmentId } = useParams();
@@ -14,6 +16,8 @@ const Consultation = () => {
   const { user, role } = useAuth();
 
   const [phase, setPhase] = useState<ConsultationPhase>('loading');
+  const [isAdmitted, setIsAdmitted] = useState(false);
+  const [patientWaiting, setPatientWaiting] = useState(false);
 
   // Get consultation type from URL params or default to video
   const consultationType = (searchParams.get('type') as 'video' | 'audio' | 'chat') || 'video';
@@ -40,15 +44,78 @@ const Consultation = () => {
     }
 
     loadAppointment();
-  }, [appointmentId, navigate]);
+    
+    // Subscribe to consultation session changes
+    console.log('Setting up real-time subscription for appointment:', appointmentId, 'role:', role);
+    const channel = supabase
+      .channel(`consultation_${appointmentId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'consultation_sessions',
+        filter: `appointment_id=eq.${appointmentId}`
+      }, (payload) => {
+        console.log('Consultation session updated:', payload);
+        const newStatus = (payload.new as any)?.status;
+        console.log('New status:', newStatus, 'Current role:', role);
+        
+        if (role === 'patient' && newStatus === 'active') {
+          console.log('Patient being admitted to consultation');
+          setPhase('in-call');
+          setIsAdmitted(true);
+          toast({
+            title: 'Admitted',
+            description: 'The doctor has admitted you to the consultation.'
+          });
+        } else if (role === 'doctor' && newStatus === 'waiting') {
+          console.log('Doctor notified that patient is waiting');
+          setPatientWaiting(true);
+          toast({
+            title: 'Patient Waiting',
+            description: `${participantName} is waiting to join the consultation.`
+          });
+        }
+      })
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
+      
+    return () => {
+      console.log('Unsubscribing from consultation updates');
+      channel.unsubscribe();
+    };
+  }, [appointmentId, navigate, role]);
 
   const handlePreCheckComplete = () => {
-    setPhase('in-call');
-    toast({
-      title: 'Connected',
-      description: `You are now in a ${consultationType} consultation with ${participantName}.`
-    });
+    if (role === 'doctor') {
+      setPhase('in-call');
+      toast({
+        title: 'Ready',
+        description: 'You can now admit the patient when they join.'
+      });
+    } else {
+      setPhase('waiting');
+      // Notify doctor that patient is waiting
+      console.log('Patient entering waiting room, updating database...');
+      supabase
+        .from('consultation_sessions')
+        .update({ status: 'waiting' })
+        .eq('appointment_id', appointmentId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('Error updating consultation status:', error);
+          } else {
+            console.log('Successfully updated consultation status to waiting');
+          }
+          toast({
+            title: 'Waiting',
+            description: 'Please wait for the doctor to admit you to the consultation.'
+          });
+        });
+    }
   };
+
+  // handleAdmitPatient moved to ConsultationRoom component for cleaner separation of concerns
 
   const handlePreCheckCancel = () => {
     navigate(-1);
@@ -92,6 +159,12 @@ const Consultation = () => {
     );
   }
 
+  if (phase === 'waiting') {
+    // Waiting phase is now handled inside ConsultationRoom component
+    setPhase('in-call');
+    return null;
+  }
+
   if (phase === 'ended') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-muted/30">
@@ -108,6 +181,7 @@ const Consultation = () => {
     );
   }
 
+  // All consultation phases (waiting, in-call) are now handled inside ConsultationRoom
   return (
     <ConsultationRoom
       appointmentId={appointmentId!}

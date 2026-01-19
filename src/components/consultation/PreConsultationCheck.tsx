@@ -61,39 +61,93 @@ export function PreConsultationCheck({
       return;
     }
 
-    // Check microphone
-    setChecks(prev => ({ ...prev, microphone: 'checking' }));
-    try {
-      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioStream.getTracks().forEach(track => track.stop());
-      setChecks(prev => ({ ...prev, microphone: 'success' }));
-    } catch (error) {
-      console.error('Microphone check failed:', error);
-      setChecks(prev => ({ ...prev, microphone: 'error' }));
-      setPermissionError('Microphone access denied. Please allow microphone access in your browser settings.');
-    }
-
-    // Check camera (if video consultation)
+    // Check camera and microphone together
     if (consultationType === 'video') {
-      setChecks(prev => ({ ...prev, camera: 'checking' }));
+      setChecks(prev => ({ ...prev, camera: 'checking', microphone: 'checking' }));
+      
+      // Check if we're on HTTPS or localhost
+      const isSecureContext = window.isSecureContext || location.protocol === 'https:' || location.hostname === 'localhost';
+      if (!isSecureContext) {
+        setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
+        setPermissionError('Camera and microphone require HTTPS. Please use HTTPS or localhost.');
+        return;
+      }
+      
+      // Check what devices are available
       try {
-        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = videoStream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = videoStream;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        console.log('All devices found:', devices);
+        
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        const audioDevices = devices.filter(device => device.kind === 'audioinput');
+        
+        console.log('Video devices:', videoDevices);
+        console.log('Audio devices:', audioDevices);
+        console.log('Available video devices:', videoDevices.length);
+        console.log('Available audio devices:', audioDevices.length);
+        
+        if (videoDevices.length === 0) {
+          setChecks(prev => ({ ...prev, camera: 'error' }));
+          setPermissionError('No camera found. Please connect a camera and refresh the page.');
+          return;
         }
-        setChecks(prev => ({ ...prev, camera: 'success' }));
+        
+        if (audioDevices.length === 0) {
+          setChecks(prev => ({ ...prev, microphone: 'error' }));
+          setPermissionError('No microphone found. Please connect a microphone and refresh the page.');
+          return;
+        }
+      } catch (enumError) {
+        console.error('Device enumeration failed:', enumError);
+        setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
+        setPermissionError('Unable to detect devices. Please check your browser permissions.');
+        return;
+      }
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: true 
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setChecks(prev => ({ ...prev, camera: 'success', microphone: 'success' }));
+      } catch (error: any) {
+        console.error('Media access failed:', error);
+        setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
+        
+        if (error.name === 'NotAllowedError') {
+          setPermissionError('Camera and microphone access denied. Please allow access in your browser settings.');
+        } else if (error.name === 'NotFoundError') {
+          setPermissionError('Camera or microphone not found. Please connect your devices and refresh.');
+        } else if (error.name === 'NotReadableError') {
+          setPermissionError('Camera or microphone is being used by another application.');
+        } else {
+          setPermissionError(`Media access failed: ${error.message}`);
+        }
+      }
+    } else if (consultationType === 'audio') {
+      // Audio only consultation
+      setChecks(prev => ({ ...prev, microphone: 'checking' }));
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStream.getTracks().forEach(track => track.stop());
+        setChecks(prev => ({ ...prev, microphone: 'success' }));
       } catch (error) {
-        console.error('Camera check failed:', error);
-        setChecks(prev => ({ ...prev, camera: 'error' }));
-        setPermissionError('Camera access denied. Please allow camera access in your browser settings.');
+        console.error('Microphone check failed:', error);
+        setChecks(prev => ({ ...prev, microphone: 'error' }));
+        setPermissionError('Microphone access denied. Please allow microphone access in your browser settings.');
       }
     }
 
     // Check speaker (simulated)
-    setChecks(prev => ({ ...prev, speaker: 'checking' }));
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setChecks(prev => ({ ...prev, speaker: 'success' }));
+    if (consultationType !== 'chat') {
+      setChecks(prev => ({ ...prev, speaker: 'checking' }));
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setChecks(prev => ({ ...prev, speaker: 'success' }));
+    }
   };
 
   const testSpeaker = () => {

@@ -186,7 +186,10 @@ export function ConsultationRoom({
         );
 
         unsubscribeRef.current = unsubscribe;
-        setConnectionStatus('connected');
+        
+        // Don't mark as connected yet - wait for media/WebRTC to be ready
+        // This will be updated when isAdmitted changes and media is initialized
+        setConnectionStatus('connecting');
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to initialize session';
         setError(errorMsg);
@@ -207,14 +210,17 @@ export function ConsultationRoom({
         unsubscribeRef.current();
       }
     };
-  }, [user, appointmentId, participantRole, consultationType]);
+  }, [user, appointmentId, participantRole, consultationType, participantName]);
 
   // Initialize local media and WebRTC
   useEffect(() => {
     const initializeMedia = async () => {
       if (consultationType === 'chat' || !sessionId || !user || !isAdmitted) {
+        console.log('[Media Init] Skipping - chat:', consultationType === 'chat', 'sessionId:', !!sessionId, 'user:', !!user, 'admitted:', isAdmitted);
         return;
       }
+
+      console.log('[Media Init] Starting media initialization...');
 
       // Check for WebRTC support
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -228,7 +234,7 @@ export function ConsultationRoom({
 
       // Prevent duplicate initialization
       if (webrtcService) {
-        console.log('WebRTC already initialized, skipping');
+        console.log('[Media Init] WebRTC already initialized, skipping');
         return;
       }
 
@@ -238,29 +244,39 @@ export function ConsultationRoom({
           audio: true
         };
 
+        console.log('[Media Init] Requesting user media with constraints:', constraints);
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
+        console.log('[Media Init] Got local stream with', stream.getTracks().length, 'tracks');
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
+          console.log('[Media Init] Set local video element srcObject');
         }
 
         // Initialize WebRTC service only after media is ready
         try {
           const isInitiator = participantRole === 'doctor';
+          console.log('[Media Init] Initializing WebRTC with isInitiator:', isInitiator);
           const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
           webrtc.onStream((remoteStream) => {
-            console.log('Setting remote stream, tracks:', remoteStream.getTracks().length);
+            console.log('[WebRTC] Remote stream received with', remoteStream.getTracks().length, 'tracks');
             setHasRemoteStream(true);
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
-              console.log('Remote video element srcObject set');
+              console.log('[WebRTC] Remote video element srcObject set');
             }
           });
 
+          webrtc.onConnected(() => {
+            console.log('[WebRTC] Peer connection established! Setting connectionStatus to connected');
+            setConnectionStatus('connected');
+            console.log('[WebRTC] connectionStatus state updated');
+          });
+
           webrtc.onError((error) => {
-            console.error('WebRTC error:', error);
+            console.error('[WebRTC] Error:', error);
             toast({
               title: 'Connection Error',
               description: 'Failed to establish video connection',
@@ -268,10 +284,12 @@ export function ConsultationRoom({
             });
           });
 
+          console.log('[Media Init] Calling initializePeer...');
           await webrtc.initializePeer(stream);
           setWebrtcService(webrtc);
+          console.log('[Media Init] WebRTC service initialized successfully');
         } catch (webrtcError) {
-          console.error('WebRTC initialization error:', webrtcError);
+          console.error('[Media Init] WebRTC initialization error:', webrtcError);
           toast({
             title: 'WebRTC Error',
             description: 'Failed to initialize video connection',
@@ -280,7 +298,7 @@ export function ConsultationRoom({
         }
 
       } catch (error) {
-        console.error('Failed to get media devices:', error);
+        console.error('[Media Init] Failed to get media devices:', error);
         toast({
           title: 'Media Access Error',
           description: 'Please allow camera and microphone access',
@@ -289,9 +307,8 @@ export function ConsultationRoom({
       }
     };
 
-    if (sessionId && connectionStatus === 'connected') {
-      initializeMedia();
-    }
+    // Trigger initialization immediately when admitted and sessionId is ready
+    initializeMedia();
 
     return () => {
       if (localStreamRef.current) {
@@ -302,7 +319,7 @@ export function ConsultationRoom({
         setWebrtcService(null);
       }
     };
-  }, [consultationType, sessionId, user, participantRole, connectionStatus]);
+  }, [consultationType, sessionId, user, participantRole]);
 
   // Call duration timer
   useEffect(() => {
@@ -497,23 +514,38 @@ export function ConsultationRoom({
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden relative">
 
-        {/* Doctor Admit Button Overlay */}
-        {participantRole === 'doctor' && isPatientWaiting && !hasRemoteStream && (
+        {/* Doctor Admit Button Overlay - Single consolidated button */}
+        {participantRole === 'doctor' && isPatientWaiting && (
           <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50">
             <Button
               onClick={async () => {
                 if (!sessionId || !user) return;
-                await supabase.from('webrtc_signals').insert({
-                  session_id: sessionId,
-                  sender_id: user.id,
-                  signal_data: { type: 'admit' }
-                });
-                setIsPatientWaiting(false);
-                toast({ title: "Patient Admitted", description: "Connecting..." });
+                try {
+                  // Update consultation session to active
+                  const { error } = await supabase
+                    .from('consultation_sessions')
+                    .update({ status: 'active' })
+                    .eq('id', sessionId);
+                  
+                  if (error) throw error;
+                  
+                  // Send admit signal
+                  await supabase.from('webrtc_signals').insert({
+                    session_id: sessionId,
+                    sender_id: user.id,
+                    signal_data: { type: 'admit' }
+                  });
+                  setIsPatientWaiting(false);
+                  toast({ title: "Patient Admitted", description: "Connecting..." });
+                } catch (err) {
+                  console.error('Error admitting patient:', err);
+                  toast({ title: "Error", description: "Failed to admit patient", variant: "destructive" });
+                }
               }}
-              className="bg-green-600 hover:bg-green-700 text-white shadow-lg animate-pulse"
+              className="bg-green-600 hover:bg-green-700 text-white shadow-lg animate-pulse gap-2"
             >
-              Admit Patient to Call
+              <User className="w-4 h-4" />
+              Admit Patient
             </Button>
           </div>
         )}
