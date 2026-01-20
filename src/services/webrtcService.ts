@@ -132,9 +132,9 @@ export class WebRTCService {
           this.onConnectedCallback();
         }
       } else if (state === 'failed') {
-        console.error('❌ Connection FAILED - attempting fallback check');
-        // Fallback: check if we have valid SDP on both sides
-        this.checkFallbackConnection();
+        console.error('❌ Connection FAILED - network/firewall blocking P2P');
+        // Don't attempt fallback here - let it fail properly
+        // This indicates network issue that needs infrastructure change
       } else if (state === 'disconnected') {
         console.warn('⚠️ Connection disconnected');
       }
@@ -200,17 +200,20 @@ export class WebRTCService {
     const hasLocalDescription = this.peerConnection.localDescription !== null;
     const hasRemoteDescription = this.peerConnection.remoteDescription !== null;
     const signalingState = this.peerConnection.signalingState;
+    const hasRemoteTracks = this.remoteStream && this.remoteStream.getTracks().length > 0;
 
     console.log('🔄 Fallback connection check:');
     console.log('  - Local description:', hasLocalDescription);
     console.log('  - Remote description:', hasRemoteDescription);
+    console.log('  - Remote tracks:', this.remoteStream?.getTracks().length || 0);
     console.log('  - Signaling state:', signalingState);
     console.log('  - Connection state:', this.peerConnection.connectionState);
     console.log('  - ICE state:', this.peerConnection.iceConnectionState);
 
-    // If both sides have descriptions and signaling is stable, connection is valid
-    if (hasLocalDescription && hasRemoteDescription && signalingState === 'stable') {
-      console.log('✅ FALLBACK: Valid SDP exchange detected - accepting connection as valid');
+    // STRICT: Only accept as valid if we have BOTH descriptions, stable signaling, AND remote tracks
+    // This ensures both sides are truly ready before accepting connection
+    if (hasLocalDescription && hasRemoteDescription && signalingState === 'stable' && hasRemoteTracks) {
+      console.log('✅ FALLBACK: Valid connection detected (SDP + remote tracks present)');
       if (this.onConnectedCallback) {
         console.log('   Triggering connection callback');
         this.onConnectedCallback();
@@ -219,6 +222,7 @@ export class WebRTCService {
     }
 
     console.log('❌ Fallback check failed - missing required conditions');
+    console.log('   Required: local SDP ✓, remote SDP ✓, stable signaling ✓, remote tracks ✓');
     return false;
   }
 
@@ -243,16 +247,6 @@ export class WebRTCService {
       if (connectionState !== 'connected') {
         checksWithoutConnection++;
         console.log(`📊 Connection Health Check (${checksWithoutConnection}): connection=${connectionState} ice=${iceConnectionState} signaling=${signalingState}`);
-
-        // If stuck at checking for 30+ seconds but have valid SDP, try fallback
-        if (checksWithoutConnection === 6 && iceConnectionState === 'checking' && connectionState === 'connecting') {
-          const hasLocalDesc = this.peerConnection.localDescription !== null;
-          const hasRemoteDesc = this.peerConnection.remoteDescription !== null;
-          if (hasLocalDesc && hasRemoteDesc && signalingState === 'stable') {
-            console.log('⚠️ ICE stuck at checking for 30 seconds with valid SDP - attempting fallback');
-            this.checkFallbackConnection();
-          }
-        }
 
         // Try to get stats for better diagnostics
         this.peerConnection.getStats().then(stats => {
@@ -317,9 +311,8 @@ export class WebRTCService {
       // Force cleanup after 120 seconds of monitoring without connection
       if (checksWithoutConnection > 24) {
         console.warn('⚠️ Connection check timeout - still not connected after 120 seconds');
-        // Try fallback connection check for restricted networks
-        console.log('🔄 Attempting fallback connection validation...');
-        this.checkFallbackConnection();
+        console.warn('   This indicates a network connectivity issue (firewall/NAT blocking)');
+        console.warn('   Diagnosis: TURN servers not working or P2P connection impossible');
         clearInterval(healthCheckInterval);
       }
     }, 5000);
