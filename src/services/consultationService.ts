@@ -46,7 +46,7 @@ class ConsultationService {
         patient_id: patientId,
         doctor_id: doctorId,
         consultation_type: consultationType,
-        status: 'active',
+        status: 'waiting',
       })
       .select()
       .single();
@@ -135,9 +135,39 @@ class ConsultationService {
     messageType: 'text' | 'file' = 'text',
     fileUrl?: string
   ): Promise<ConsultationMessage> {
-    const { data, error } = await supabase
-      .from('consultation_messages')
-      .insert({
+    const messageData = {
+      session_id: sessionId,
+      sender_id: senderId,
+      sender_role: senderRole,
+      sender_name: senderName,
+      message_type: messageType,
+      content,
+      file_url: fileUrl || null,
+    };
+    
+    console.log('Sending message with data:', messageData);
+    
+    try {
+      // First try: insert without select
+      const { error } = await supabase
+        .from('consultation_messages')
+        .insert([messageData]);
+
+      if (error) {
+        console.error('Message send error details:', {
+          code: (error as any).code,
+          message: (error as any).message,
+          details: (error as any).details,
+          hint: (error as any).hint,
+          fullError: error
+        });
+        // Throw a proper error message
+        throw new Error(`Database error: ${(error as any).message || String(error)}`);
+      }
+
+      // Create a mock response with the data we sent
+      const mockMessage: ConsultationMessage = {
+        id: crypto.randomUUID(),
         session_id: sessionId,
         sender_id: senderId,
         sender_role: senderRole,
@@ -145,15 +175,16 @@ class ConsultationService {
         message_type: messageType,
         content,
         file_url: fileUrl || null,
-      })
-      .select()
-      .single();
+        created_at: new Date().toISOString(),
+      };
 
-    if (error) {
-      throw new Error(`Failed to send message: ${error.message}`);
+      console.log('Message sent successfully');
+      return mockMessage;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Failed to send message:', errorMessage);
+      throw new Error(errorMessage);
     }
-
-    return data as ConsultationMessage;
   }
 
   /**

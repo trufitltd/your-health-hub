@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
@@ -43,6 +44,7 @@ export function ConsultationRoom({
   onEndCall
 }: ConsultationRoomProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
   const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
   const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(consultationType !== 'chat');
@@ -122,6 +124,7 @@ export function ConsultationRoom({
                   description: `${participantName} is waiting in the lobby.`,
                 });
               } else if (signal.signal_data.type === 'admit' && participantRole === 'patient') {
+                console.log('[Lobby] Patient received admit signal, initializing media...');
                 setIsAdmitted(true);
                 toast({
                   title: 'Admitted',
@@ -248,6 +251,9 @@ export function ConsultationRoom({
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
         console.log('[Media Init] Got local stream with', stream.getTracks().length, 'tracks');
+        stream.getTracks().forEach((track, idx) => {
+          console.log(`[Media Init] Track ${idx}:`, track.kind, 'enabled:', track.enabled, 'readyState:', track.readyState, 'label:', track.label);
+        });
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
@@ -261,19 +267,39 @@ export function ConsultationRoom({
           const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
           webrtc.onStream((remoteStream) => {
-            console.log('[WebRTC] Remote stream received with', remoteStream.getTracks().length, 'tracks');
+            console.log('[WebRTC] 🎥 Remote stream received with', remoteStream.getTracks().length, 'tracks');
+            console.log('[WebRTC] 🎥 Stream ID:', remoteStream.id);
+            console.log('[WebRTC] 🎥 Tracks:', remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
             setHasRemoteStream(true);
             if (remoteVideoRef.current) {
+              console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
-              console.log('[WebRTC] Remote video element srcObject set');
+              console.log('[WebRTC] 🎥 Remote video element srcObject set');
+              // Don't call play() here - let autoplay handle it
+            } else {
+              console.warn('[WebRTC] 🎥 WARNING: remoteVideoRef.current is null!');
             }
           });
 
           webrtc.onConnected(() => {
-            console.log('[WebRTC] Peer connection established! Setting connectionStatus to connected');
+            console.log('[WebRTC] ✅ ICE connection established! Setting connectionStatus to connected');
             setConnectionStatus('connected');
             console.log('[WebRTC] connectionStatus state updated');
           });
+
+          // Monitor connection and provide diagnostics after 15 seconds
+          const connectionDiagnosticsTimeout = setTimeout(() => {
+            if (connectionStatus !== 'connected') {
+              console.warn('[WebRTC] ⚠️ Connection still in progress. This may indicate:');
+              console.warn('  - Peers are on different networks with restrictive firewalls');
+              console.warn('  - NAT/firewall blocking peer-to-peer connections');
+              console.warn('  - STUN servers not reachable (check network settings)');
+              console.warn('  - In some environments, audio/video may still work despite ICE showing as "checking"');
+              
+              // Don't show error toast, allow connection to keep trying
+              // The system may establish media despite ICE diagnostics showing issues
+            }
+          }, 15000);
 
           webrtc.onError((error) => {
             console.error('[WebRTC] Error:', error);
@@ -288,6 +314,11 @@ export function ConsultationRoom({
           await webrtc.initializePeer(stream);
           setWebrtcService(webrtc);
           console.log('[Media Init] WebRTC service initialized successfully');
+          
+          // For doctor role, immediately attempt to create offer after peer is initialized
+          if (participantRole === 'doctor') {
+            console.log('[Media Init] Doctor role - WebRTC ready, offer will be created when patient signals ready');
+          }
         } catch (webrtcError) {
           console.error('[Media Init] WebRTC initialization error:', webrtcError);
           toast({
@@ -311,15 +342,10 @@ export function ConsultationRoom({
     initializeMedia();
 
     return () => {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (webrtcService) {
-        webrtcService.destroy();
-        setWebrtcService(null);
-      }
+      // Don't stop tracks here - let the component unmount handle cleanup
+      // This prevents killing streams when webrtcService is set
     };
-  }, [consultationType, sessionId, user, participantRole]);
+  }, [consultationType, sessionId, user, participantRole, isAdmitted]);
 
   // Call duration timer
   useEffect(() => {
@@ -332,7 +358,53 @@ export function ConsultationRoom({
     return () => clearInterval(timer);
   }, [connectionStatus]);
 
+  // Cleanup on component unmount only
+  useEffect(() => {
+    return () => {
+      console.log('[Cleanup] Component unmounting, stopping tracks');
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          console.log('[Cleanup] Stopping', track.kind, 'track');
+          track.stop();
+        });
+      }
+      if (webrtcService) {
+        console.log('[Cleanup] Destroying WebRTC service');
+        webrtcService.destroy();
+      }
+    };
+  }, []); // Empty dependency array = only run on unmount
 
+  // Ensure local video stream persists - guard against srcObject being cleared
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (localStreamRef.current && localVideoRef.current) {
+        // Check if local video element lost its srcObject
+        if (!localVideoRef.current.srcObject && consultationType === 'video' && isVideoEnabled) {
+          console.warn('[LocalVideo] ⚠️ Local video srcObject was cleared! Restoring...');
+          localVideoRef.current.srcObject = localStreamRef.current;
+        }
+      }
+    }, 500); // Check every 500ms
+
+    return () => clearInterval(interval);
+  }, [consultationType, isVideoEnabled]);
+
+  // Ensure video element has paused=false when it should be playing
+  useEffect(() => {
+    const ensurePlaying = setInterval(() => {
+      if (localVideoRef.current && isVideoEnabled && consultationType === 'video') {
+        if (localVideoRef.current.paused && localVideoRef.current.srcObject) {
+          console.log('[LocalVideo] Video is paused but should be playing, attempting play...');
+          localVideoRef.current.play().catch(err => {
+            // Expected if already playing, ignore
+          });
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(ensurePlaying);
+  }, [isVideoEnabled, consultationType]);
 
   // Auto scroll chat
   useEffect(() => {
@@ -394,7 +466,8 @@ export function ConsultationRoom({
       };
       setMessages(prev => [...prev, message]);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
+      const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
+      console.error('[SendMessage Error]', errorMsg, err);
       toast({
         title: 'Error',
         description: errorMsg,
@@ -409,12 +482,18 @@ export function ConsultationRoom({
     if (sessionId) {
       try {
         await consultationService.endSession(sessionId, callDuration);
+        console.log('[ConsultationRoom] Session ended, status updated to ended');
         toast({
           title: 'Success',
           description: 'Consultation ended successfully'
         });
       } catch (err) {
         console.error('Error ending session:', err);
+        toast({
+          title: 'Error',
+          description: 'Failed to end consultation',
+          variant: 'destructive'
+        });
       }
     }
 
@@ -559,6 +638,20 @@ export function ConsultationRoom({
               </Avatar>
               <h3 className="text-2xl font-semibold">Waiting Room</h3>
               <p className="text-muted-foreground">Waiting for the doctor to admit you...</p>
+              <Button
+                onClick={() => {
+                  toast({
+                    title: 'Left',
+                    description: 'You have left the waiting room.'
+                  });
+                  navigate(-1);
+                }}
+                variant="outline"
+                className="mt-4"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Leave
+              </Button>
             </div>
           </div>
         )}
@@ -579,7 +672,6 @@ export function ConsultationRoom({
                       muted={false}
                       onLoadedMetadata={(e) => {
                         console.log('Remote video metadata loaded (event)');
-                        e.currentTarget.play().catch(err => console.error('Remote video play error:', err));
                       }}
                       className={`w-full h-full object-cover ${hasRemoteStream ? 'block' : 'hidden'}`}
                     />
@@ -647,8 +739,16 @@ export function ConsultationRoom({
                         className="w-full h-full object-cover mirror"
                         style={{ transform: 'scaleX(-1)' }}
                         onLoadedMetadata={(e) => {
-                          console.log('Local video metadata loaded');
-                          e.currentTarget.play().catch(err => console.error('Local video play error:', err));
+                          console.log('[LocalVideo] Metadata loaded, stream active');
+                        }}
+                        onPlay={() => {
+                          console.log('[LocalVideo] Video playing');
+                        }}
+                        onStalled={() => {
+                          console.warn('[LocalVideo] ⚠️ Video stalled');
+                        }}
+                        onSuspend={() => {
+                          console.warn('[LocalVideo] ⚠️ Video suspended');
                         }}
                       />
                     ) : (

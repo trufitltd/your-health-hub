@@ -59,9 +59,17 @@ const Consultation = () => {
         const newStatus = (payload.new as any)?.status;
         console.log('New status:', newStatus, 'Current role:', role);
         
-        if (role === 'patient' && newStatus === 'active') {
+        if (newStatus === 'ended') {
+          console.log('Consultation ended by other participant');
+          setPhase('ended');
+          toast({
+            title: 'Consultation Ended',
+            description: role === 'patient' ? 'The doctor has ended the consultation.' : 'The patient has left the consultation.'
+          });
+          // Navigate back after a brief delay
+          setTimeout(() => navigate(-1), 2000);
+        } else if (role === 'patient' && newStatus === 'active') {
           console.log('Patient being admitted to consultation');
-          setPhase('in-call');
           setIsAdmitted(true);
           toast({
             title: 'Admitted',
@@ -85,6 +93,13 @@ const Consultation = () => {
       channel.unsubscribe();
     };
   }, [appointmentId, navigate, role]);
+
+  // Auto-transition waiting phase to in-call
+  useEffect(() => {
+    if (phase === 'waiting') {
+      setPhase('in-call');
+    }
+  }, [phase]);
 
   const handlePreCheckComplete = () => {
     if (role === 'doctor') {
@@ -160,8 +175,7 @@ const Consultation = () => {
   }
 
   if (phase === 'waiting') {
-    // Waiting phase is now handled inside ConsultationRoom component
-    setPhase('in-call');
+    // Transition handled by useEffect above
     return null;
   }
 
