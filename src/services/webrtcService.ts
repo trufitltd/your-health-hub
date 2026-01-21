@@ -22,6 +22,7 @@ export class WebRTCService {
   private answerQueue: RTCSessionDescriptionInit[] = [];
   private peerReady = false;
   private remoteStream: MediaStream | null = null;
+  private streamCallbackFired = false;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
     this.sessionId = sessionId;
@@ -86,6 +87,15 @@ export class WebRTCService {
       const tracks = this.remoteStream.getTracks();
       const hasAudio = tracks.some(t => t.kind === 'audio');
       const hasVideo = tracks.some(t => t.kind === 'video');
+      
+      // Only call callback once we have at least video, or when we get a new track
+      if (this.onStreamCallback) {
+        console.log('🎥 Calling onStream callback with remote stream (audio:', hasAudio, ', video:', hasVideo, ')');
+        this.onStreamCallback(this.remoteStream);
+      } else {
+        console.warn('🎥 WARNING: onStreamCallback not set!');
+      }
+      
       if (hasAudio && hasVideo) {
         console.log('✅ Got both audio and video tracks - connection is working!');
         // Check connection state
@@ -93,15 +103,6 @@ export class WebRTCService {
           console.log('⚠️ Note: Connection state is still', this.peerConnection?.connectionState, 'but media is flowing');
         }
       }
-      
-      // Callback with the complete remote stream
-      if (this.onStreamCallback) {
-        console.log('🎥 Calling onStream callback with remote stream');
-        this.onStreamCallback(this.remoteStream);
-      } else {
-        console.warn('🎥 WARNING: onStreamCallback not set!');
-      }
-      // Don't call onConnectedCallback here - wait for ICE to actually complete
     };
 
     // Handle ICE candidates
