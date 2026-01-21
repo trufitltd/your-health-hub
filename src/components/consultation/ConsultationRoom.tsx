@@ -346,10 +346,8 @@ export function ConsultationRoom({
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
               console.log('[WebRTC] 🎥 Remote video element srcObject set');
-              // Force play to ensure video starts
-              remoteVideoRef.current.play().catch((err) => {
-                console.warn('[WebRTC] 🎥 Failed to play remote video:', err);
-              });
+              // Don't call play() here - autoPlay attribute handles it
+              // Play promise rejection happens when srcObject is set multiple times
             } else {
               console.warn('[WebRTC] 🎥 WARNING: remoteVideoRef.current is null!');
             }
@@ -358,9 +356,9 @@ export function ConsultationRoom({
             if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
               console.log('[WebRTC] 🔊 Setting remote audio ref srcObject');
               remoteAudioRef.current.srcObject = remoteStream;
-              remoteAudioRef.current.play().catch((err) => {
-                console.warn('[WebRTC] 🔊 Failed to play remote audio:', err);
-              });
+              // Don't call play() - autoPlay handles it
+            } else if (!remoteAudioRef.current) {
+              console.warn('[WebRTC] 🔊 WARNING: remoteAudioRef.current is null!');
             }
           });
 
@@ -586,12 +584,16 @@ export function ConsultationRoom({
   }, []);
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !sessionId || !user) return;
+    if (!newMessage.trim() || !sessionId || !user) {
+      console.log('[Chat] Cannot send - message:', !!newMessage.trim(), 'sessionId:', !!sessionId, 'user:', !!user);
+      return;
+    }
 
     const messageContent = newMessage;
     setNewMessage('');
 
     try {
+      console.log('[Chat] Sending message to session:', sessionId);
       // Send message to database
       await consultationService.sendMessage(
         sessionId,
@@ -601,6 +603,7 @@ export function ConsultationRoom({
         messageContent
       );
 
+      console.log('[Chat] Message sent successfully');
       // Optimistically add message to UI
       const message: Message = {
         id: Date.now().toString(),
@@ -613,10 +616,10 @@ export function ConsultationRoom({
       setMessages(prev => [...prev, message]);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
-      console.error('[SendMessage Error]', errorMsg, err);
+      console.error('[Chat] Send message error:', errorMsg, err);
       toast({
         title: 'Error',
-        description: errorMsg,
+        description: 'Failed to send message: ' + errorMsg,
         variant: 'destructive'
       });
       // Restore message in input if failed
@@ -688,7 +691,7 @@ export function ConsultationRoom({
   return (
     <div className={`flex flex-col bg-background ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[calc(100vh-4rem)]'}`}>
       {/* Hidden audio element for remote audio playback */}
-      <audio ref={remoteAudioRef} autoPlay playsInline controls={false} className="hidden" />
+      <audio ref={remoteAudioRef} autoPlay playsInline muted={false} controls={false} className="hidden" />
       {/* Header */}
       <div className="flex items-center justify-between px-2 sm:px-3 md:px-4 py-2 sm:py-3 border-b border-border bg-card">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
