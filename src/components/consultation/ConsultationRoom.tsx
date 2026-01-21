@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
   Maximize2, Minimize2, Settings, Volume2, VolumeX,
-  Send, Paperclip, MoreVertical, X, User, AlertCircle
+  Send, Paperclip, MoreVertical, X, User, AlertCircle, Camera
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -278,8 +278,16 @@ export function ConsultationRoom({
   // Initialize local media and WebRTC
   useEffect(() => {
     const initializeMedia = async () => {
-      if (consultationType === 'chat' || !sessionId || !user || !isAdmitted) {
-        console.log('[Media Init] Skipping - chat:', consultationType === 'chat', 'sessionId:', !!sessionId, 'user:', !!user, 'admitted:', isAdmitted);
+      const isDoctor = participantRole === 'doctor';
+      
+      if (consultationType === 'chat' || !sessionId || !user) {
+        console.log('[Media Init] Skipping - chat:', consultationType === 'chat', 'sessionId:', !!sessionId, 'user:', !!user);
+        return;
+      }
+      
+      // Doctors initialize media immediately; patients wait until admitted
+      if (!isDoctor && !isAdmitted) {
+        console.log('[Media Init] Patient waiting for admission...');
         return;
       }
 
@@ -360,7 +368,7 @@ export function ConsultationRoom({
 
             // NOW set hasRemoteStream to trigger render
             setHasRemoteStream(true);
-            setConnectionStatus('connected'); // Defensive fallback if onConnected never fires
+            // Don't set connectionStatus here - wait for onConnected callback
           });
 
           webrtc.onConnected(() => {
@@ -883,23 +891,6 @@ export function ConsultationRoom({
                         </div>
                       </div>
                     )}
-                    {/* Fallback when no remote stream */}
-                    {!hasRemoteStream && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10 p-4">
-                        <div className="text-center">
-                          <Avatar className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 mx-auto mb-3 sm:mb-4">
-                            <AvatarFallback className="bg-primary text-primary-foreground text-2xl sm:text-3xl md:text-4xl">
-                              {participantInitials}
-                            </AvatarFallback>
-                          </Avatar>
-                          {connectionStatus === 'connecting' ? (
-                            <p className="text-xs sm:text-sm md:text-base text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
-                          ) : (
-                            <p className="text-xs sm:text-sm md:text-base text-muted-foreground">Waiting for {participantName} to join...</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </>
                 ) : (
                   /* Audio-only view */
@@ -935,7 +926,7 @@ export function ConsultationRoom({
           )}
 
           {/* Local video (picture-in-picture) - Always visible when in video call, positioned absolutely */}
-          {consultationType === 'video' && isAdmitted && (
+          {consultationType === 'video' && (
             <motion.div
               drag
               dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
