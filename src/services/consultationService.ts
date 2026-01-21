@@ -135,16 +135,22 @@ class ConsultationService {
     messageType: 'text' | 'file' = 'text',
     fileUrl?: string
   ): Promise<ConsultationMessage> {
-    const messageData = {
+    // Only include fields that have values - don't send null file_url
+    const messageData: any = {
       session_id: sessionId,
       sender_id: senderId,
       sender_role: senderRole,
       sender_name: senderName,
       message_type: messageType,
       content,
-      file_url: fileUrl || null,
     };
     
+    // Only add file_url if provided
+    if (fileUrl) {
+      messageData.file_url = fileUrl;
+    }
+    
+    console.log('[Chat] Sending message to session:', sessionId);
     console.log('Sending message with data:', messageData);
     
     try {
