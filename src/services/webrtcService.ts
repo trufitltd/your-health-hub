@@ -122,43 +122,26 @@ export class WebRTCService {
     // Handle connection state changes
     this.peerConnection.onconnectionstatechange = () => {
       const state = this.peerConnection?.connectionState;
-      console.log(`🌐 Connection state changed: ${state}`);
+      console.log(`[WebRTC] 🌐 Connection state changed: ${state}`);
       
-      // Connection can reach "connected" independently of ICE state
-      // Use this as the primary indicator for connection success
       if (state === 'connected') {
-        console.log('✅ WebRTC connection established via connection state!');
+        console.log('[WebRTC] ✅ WebRTC connection established via connection state!');
         if (this.onConnectedCallback) {
           this.onConnectedCallback();
         }
       } else if (state === 'failed') {
-        console.error('❌ Connection FAILED - network/firewall blocking P2P');
-        // Don't attempt fallback here - let it fail properly
-        // This indicates network issue that needs infrastructure change
+        console.error('[WebRTC] ❌ Connection FAILED - network/firewall blocking P2P');
       } else if (state === 'disconnected') {
-        console.warn('⚠️ Connection disconnected');
+        console.warn('[WebRTC] ⚠️ Connection disconnected');
       }
     };
 
-    // Handle ICE connection state changes - monitor but use connectionState for callback
     this.peerConnection.oniceconnectionstatechange = () => {
       const state = this.peerConnection?.iceConnectionState;
-      const gatheringState = this.peerConnection?.iceGatheringState;
-      const connectionState = this.peerConnection?.connectionState;
-      console.log(`❄️ ICE connection state: ${state} (gathering: ${gatheringState}, connection: ${connectionState})`);
+      console.log(`[WebRTC] ❄️ ICE connection state: ${state}`);
       
-      // Log all ICE states for diagnostics but don't trigger callback here
-      // The connectionState handler will trigger the callback when connection is ready
-      if (state === 'checking') {
-        console.log('❄️ ICE is checking - waiting for connection path');
-      } else if (state === 'connected') {
-        console.log('✅ ICE connection established (connected)');
-      } else if (state === 'completed') {
-        console.log('✅ ICE connection established (completed)');
-      } else if (state === 'failed') {
-        console.error('❌ ICE connection FAILED! Network/firewall issue.');
-      } else if (state === 'disconnected') {
-        console.warn('⚠️ ICE connection disconnected');
+      if (state === 'failed') {
+        console.error('[WebRTC] ❌ ICE connection FAILED! Network/firewall issue.');
       }
     };
 
