@@ -136,12 +136,9 @@ export function ConsultationRoom({
                 console.log('[Doctor] Found signals from patient:', existingSignals.map((s: any) => ({ type: s.signal_data?.type, created_at: s.created_at })));
                 const joinLobbySignal = existingSignals.find((sig: any) => sig.signal_data?.type === 'join_lobby');
                 if (joinLobbySignal) {
-                  console.log('[Lobby] Found existing patient waiting signal');
-                  setIsPatientWaiting(true);
-                  toast({
-                    title: 'Patient Waiting',
-                    description: `${participantName} is waiting in the lobby.`,
-                  });
+                  console.log('[Lobby] Found existing patient waiting signal - BUT waiting for real-time confirmation');
+                  // Don't set isPatientWaiting here - wait for real-time signal
+                  // This prevents showing old signals from previous consultations
                 } else {
                   console.log('[Doctor] No join_lobby signals found. Signal types:', existingSignals.map((s: any) => s.signal_data?.type));
                 }
@@ -337,16 +334,14 @@ export function ConsultationRoom({
             console.log('[WebRTC] 🎥 Remote stream received with', remoteStream.getTracks().length, 'tracks');
             console.log('[WebRTC] 🎥 Stream ID:', remoteStream.id);
             console.log('[WebRTC] 🎥 Tracks:', remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
-            setHasRemoteStream(true);
-            setConnectionStatus('connected'); // Defensive fallback if onConnected never fires
             
             // Set remote video if we have video tracks
             if (remoteVideoRef.current) {
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
               console.log('[WebRTC] 🎥 Remote video element srcObject set');
-              console.log('[RemoteVideo] Element visible:', remoteVideoRef.current.style.display);
-              console.log('[RemoteVideo] Parent display:', remoteVideoRef.current.parentElement?.style.display);
+              console.log('[WebRTC] 🎥 Remote video element ready:', remoteVideoRef.current.readyState);
+              console.log('[WebRTC] 🎥 Remote video element networkState:', remoteVideoRef.current.networkState);
               // Don't call play() here - autoPlay attribute handles it
               // Play promise rejection happens when srcObject is set multiple times
             } else {
@@ -361,9 +356,11 @@ export function ConsultationRoom({
               // Don't call play() - autoPlay handles it
             } else if (!remoteAudioRef.current) {
               console.warn('[WebRTC] 🔊 WARNING: remoteAudioRef.current is null!');
-            } else {
-              console.log('[WebRTC] 🔊 No audio tracks in remote stream');
             }
+
+            // NOW set hasRemoteStream to trigger render
+            setHasRemoteStream(true);
+            setConnectionStatus('connected'); // Defensive fallback if onConnected never fires
           });
 
           webrtc.onConnected(() => {
@@ -513,9 +510,18 @@ export function ConsultationRoom({
   useEffect(() => {
     console.log('[Monitor] hasRemoteStream changed to:', hasRemoteStream);
     if (hasRemoteStream && remoteVideoRef.current) {
-      console.log('[Monitor] Remote video element display:', remoteVideoRef.current.style.display);
-      console.log('[Monitor] Remote video srcObject:', remoteVideoRef.current.srcObject ? 'SET' : 'NULL');
-      console.log('[Monitor] Remote video paused:', remoteVideoRef.current.paused);
+      console.log('[Monitor] Remote video element details:');
+      console.log('  - Display style:', remoteVideoRef.current.style.display);
+      console.log('  - Computed display:', window.getComputedStyle(remoteVideoRef.current).display);
+      console.log('  - Computed visibility:', window.getComputedStyle(remoteVideoRef.current).visibility);
+      console.log('  - Width:', remoteVideoRef.current.offsetWidth);
+      console.log('  - Height:', remoteVideoRef.current.offsetHeight);
+      console.log('  - srcObject:', remoteVideoRef.current.srcObject ? 'SET' : 'NULL');
+      console.log('  - paused:', remoteVideoRef.current.paused);
+      console.log('  - videoWidth:', remoteVideoRef.current.videoWidth);
+      console.log('  - videoHeight:', remoteVideoRef.current.videoHeight);
+      console.log('  - Parent offsetWidth:', remoteVideoRef.current.parentElement?.offsetWidth);
+      console.log('  - Parent offsetHeight:', remoteVideoRef.current.parentElement?.offsetHeight);
     }
   }, [hasRemoteStream]);
 
@@ -834,27 +840,49 @@ export function ConsultationRoom({
                 {consultationType === 'video' ? (
                   <>
                     {/* Remote video stream */}
-                    <video
-                      key="remote-video"
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      muted={false}
-                      controls={false}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasRemoteStream ? 'block' : 'none' }}
-                      onLoadedMetadata={(e) => {
-                        console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
-                      }}
-                      onPlay={() => {
-                        console.log('[RemoteVideo] Video playing');
-                      }}
-                      onCanPlay={() => {
-                        console.log('[RemoteVideo] Can play');
-                      }}
-                      onStalled={() => {
-                        console.warn('[RemoteVideo] ⚠️ Video stalled');
-                      }}
-                    />
+                    {hasRemoteStream && (
+                      <video
+                        ref={remoteVideoRef}
+                        autoPlay
+                        playsInline
+                        muted={false}
+                        controls={false}
+                        crossOrigin="anonymous"
+                        style={{ 
+                          width: '100%', 
+                          height: '100%', 
+                          objectFit: 'cover',
+                          display: 'block',
+                          backgroundColor: 'transparent'
+                        }}
+                        onLoadedMetadata={(e) => {
+                          console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
+                          console.log('[RemoteVideo] Dimensions:', (e.currentTarget as HTMLVideoElement).videoWidth, 'x', (e.currentTarget as HTMLVideoElement).videoHeight);
+                        }}
+                        onPlay={() => {
+                          console.log('[RemoteVideo] Video playing');
+                        }}
+                        onCanPlay={() => {
+                          console.log('[RemoteVideo] Can play');
+                        }}
+                        onStalled={() => {
+                          console.warn('[RemoteVideo] ⚠️ Video stalled');
+                        }}
+                        onError={(e) => {
+                          console.error('[RemoteVideo] Error:', e);
+                        }}
+                      />
+                    )}
+                    {!hasRemoteStream && (
+                      <div className="w-full h-full flex items-center justify-center bg-muted/50">
+                        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
+                            <Camera className="w-8 h-8 text-muted-foreground/50" />
+                          </div>
+                          <p className="text-sm">Waiting for video stream...</p>
+                        </div>
+                      </div>
+                    )}
                     {/* Fallback when no remote stream */}
                     {!hasRemoteStream && (
                       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10 p-4">
