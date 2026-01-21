@@ -847,40 +847,38 @@ export function ConsultationRoom({
               <div className="w-full h-full rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden bg-card relative">
                 {consultationType === 'video' ? (
                   <>
-                    {/* Remote video stream */}
-                    {hasRemoteStream && (
-                      <video
-                        ref={remoteVideoRef}
-                        autoPlay
-                        playsInline
-                        muted={false}
-                        controls={false}
-                        crossOrigin="anonymous"
-                        style={{ 
-                          width: '100%', 
-                          height: '100%', 
-                          objectFit: 'cover',
-                          display: 'block',
-                          backgroundColor: 'transparent'
-                        }}
-                        onLoadedMetadata={(e) => {
-                          console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
-                          console.log('[RemoteVideo] Dimensions:', (e.currentTarget as HTMLVideoElement).videoWidth, 'x', (e.currentTarget as HTMLVideoElement).videoHeight);
-                        }}
-                        onPlay={() => {
-                          console.log('[RemoteVideo] Video playing');
-                        }}
-                        onCanPlay={() => {
-                          console.log('[RemoteVideo] Can play');
-                        }}
-                        onStalled={() => {
-                          console.warn('[RemoteVideo] ⚠️ Video stalled');
-                        }}
-                        onError={(e) => {
-                          console.error('[RemoteVideo] Error:', e);
-                        }}
-                      />
-                    )}
+                    {/* Remote video stream - ALWAYS in DOM, controlled by display style */}
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      muted={false}
+                      controls={false}
+                      crossOrigin="anonymous"
+                      style={{ 
+                        width: '100%', 
+                        height: '100%', 
+                        objectFit: 'cover',
+                        display: hasRemoteStream ? 'block' : 'none',
+                        backgroundColor: 'transparent'
+                      }}
+                      onLoadedMetadata={(e) => {
+                        console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
+                        console.log('[RemoteVideo] Dimensions:', (e.currentTarget as HTMLVideoElement).videoWidth, 'x', (e.currentTarget as HTMLVideoElement).videoHeight);
+                      }}
+                      onPlay={() => {
+                        console.log('[RemoteVideo] Video playing');
+                      }}
+                      onCanPlay={() => {
+                        console.log('[RemoteVideo] Can play');
+                      }}
+                      onStalled={() => {
+                        console.warn('[RemoteVideo] ⚠️ Video stalled');
+                      }}
+                      onError={(e) => {
+                        console.error('[RemoteVideo] Error:', e);
+                      }}
+                    />
                     {!hasRemoteStream && (
                       <div className="w-full h-full flex items-center justify-center bg-muted/50">
                         <div className="flex flex-col items-center gap-2 text-muted-foreground">
