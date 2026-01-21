@@ -68,6 +68,7 @@ export function ConsultationRoom({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const lobbyChannelRef = useRef<any>(null);
   const wakeLockRef = useRef<any>(null);
 
   // Initialize consultation session and load existing messages
@@ -157,6 +158,7 @@ export function ConsultationRoom({
 
         // Subscribe to lobby signals
         const lobbyChannel = supabase.channel(`lobby_${session.id}`);
+        lobbyChannelRef.current = lobbyChannel;
         lobbyChannel
           .on('postgres_changes', {
             event: 'INSERT',
@@ -209,12 +211,6 @@ export function ConsultationRoom({
         }
 
         setSessionId(session.id);
-
-        return () => {
-          supabase.removeChannel(lobbyChannel);
-        };
-
-        // ... (rest of the code will follow in next logic block)
 
         // Load existing messages
         const existingMessages = await consultationService.getMessages(session.id);
@@ -275,6 +271,9 @@ export function ConsultationRoom({
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
+      }
+      if (lobbyChannelRef.current) {
+        supabase.removeChannel(lobbyChannelRef.current);
       }
     };
   }, [user, appointmentId, participantRole, consultationType, participantName]);
