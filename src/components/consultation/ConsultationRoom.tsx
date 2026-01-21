@@ -307,6 +307,7 @@ export function ConsultationRoom({
             console.log('[WebRTC] 🎥 Stream ID:', remoteStream.id);
             console.log('[WebRTC] 🎥 Tracks:', remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
             setHasRemoteStream(true);
+            setConnectionStatus('connected'); // Defensive fallback if onConnected never fires
             if (remoteVideoRef.current) {
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
@@ -462,6 +463,20 @@ export function ConsultationRoom({
       }
     };
   }, []); // Empty dependency array = only run on unmount
+
+  // Ensure remote video stream persists - guard against srcObject being cleared
+  useEffect(() => {
+    if (!hasRemoteStream) return;
+    
+    const interval = setInterval(() => {
+      if (remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
+        console.warn('[RemoteVideo] ⚠️ Remote video srcObject was cleared! This should not happen.');
+        // Don't try to restore - this indicates a deeper issue
+      }
+    }, 1000); // Check every second
+
+    return () => clearInterval(interval);
+  }, [hasRemoteStream]);
 
   // Ensure local video stream persists - guard against srcObject being cleared
   useEffect(() => {
