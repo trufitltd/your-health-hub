@@ -64,6 +64,7 @@ export function ConsultationRoom({
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -280,7 +281,7 @@ export function ConsultationRoom({
             height: { ideal: 720 },
             facingMode: 'user'
           } : false,
-          audio: true
+          audio: consultationType !== 'chat' ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
         };
 
         console.log('[Media Init] Requesting user media with constraints:', constraints);
@@ -308,16 +309,27 @@ export function ConsultationRoom({
             console.log('[WebRTC] 🎥 Tracks:', remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
             setHasRemoteStream(true);
             setConnectionStatus('connected'); // Defensive fallback if onConnected never fires
+            
+            // Set remote video if we have video tracks
             if (remoteVideoRef.current) {
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
               console.log('[WebRTC] 🎥 Remote video element srcObject set');
               // Force play to ensure video starts
               remoteVideoRef.current.play().catch((err) => {
-                console.warn('[WebRTC] 🎥 Failed to play video:', err);
+                console.warn('[WebRTC] 🎥 Failed to play remote video:', err);
               });
             } else {
               console.warn('[WebRTC] 🎥 WARNING: remoteVideoRef.current is null!');
+            }
+
+            // Set remote audio if we have audio tracks (for audio-only or audio in video calls)
+            if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
+              console.log('[WebRTC] 🔊 Setting remote audio ref srcObject');
+              remoteAudioRef.current.srcObject = remoteStream;
+              remoteAudioRef.current.play().catch((err) => {
+                console.warn('[WebRTC] 🔊 Failed to play remote audio:', err);
+              });
             }
           });
 
@@ -644,6 +656,8 @@ export function ConsultationRoom({
 
   return (
     <div className={`flex flex-col bg-background ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[calc(100vh-4rem)]'}`}>
+      {/* Hidden audio element for remote audio playback */}
+      <audio ref={remoteAudioRef} autoPlay playsInline controls={false} className="hidden" />
       {/* Header */}
       <div className="flex items-center justify-between px-2 sm:px-3 md:px-4 py-2 sm:py-3 border-b border-border bg-card">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -1008,23 +1022,24 @@ export function ConsultationRoom({
                   <TooltipContent className="text-xs sm:text-sm"><span className="hidden sm:inline">{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</span><span className="sm:hidden">Speaker</span></TooltipContent>
                 </Tooltip>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={isChatOpen ? 'default' : 'secondary'}
-                      size="icon"
-                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0 hidden sm:flex"
-                      onClick={() => setIsChatOpen(!isChatOpen)}
-                    >
-                      <MessageSquare className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs sm:text-sm">Chat</TooltipContent>
-                </Tooltip>
-
                 <div className="w-px h-6 sm:h-8 bg-border mx-1 sm:mx-2 flex-shrink-0" />
               </>
             )}
+
+            {/* Chat button - Always available */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={isChatOpen ? 'default' : 'secondary'}
+                  size="icon"
+                  className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
+                  onClick={() => setIsChatOpen(!isChatOpen)}
+                >
+                  <MessageSquare className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs sm:text-sm">Chat</TooltipContent>
+            </Tooltip>
 
             <Tooltip>
               <TooltipTrigger asChild>
