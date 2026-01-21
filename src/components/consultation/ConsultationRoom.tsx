@@ -115,26 +115,43 @@ export function ConsultationRoom({
         // Initialize WebRTC based on role and admission status
         if (participantRole === 'doctor') {
           setIsAdmitted(true);
+          console.log('[Doctor] Doctor joined, looking for patient waiting signal. patientId:', patientId);
           // Doctor should check if patient is already waiting
           if (patientId) {
-            const { data: existingSignals } = await supabase
-              .from('webrtc_signals')
-              .select('*')
-              .eq('session_id', session.id)
-              .eq('sender_id', patientId)
-              .limit(1);
-            
-            if (existingSignals && existingSignals.length > 0) {
-              const joinLobbySignal = existingSignals.find((sig: any) => sig.signal_data?.type === 'join_lobby');
-              if (joinLobbySignal) {
-                console.log('[Lobby] Found existing patient waiting signal');
-                setIsPatientWaiting(true);
-                toast({
-                  title: 'Patient Waiting',
-                  description: `${participantName} is waiting in the lobby.`,
-                });
+            try {
+              const { data: existingSignals, error: signalError } = await supabase
+                .from('webrtc_signals')
+                .select('*')
+                .eq('session_id', session.id)
+                .eq('sender_id', patientId);
+              
+              console.log('[Doctor] Query result - signals:', existingSignals?.length, 'error:', signalError);
+              
+              if (signalError) {
+                console.error('[Doctor] Error querying signals:', signalError);
               }
+              
+              if (existingSignals && existingSignals.length > 0) {
+                console.log('[Doctor] Found signals from patient:', existingSignals.map((s: any) => ({ type: s.signal_data?.type, created_at: s.created_at })));
+                const joinLobbySignal = existingSignals.find((sig: any) => sig.signal_data?.type === 'join_lobby');
+                if (joinLobbySignal) {
+                  console.log('[Lobby] Found existing patient waiting signal');
+                  setIsPatientWaiting(true);
+                  toast({
+                    title: 'Patient Waiting',
+                    description: `${participantName} is waiting in the lobby.`,
+                  });
+                } else {
+                  console.log('[Doctor] No join_lobby signals found. Signal types:', existingSignals.map((s: any) => s.signal_data?.type));
+                }
+              } else {
+                console.log('[Doctor] No existing signals from patient yet');
+              }
+            } catch (error) {
+              console.error('[Doctor] Exception querying signals:', error);
             }
+          } else {
+            console.log('[Doctor] patientId is null, cannot query for patient signals');
           }
         }
 
@@ -147,34 +164,48 @@ export function ConsultationRoom({
             table: 'webrtc_signals',
             filter: `session_id=eq.${session.id}`
           }, (payload) => {
+            console.log('[Lobby RT] New signal received:', { sender: payload.new.sender_id, type: payload.new.signal_data?.type, role: participantRole });
             const signal = payload.new;
             if (signal.sender_id !== user.id) {
-              if (signal.signal_data.type === 'join_lobby' && participantRole === 'doctor') {
-                console.log('[Lobby] Patient joined, showing admit button');
+              console.log('[Lobby RT] Signal is from other participant');
+              if (signal.signal_data?.type === 'join_lobby' && participantRole === 'doctor') {
+                console.log('[Lobby RT] 🎯 Patient joined! Showing admit button');
                 setIsPatientWaiting(true);
                 toast({
                   title: 'Patient Waiting',
                   description: `${participantName} is waiting in the lobby.`,
                 });
-              } else if (signal.signal_data.type === 'admit' && participantRole === 'patient') {
-                console.log('[Lobby] Patient received admit signal, initializing media...');
+              } else if (signal.signal_data?.type === 'admit' && participantRole === 'patient') {
+                console.log('[Lobby RT] Patient admitted by doctor');
                 setIsAdmitted(true);
                 toast({
                   title: 'Admitted',
                   description: 'The doctor has admitted you to the call.',
                 });
+              } else {
+                console.log('[Lobby RT] Signal not matching conditions', { type: signal.signal_data?.type, role: participantRole });
               }
+            } else {
+              console.log('[Lobby RT] Signal is from self, ignoring');
             }
           })
-          .subscribe();
+          .subscribe((status) => {
+            console.log('[Lobby RT] Channel subscription status:', status);
+          });
 
         // If patient, announce presence in lobby
         if (participantRole === 'patient') {
-          await supabase.from('webrtc_signals').insert({
+          console.log('[Patient] Sending join_lobby signal. sessionId:', session.id, 'userId:', user.id);
+          const { error: insertError } = await supabase.from('webrtc_signals').insert({
             session_id: session.id,
             sender_id: user.id,
             signal_data: { type: 'join_lobby' }
           });
+          if (insertError) {
+            console.error('[Patient] Error sending join_lobby signal:', insertError);
+          } else {
+            console.log('[Patient] ✅ join_lobby signal sent successfully');
+          }
         }
 
         setSessionId(session.id);
