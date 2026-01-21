@@ -345,6 +345,8 @@ export function ConsultationRoom({
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
               console.log('[WebRTC] 🎥 Remote video element srcObject set');
+              console.log('[RemoteVideo] Element visible:', remoteVideoRef.current.style.display);
+              console.log('[RemoteVideo] Parent display:', remoteVideoRef.current.parentElement?.style.display);
               // Don't call play() here - autoPlay attribute handles it
               // Play promise rejection happens when srcObject is set multiple times
             } else {
@@ -355,9 +357,12 @@ export function ConsultationRoom({
             if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
               console.log('[WebRTC] 🔊 Setting remote audio ref srcObject');
               remoteAudioRef.current.srcObject = remoteStream;
+              console.log('[WebRTC] 🔊 Remote audio element srcObject set. readyState:', remoteAudioRef.current.readyState);
               // Don't call play() - autoPlay handles it
             } else if (!remoteAudioRef.current) {
               console.warn('[WebRTC] 🔊 WARNING: remoteAudioRef.current is null!');
+            } else {
+              console.log('[WebRTC] 🔊 No audio tracks in remote stream');
             }
           });
 
@@ -503,6 +508,16 @@ export function ConsultationRoom({
       }
     };
   }, []); // Empty dependency array = only run on unmount
+
+  // Monitor remote stream state changes
+  useEffect(() => {
+    console.log('[Monitor] hasRemoteStream changed to:', hasRemoteStream);
+    if (hasRemoteStream && remoteVideoRef.current) {
+      console.log('[Monitor] Remote video element display:', remoteVideoRef.current.style.display);
+      console.log('[Monitor] Remote video srcObject:', remoteVideoRef.current.srcObject ? 'SET' : 'NULL');
+      console.log('[Monitor] Remote video paused:', remoteVideoRef.current.paused);
+    }
+  }, [hasRemoteStream]);
 
   // Ensure remote video stream persists - guard against srcObject being cleared
   useEffect(() => {
