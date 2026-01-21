@@ -444,7 +444,7 @@ export class WebRTCService {
         // Only process offer if we don't already have a remote description
         if (!this.peerConnection.remoteDescription) {
           try {
-            await this.peerConnection.setRemoteDescription(signalData.offer);
+            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
             console.log('🔄 Remote description set successfully, signaling state:', this.peerConnection.signalingState);
             await this.flushCandidateQueue(); // Flush any queued candidates
             const answer = await this.peerConnection.createAnswer();
@@ -467,7 +467,7 @@ export class WebRTCService {
         if (this.peerConnection.localDescription) {
           if (!this.peerConnection.remoteDescription) {
             try {
-              await this.peerConnection.setRemoteDescription(signalData.answer);
+              await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.answer));
               console.log('🔄 Remote description set successfully, signaling state:', this.peerConnection.signalingState);
               await this.flushCandidateQueue(); // Flush any queued candidates
             } catch (err) {
@@ -488,7 +488,7 @@ export class WebRTCService {
         if (this.peerConnection.remoteDescription) {
           try {
             if (signalData.candidate && signalData.candidate.candidate) {
-              await this.peerConnection.addIceCandidate(signalData.candidate);
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate));
               console.log('🔄 ICE candidate added successfully:', signalData.candidate.candidate.substring(0, 50));
             } else {
               console.log('🔄 ICE candidate is null/empty (end of candidates)');
