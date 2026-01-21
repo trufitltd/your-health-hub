@@ -275,7 +275,11 @@ export function ConsultationRoom({
 
       try {
         const constraints: MediaStreamConstraints = {
-          video: consultationType === 'video',
+          video: consultationType === 'video' ? {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user'
+          } : false,
           audio: true
         };
 
@@ -307,7 +311,10 @@ export function ConsultationRoom({
               console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
               remoteVideoRef.current.srcObject = remoteStream;
               console.log('[WebRTC] 🎥 Remote video element srcObject set');
-              // Don't call play() here - let autoplay handle it
+              // Force play to ensure video starts
+              remoteVideoRef.current.play().catch((err) => {
+                console.warn('[WebRTC] 🎥 Failed to play video:', err);
+              });
             } else {
               console.warn('[WebRTC] 🎥 WARNING: remoteVideoRef.current is null!');
             }
@@ -751,14 +758,25 @@ export function ConsultationRoom({
                   <>
                     {/* Remote video stream */}
                     <video
+                      key="remote-video"
                       ref={remoteVideoRef}
                       autoPlay
                       playsInline
                       muted={false}
+                      controls={false}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasRemoteStream ? 'block' : 'none' }}
                       onLoadedMetadata={(e) => {
-                        console.log('Remote video metadata loaded (event)');
+                        console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
                       }}
-                      className={`w-full h-full object-cover ${hasRemoteStream ? 'block' : 'hidden'}`}
+                      onPlay={() => {
+                        console.log('[RemoteVideo] Video playing');
+                      }}
+                      onCanPlay={() => {
+                        console.log('[RemoteVideo] Can play');
+                      }}
+                      onStalled={() => {
+                        console.warn('[RemoteVideo] ⚠️ Video stalled');
+                      }}
                     />
                     {/* Fallback when no remote stream */}
                     {!hasRemoteStream && (
