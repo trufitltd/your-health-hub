@@ -126,9 +126,21 @@ export class WebRTCService {
       console.log(`[WebRTC] 🌐 Connection state changed: ${state}`);
       
       if (state === 'connected') {
-        console.log('[WebRTC] ✅ WebRTC connection established via connection state!');
-        if (this.onConnectedCallback) {
-          this.onConnectedCallback();
+        // Verify we actually have remote tracks before reporting connected
+        const hasRemoteTracks = this.remoteStream && this.remoteStream.getTracks().length > 0;
+        const hasRemoteVideo = this.remoteStream?.getVideoTracks().some(t => t.readyState === 'live');
+        
+        console.log('[WebRTC] Connection state is "connected", checking for remote media...');
+        console.log('  - Has remote tracks:', hasRemoteTracks);
+        console.log('  - Has remote video:', hasRemoteVideo);
+        
+        if (hasRemoteVideo) {
+          console.log('[WebRTC] ✅ WebRTC connection established via connection state with remote video!');
+          if (this.onConnectedCallback) {
+            this.onConnectedCallback();
+          }
+        } else {
+          console.warn('[WebRTC] ⚠️ Connection state is "connected" but no remote video - waiting for media');
         }
       } else if (state === 'connecting' || (state as string) === 'checking') {
         // Try fallback check if stuck in connecting/checking for more than 3 seconds
@@ -206,11 +218,18 @@ export class WebRTCService {
     // This ensures both sides are truly ready before accepting connection
     if (hasLocalDescription && hasRemoteDescription && signalingState === 'stable' && hasRemoteTracks) {
       console.log('✅ FALLBACK: Valid connection detected (SDP + remote tracks present)');
-      if (this.onConnectedCallback) {
-        console.log('   Triggering connection callback');
-        this.onConnectedCallback();
+      // Extra validation: make sure we have VIDEO tracks if this was a video call
+      const hasVideoTrack = this.remoteStream?.getVideoTracks().some(t => t.readyState === 'live');
+      if (hasVideoTrack) {
+        if (this.onConnectedCallback) {
+          console.log('   Triggering connection callback with active video');
+          this.onConnectedCallback();
+        }
+        return true;
+      } else {
+        console.log('⚠️ FALLBACK: Has SDP but no active video tracks yet');
+        return false;
       }
-      return true;
     }
 
     console.log('❌ Fallback check failed - missing required conditions');
