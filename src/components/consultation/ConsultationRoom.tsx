@@ -67,6 +67,7 @@ export function ConsultationRoom({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const wakeLockRef = useRef<any>(null);
 
   // Initialize consultation session and load existing messages
   useEffect(() => {
@@ -80,6 +81,8 @@ export function ConsultationRoom({
       try {
         // Get or create consultation session
         let session = await consultationService.getSessionByAppointmentId(appointmentId);
+        let patientId: string | null = null;
+        let doctorId: string | null = null;
 
         if (!session) {
           // Get appointment data to find the real patient and doctor IDs
@@ -93,17 +96,45 @@ export function ConsultationRoom({
             throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
           }
 
+          patientId = appointmentData.patient_id;
+          doctorId = appointmentData.doctor_id;
+
           session = await consultationService.createSession(
             appointmentId,
-            appointmentData.patient_id,
-            appointmentData.doctor_id,
+            patientId,
+            doctorId,
             consultationType
           );
+        } else {
+          // If session already exists, get patient/doctor IDs from the session
+          patientId = session.patient_id;
+          doctorId = session.doctor_id;
         }
 
         // Initialize WebRTC based on role and admission status
         if (participantRole === 'doctor') {
           setIsAdmitted(true);
+          // Doctor should check if patient is already waiting
+          if (patientId) {
+            const { data: existingSignals } = await supabase
+              .from('webrtc_signals')
+              .select('*')
+              .eq('session_id', session.id)
+              .eq('sender_id', patientId)
+              .limit(1);
+            
+            if (existingSignals && existingSignals.length > 0) {
+              const joinLobbySignal = existingSignals.find((sig: any) => sig.signal_data?.type === 'join_lobby');
+              if (joinLobbySignal) {
+                console.log('[Lobby] Found existing patient waiting signal');
+                setIsPatientWaiting(true);
+                toast({
+                  title: 'Patient Waiting',
+                  description: `${participantName} is waiting in the lobby.`,
+                });
+              }
+            }
+          }
         }
 
         // Subscribe to lobby signals
@@ -118,6 +149,7 @@ export function ConsultationRoom({
             const signal = payload.new;
             if (signal.sender_id !== user.id) {
               if (signal.signal_data.type === 'join_lobby' && participantRole === 'doctor') {
+                console.log('[Lobby] Patient joined, showing admit button');
                 setIsPatientWaiting(true);
                 toast({
                   title: 'Patient Waiting',
@@ -358,6 +390,48 @@ export function ConsultationRoom({
     return () => clearInterval(timer);
   }, [connectionStatus]);
 
+  // Screen wake lock - prevent screen from turning off during active consultation
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator && connectionStatus === 'connected') {
+          // Request wake lock to keep screen on during consultation
+          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+          console.log('[WakeLock] Screen wake lock acquired');
+          
+          // Handle release events (e.g., when browser tab loses focus)
+          wakeLockRef.current.addEventListener('release', () => {
+            console.log('[WakeLock] Screen wake lock released');
+          });
+        }
+      } catch (err) {
+        console.warn('[WakeLock] Failed to acquire wake lock:', err);
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      if (wakeLockRef.current) {
+        try {
+          await wakeLockRef.current.release();
+          wakeLockRef.current = null;
+          console.log('[WakeLock] Screen wake lock released');
+        } catch (err) {
+          console.warn('[WakeLock] Failed to release wake lock:', err);
+        }
+      }
+    };
+
+    if (connectionStatus === 'connected') {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    return () => {
+      releaseWakeLock();
+    };
+  }, [connectionStatus]);
+
   // Cleanup on component unmount only
   useEffect(() => {
     return () => {
@@ -371,6 +445,13 @@ export function ConsultationRoom({
       if (webrtcService) {
         console.log('[Cleanup] Destroying WebRTC service');
         webrtcService.destroy();
+      }
+      // Release wake lock on unmount
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch((err: any) => {
+          console.warn('[Cleanup] Failed to release wake lock:', err);
+        });
+        wakeLockRef.current = null;
       }
     };
   }, []); // Empty dependency array = only run on unmount
@@ -542,49 +623,52 @@ export function ConsultationRoom({
   return (
     <div className={`flex flex-col bg-background ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[calc(100vh-4rem)]'}`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card">
-        <div className="flex items-center gap-3">
-          <Avatar className="w-10 h-10">
-            <AvatarFallback className="bg-primary/10 text-primary">{participantInitials}</AvatarFallback>
+      <div className="flex items-center justify-between px-2 sm:px-3 md:px-4 py-2 sm:py-3 border-b border-border bg-card">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <Avatar className="w-8 h-8 sm:w-10 sm:h-10 flex-shrink-0">
+            <AvatarFallback className="bg-primary/10 text-primary text-xs sm:text-sm">{participantInitials}</AvatarFallback>
           </Avatar>
-          <div>
-            <h2 className="font-semibold text-sm">{participantName}</h2>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-xs sm:text-sm truncate">{participantName}</h2>
+            <div className="flex items-center gap-1 sm:gap-2">
               <Badge
                 variant="outline"
-                className={
+                className={`text-xs ${
                   connectionStatus === 'connected'
                     ? 'bg-success/10 text-success border-success/20'
                     : connectionStatus === 'connecting'
                       ? 'bg-warning/10 text-warning border-warning/20'
                       : 'bg-destructive/10 text-destructive border-destructive/20'
-                }
+                }`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${connectionStatus === 'connected' ? 'bg-success' :
+                <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full mr-1 ${connectionStatus === 'connected' ? 'bg-success' :
                   connectionStatus === 'connecting' ? 'bg-warning animate-pulse' : 'bg-destructive'
                   }`} />
-                {connectionStatus === 'connected' ? 'Connected' :
-                  connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+                <span className="hidden sm:inline">{connectionStatus === 'connected' ? 'Connected' :
+                  connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
+                <span className="sm:hidden">{connectionStatus === 'connected' ? 'OK' :
+                  connectionStatus === 'connecting' ? '...' : 'X'}</span>
               </Badge>
               {connectionStatus === 'connected' && (
-                <span className="text-xs text-muted-foreground">{formatDuration(callDuration)}</span>
+                <span className="text-[10px] sm:text-xs text-muted-foreground whitespace-nowrap">{formatDuration(callDuration)}</span>
               )}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
+                  className="h-8 w-8 sm:h-10 sm:w-10"
                   onClick={() => setIsFullscreen(!isFullscreen)}
                 >
-                  {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                  {isFullscreen ? <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</TooltipContent>
+              <TooltipContent className="text-xs sm:text-sm">{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
@@ -595,7 +679,7 @@ export function ConsultationRoom({
 
         {/* Doctor Admit Button Overlay - Single consolidated button */}
         {participantRole === 'doctor' && isPatientWaiting && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50">
+          <div className="absolute top-2 sm:top-4 left-1/2 transform -translate-x-1/2 z-50 px-2">
             <Button
               onClick={async () => {
                 if (!sessionId || !user) return;
@@ -621,23 +705,24 @@ export function ConsultationRoom({
                   toast({ title: "Error", description: "Failed to admit patient", variant: "destructive" });
                 }
               }}
-              className="bg-green-600 hover:bg-green-700 text-white shadow-lg animate-pulse gap-2"
+              className="bg-green-600 hover:bg-green-700 text-white shadow-lg animate-pulse gap-2 text-sm sm:text-base"
             >
-              <User className="w-4 h-4" />
-              Admit Patient
+              <User className="w-3 h-3 sm:w-4 sm:h-4" />
+              <span className="hidden sm:inline">Admit Patient</span>
+              <span className="sm:hidden">Admit</span>
             </Button>
           </div>
         )}
 
         {/* Patient Lobby Screen */}
         {!isAdmitted && participantRole === 'patient' && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm">
-            <div className="text-center space-y-4">
-              <Avatar className="w-24 h-24 mx-auto animate-pulse">
-                <AvatarFallback>{participantInitials}</AvatarFallback>
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-4">
+            <div className="text-center space-y-3 sm:space-y-4 max-w-sm">
+              <Avatar className="w-20 h-20 sm:w-24 sm:h-24 mx-auto animate-pulse">
+                <AvatarFallback className="text-xl sm:text-2xl">{participantInitials}</AvatarFallback>
               </Avatar>
-              <h3 className="text-2xl font-semibold">Waiting Room</h3>
-              <p className="text-muted-foreground">Waiting for the doctor to admit you...</p>
+              <h3 className="text-xl sm:text-2xl font-semibold">Waiting Room</h3>
+              <p className="text-sm sm:text-base text-muted-foreground">Waiting for the doctor to admit you...</p>
               <Button
                 onClick={() => {
                   toast({
@@ -647,9 +732,9 @@ export function ConsultationRoom({
                   navigate(-1);
                 }}
                 variant="outline"
-                className="mt-4"
+                className="mt-4 w-full"
               >
-                <X className="w-4 h-4 mr-2" />
+                <X className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
                 Leave
               </Button>
             </div>
@@ -659,9 +744,9 @@ export function ConsultationRoom({
         <div className="flex-1 flex overflow-hidden">
           {/* Video/Audio area - Hidden if chat only and chat is open (or maybe just hidden completely for chat type) */}
           {consultationType !== 'chat' && (
-            <div className={`flex-1 relative bg-muted/50 p-4 ${isChatOpen ? 'hidden md:block' : ''}`}>
+            <div className={`flex-1 relative bg-muted/50 p-2 sm:p-3 md:p-4 ${isChatOpen ? 'hidden md:block' : ''}`}>
               {/* Remote participant (main view) */}
-              <div className="w-full h-full rounded-2xl overflow-hidden bg-card relative">
+              <div className="w-full h-full rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden bg-card relative">
                 {consultationType === 'video' ? (
                   <>
                     {/* Remote video stream */}
@@ -677,17 +762,17 @@ export function ConsultationRoom({
                     />
                     {/* Fallback when no remote stream */}
                     {!hasRemoteStream && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
+                      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10 p-4">
                         <div className="text-center">
-                          <Avatar className="w-32 h-32 mx-auto mb-4">
-                            <AvatarFallback className="bg-primary text-primary-foreground text-4xl">
+                          <Avatar className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 mx-auto mb-3 sm:mb-4">
+                            <AvatarFallback className="bg-primary text-primary-foreground text-2xl sm:text-3xl md:text-4xl">
                               {participantInitials}
                             </AvatarFallback>
                           </Avatar>
                           {connectionStatus === 'connecting' ? (
-                            <p className="text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
+                            <p className="text-xs sm:text-sm md:text-base text-muted-foreground animate-pulse">Connecting to {participantName}...</p>
                           ) : (
-                            <p className="text-muted-foreground">Waiting for {participantName} to join...</p>
+                            <p className="text-xs sm:text-sm md:text-base text-muted-foreground">Waiting for {participantName} to join...</p>
                           )}
                         </div>
                       </div>
@@ -695,78 +780,78 @@ export function ConsultationRoom({
                   </>
                 ) : (
                   /* Audio-only view */
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10">
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10 p-4">
                     <motion.div
                       className="text-center"
                       animate={connectionStatus === 'connected' ? { scale: [1, 1.05, 1] } : {}}
                       transition={{ repeat: Infinity, duration: 2 }}
                     >
                       <div className="relative">
-                        <Avatar className="w-40 h-40 mx-auto mb-4">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-5xl">
+                        <Avatar className="w-24 h-24 sm:w-32 sm:h-32 md:w-40 md:h-40 mx-auto mb-3 sm:mb-4">
+                          <AvatarFallback className="bg-primary text-primary-foreground text-3xl sm:text-4xl md:text-5xl">
                             {participantInitials}
                           </AvatarFallback>
                         </Avatar>
                         {connectionStatus === 'connected' && (
                           <motion.div
-                            className="absolute inset-0 rounded-full border-4 border-primary/30"
+                            className="absolute inset-0 rounded-full border-2 sm:border-3 md:border-4 border-primary/30"
                             animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
                             transition={{ repeat: Infinity, duration: 1.5 }}
                           />
                         )}
                       </div>
-                      <h3 className="text-xl font-semibold mb-1">{participantName}</h3>
-                      <p className="text-muted-foreground">
+                      <h3 className="text-lg sm:text-xl font-semibold mb-1">{participantName}</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
                         {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
                       </p>
                     </motion.div>
                   </div>
                 )}
-
-                {/* Local video (picture-in-picture) */}
-                {consultationType === 'video' && (
-                  <motion.div
-                    drag
-                    dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
-                    className="absolute bottom-4 right-4 w-48 h-36 rounded-xl overflow-hidden bg-card shadow-lg border-2 border-background"
-                  >
-                    {isVideoEnabled ? (
-                      <video
-                        ref={localVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-cover mirror"
-                        style={{ transform: 'scaleX(-1)' }}
-                        onLoadedMetadata={(e) => {
-                          console.log('[LocalVideo] Metadata loaded, stream active');
-                        }}
-                        onPlay={() => {
-                          console.log('[LocalVideo] Video playing');
-                        }}
-                        onStalled={() => {
-                          console.warn('[LocalVideo] ⚠️ Video stalled');
-                        }}
-                        onSuspend={() => {
-                          console.warn('[LocalVideo] ⚠️ Video suspended');
-                        }}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-muted">
-                        <User className="w-12 h-12 text-muted-foreground" />
-                      </div>
-                    )}
-                    {!isAudioEnabled && (
-                      <div className="absolute bottom-2 left-2">
-                        <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5">
-                          <MicOff className="w-3 h-3" />
-                        </Badge>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
               </div>
             </div>
+          )}
+
+          {/* Local video (picture-in-picture) - Always visible when in video call, positioned absolutely */}
+          {consultationType === 'video' && isAdmitted && (
+            <motion.div
+              drag
+              dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+              className="fixed bottom-16 sm:bottom-20 md:bottom-4 right-2 sm:right-4 w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36 rounded-lg sm:rounded-xl overflow-hidden bg-card shadow-lg border sm:border-2 border-background z-40"
+            >
+              {isVideoEnabled ? (
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                  style={{ transform: 'scaleX(-1)' }}
+                  onLoadedMetadata={(e) => {
+                    console.log('[LocalVideo] Metadata loaded, stream active');
+                  }}
+                  onPlay={() => {
+                    console.log('[LocalVideo] Video playing');
+                  }}
+                  onStalled={() => {
+                    console.warn('[LocalVideo] ⚠️ Video stalled');
+                  }}
+                  onSuspend={() => {
+                    console.warn('[LocalVideo] ⚠️ Video suspended');
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-muted">
+                  <User className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 text-muted-foreground" />
+                </div>
+              )}
+              {!isAudioEnabled && (
+                <div className="absolute bottom-1 left-1">
+                  <Badge variant="destructive" className="text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5">
+                    <MicOff className="w-2 h-2 sm:w-3 sm:h-3" />
+                  </Badge>
+                </div>
+              )}
+            </motion.div>
           )}
 
           {/* Chat sidebar - Always visible for chat type, togglable for others */}
@@ -774,26 +859,26 @@ export function ConsultationRoom({
             {(isChatOpen || consultationType === 'chat') && (
               <motion.div
                 initial={consultationType === 'chat' ? { width: '100%', opacity: 1 } : { width: 0, opacity: 0 }}
-                animate={{ width: consultationType === 'chat' ? '100%' : 360, opacity: 1 }}
+                animate={{ width: consultationType === 'chat' ? '100%' : 280, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
-                className={`border-l border-border bg-card flex flex-col overflow-hidden ${consultationType === 'chat' ? 'w-full border-l-0' : ''}`}
+                className={`border-l border-border bg-card flex flex-col overflow-hidden text-sm sm:text-base ${consultationType === 'chat' ? 'w-full border-l-0' : ''}`}
               >
-                <div className="flex items-center justify-between p-4 border-b border-border">
-                  <h3 className="font-semibold">Chat</h3>
+                <div className="flex items-center justify-between p-2 sm:p-3 md:p-4 border-b border-border gap-2">
+                  <h3 className="font-semibold text-sm sm:text-base">Chat</h3>
                   {consultationType !== 'chat' && (
-                    <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)}>
-                      <X className="w-4 h-4" />
+                    <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)} className="h-8 w-8">
+                      <X className="w-3 h-3 sm:w-4 sm:h-4" />
                     </Button>
                   )}
                 </div>
 
-                <ScrollArea ref={chatScrollRef} className="flex-1 p-4">
+                <ScrollArea ref={chatScrollRef} className="flex-1 p-2 sm:p-3 md:p-4">
                   <div className="space-y-4">
                     {messages.length === 0 ? (
-                      <div className="text-center text-muted-foreground py-8">
-                        <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                        <p className="text-sm">No messages yet</p>
-                        <p className="text-xs">Send a message to start the conversation</p>
+                      <div className="text-center text-muted-foreground py-6 sm:py-8">
+                        <MessageSquare className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 mx-auto mb-2 sm:mb-3 opacity-50" />
+                        <p className="text-xs sm:text-sm">No messages yet</p>
+                        <p className="text-[10px] sm:text-xs">Send a message to start the conversation</p>
                       </div>
                     ) : (
                       messages.map((message) => (
@@ -803,14 +888,14 @@ export function ConsultationRoom({
                         >
                           <div className={`max-w-[80%] ${message.sender === 'user' ? 'order-1' : ''}`}>
                             <div
-                              className={`rounded-2xl px-4 py-2 ${message.sender === 'user'
+                              className={`rounded-xl sm:rounded-2xl px-2 sm:px-4 py-1 sm:py-2 ${message.sender === 'user'
                                 ? 'bg-primary text-primary-foreground rounded-br-sm'
                                 : 'bg-muted rounded-bl-sm'
                                 }`}
                             >
-                              <p className="text-sm">{message.content}</p>
+                              <p className="text-xs sm:text-sm break-words">{message.content}</p>
                             </div>
-                            <p className="text-[10px] text-muted-foreground mt-1 px-1">
+                            <p className="text-[8px] sm:text-[10px] text-muted-foreground mt-0.5 sm:mt-1 px-1">
                               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </p>
                           </div>
@@ -820,19 +905,19 @@ export function ConsultationRoom({
                   </div>
                 </ScrollArea>
 
-                <div className="p-4 border-t border-border">
+                <div className="p-2 sm:p-3 md:p-4 border-t border-border">
                   <form
                     onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
-                    className="flex gap-2"
+                    className="flex gap-1 sm:gap-2"
                   >
                     <Input
-                      placeholder="Type a message..."
+                      placeholder="Message..."
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
-                      className="flex-1"
+                      className="flex-1 text-xs sm:text-sm h-8 sm:h-10"
                     />
-                    <Button type="submit" size="icon" disabled={!newMessage.trim()}>
-                      <Send className="w-4 h-4" />
+                    <Button type="submit" size="icon" disabled={!newMessage.trim()} className="h-8 w-8 sm:h-10 sm:w-10">
+                      <Send className="w-3 h-3 sm:w-4 sm:h-4" />
                     </Button>
                   </form>
                 </div>
@@ -842,7 +927,7 @@ export function ConsultationRoom({
         </div>
 
         {/* Controls bar */}
-        <div className="flex items-center justify-center gap-3 p-4 border-t border-border bg-card">
+        <div className="flex items-center justify-center gap-1.5 sm:gap-2 md:gap-3 p-2 sm:p-3 md:p-4 border-t border-border bg-card overflow-x-auto">
           <TooltipProvider>
             {consultationType !== 'chat' && (
               <>
@@ -851,13 +936,13 @@ export function ConsultationRoom({
                     <Button
                       variant={isAudioEnabled ? 'secondary' : 'destructive'}
                       size="icon"
-                      className="w-12 h-12 rounded-full"
+                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
                       onClick={toggleAudio}
                     >
-                      {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                      {isAudioEnabled ? <Mic className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <MicOff className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
+                  <TooltipContent className="text-xs sm:text-sm">{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
                 </Tooltip>
 
                 {consultationType === 'video' && (
@@ -866,13 +951,13 @@ export function ConsultationRoom({
                       <Button
                         variant={isVideoEnabled ? 'secondary' : 'destructive'}
                         size="icon"
-                        className="w-12 h-12 rounded-full"
+                        className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
                         onClick={toggleVideo}
                       >
-                        {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+                        {isVideoEnabled ? <Video className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <VideoOff className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>{isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}</TooltipContent>
+                    <TooltipContent className="text-xs sm:text-sm"><span className="hidden sm:inline">Turn off camera</span><span className="sm:hidden">Camera</span></TooltipContent>
                   </Tooltip>
                 )}
 
@@ -881,13 +966,13 @@ export function ConsultationRoom({
                     <Button
                       variant={isSpeakerEnabled ? 'secondary' : 'destructive'}
                       size="icon"
-                      className="w-12 h-12 rounded-full"
+                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
                       onClick={() => setIsSpeakerEnabled(!isSpeakerEnabled)}
                     >
-                      {isSpeakerEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                      {isSpeakerEnabled ? <Volume2 className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <VolumeX className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</TooltipContent>
+                  <TooltipContent className="text-xs sm:text-sm"><span className="hidden sm:inline">{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</span><span className="sm:hidden">Speaker</span></TooltipContent>
                 </Tooltip>
 
                 <Tooltip>
@@ -895,16 +980,16 @@ export function ConsultationRoom({
                     <Button
                       variant={isChatOpen ? 'default' : 'secondary'}
                       size="icon"
-                      className="w-12 h-12 rounded-full"
+                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0 hidden sm:flex"
                       onClick={() => setIsChatOpen(!isChatOpen)}
                     >
-                      <MessageSquare className="w-5 h-5" />
+                      <MessageSquare className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Chat</TooltipContent>
+                  <TooltipContent className="text-xs sm:text-sm">Chat</TooltipContent>
                 </Tooltip>
 
-                <div className="w-px h-8 bg-border mx-2" />
+                <div className="w-px h-6 sm:h-8 bg-border mx-1 sm:mx-2 flex-shrink-0" />
               </>
             )}
 
@@ -913,13 +998,13 @@ export function ConsultationRoom({
                 <Button
                   variant="destructive"
                   size="icon"
-                  className="w-14 h-14 rounded-full"
+                  className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-full flex-shrink-0"
                   onClick={handleEndCall}
                 >
-                  <Phone className="w-6 h-6 rotate-[135deg]" />
+                  <Phone className="w-4.5 h-4.5 sm:w-5 sm:h-5 md:w-6 md:h-6 rotate-[135deg]" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>End Call</TooltipContent>
+              <TooltipContent className="text-xs sm:text-sm">End Call</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>

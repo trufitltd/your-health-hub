@@ -129,6 +129,14 @@ export class WebRTCService {
         if (this.onConnectedCallback) {
           this.onConnectedCallback();
         }
+      } else if (state === 'connecting' || (state as string) === 'checking') {
+        // Try fallback check if stuck in connecting/checking for more than 3 seconds
+        setTimeout(() => {
+          if (this.peerConnection?.connectionState === 'connecting' || (this.peerConnection?.connectionState as string) === 'checking') {
+            console.log('[WebRTC] 🔄 Checking for media flow despite connection state...');
+            this.checkFallbackConnection();
+          }
+        }, 3000);
       } else if (state === 'failed') {
         console.error('[WebRTC] ❌ Connection FAILED - network/firewall blocking P2P');
       } else if (state === 'disconnected') {
@@ -214,6 +222,7 @@ export class WebRTCService {
 
     let checksWithoutConnection = 0;
     let mediaFlowDetected = false;
+    let fallbackCheckAttempted = false;
 
     // Monitor connection state every 5 seconds
     const healthCheckInterval = setInterval(() => {
@@ -230,6 +239,13 @@ export class WebRTCService {
       if (connectionState !== 'connected') {
         checksWithoutConnection++;
         console.log(`📊 Connection Health Check (${checksWithoutConnection}): connection=${connectionState} ice=${iceConnectionState} signaling=${signalingState}`);
+        
+        // Try fallback check after 2 checks (10 seconds) without triggering callback yet
+        if (checksWithoutConnection === 2 && !fallbackCheckAttempted && !mediaFlowDetected) {
+          fallbackCheckAttempted = true;
+          console.log('[WebRTC] 📊 Attempting fallback connection check after 10 seconds stuck...');
+          this.checkFallbackConnection();
+        }
 
         // Try to get stats for better diagnostics
         this.peerConnection.getStats().then(stats => {
