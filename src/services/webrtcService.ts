@@ -4,12 +4,14 @@ export interface WebRTCSignal {
   id: string;
   session_id: string;
   sender_id: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   signal_data: any;
   created_at: string;
 }
 
 export class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
+  private localStream: MediaStream | null = null;
   private sessionId: string;
   private userId: string;
   private isInitiator: boolean;
@@ -23,6 +25,7 @@ export class WebRTCService {
   private peerReady = false;
   private remoteStream: MediaStream | null = null;
   private streamCallbackFired = false;
+  private pollInterval: NodeJS.Timeout | null = null;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
     this.sessionId = sessionId;
@@ -32,6 +35,7 @@ export class WebRTCService {
 
   async initializePeer(localStream: MediaStream) {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
+    this.localStream = localStream;
 
     // Configure multiple TURN servers for better network traversal
     const iceServers = [
@@ -56,7 +60,7 @@ export class WebRTCService {
     });
 
     // Track if we've seen remote tracks (indicating connection is working)
-    let remoteTracksReceived = false;
+    // const remoteTracksReceived = false;
 
     // Add local stream
     localStream.getTracks().forEach((track, index) => {
@@ -348,7 +352,7 @@ export class WebRTCService {
     })(this.peerConnection.onconnectionstatechange);
   }
 
-  private async sendSignal(signalData: any) {
+  private async sendSignal(signalData: Record<string, unknown>) {
     console.log('Sending signal:', signalData.type);
     const { error } = await supabase
       .from('webrtc_signals')
@@ -437,19 +441,19 @@ export class WebRTCService {
 
     // Poll immediately and then every 3 seconds (slower to reduce load)
     poll();
-    (this as any).pollInterval = setInterval(poll, 3000);
+    this.pollInterval = setInterval(poll, 3000);
   }
 
   private stopPolling() {
-    if ((this as any).pollInterval) {
-      clearInterval((this as any).pollInterval);
-      (this as any).pollInterval = null;
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
     }
   }
 
 
 
-  private async handleSignal(signalData: any) {
+  private async handleSignal(signalData: Record<string, unknown>) {
     if (!this.peerConnection) return;
 
     console.log('🔄 Handling signal:', signalData.type, 'Signaling state:', this.peerConnection.signalingState, 'Connection state:', this.peerConnection.connectionState);
@@ -457,13 +461,14 @@ export class WebRTCService {
     try {
       if (signalData.type === 'offer') {
         console.log('🔄 Received offer, creating answer');
-        if (signalData.offer.sdp) {
-          console.log('🔄 Offer SDP length:', signalData.offer.sdp.length, 'type:', signalData.offer.type);
+        const offer = signalData.offer as RTCSessionDescriptionInit;
+        if (offer.sdp) {
+          console.log('🔄 Offer SDP length:', offer.sdp.length, 'type:', offer.type);
         }
         // Only process offer if we don't already have a remote description
         if (!this.peerConnection.remoteDescription) {
           try {
-            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
+            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
             console.log('🔄 Remote description set successfully, signaling state:', this.peerConnection.signalingState);
             await this.flushCandidateQueue(); // Flush any queued candidates
             const answer = await this.peerConnection.createAnswer();
@@ -479,14 +484,15 @@ export class WebRTCService {
         }
       } else if (signalData.type === 'answer') {
         console.log('🔄 Received answer');
-        if (signalData.answer.sdp) {
-          console.log('🔄 Answer SDP length:', signalData.answer.sdp.length, 'type:', signalData.answer.type);
+        const answer = signalData.answer as RTCSessionDescriptionInit;
+        if (answer.sdp) {
+          console.log('🔄 Answer SDP length:', answer.sdp.length, 'type:', answer.type);
         }
         // Only process answer if we have a local description (sent an offer)
         if (this.peerConnection.localDescription) {
           if (!this.peerConnection.remoteDescription) {
             try {
-              await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.answer));
+              await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
               console.log('🔄 Remote description set successfully, signaling state:', this.peerConnection.signalingState);
               await this.flushCandidateQueue(); // Flush any queued candidates
             } catch (err) {
@@ -499,16 +505,17 @@ export class WebRTCService {
         } else {
           // Queue answer until local description is set
           console.log('🔄 No local description yet, queueing answer. Local state:', this.peerConnection.signalingState);
-          this.answerQueue.push(signalData.answer);
+          this.answerQueue.push(answer);
         }
       } else if (signalData.type === 'ice-candidate') {
         console.log('🔄 Received ICE candidate');
+        const candidateData = signalData.candidate as RTCIceCandidateInit | null;
         // Fix 1: Buffer ICE until remote description is set
         if (this.peerConnection.remoteDescription) {
           try {
-            if (signalData.candidate && signalData.candidate.candidate) {
-              await this.peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-              console.log('🔄 ICE candidate added successfully:', signalData.candidate.candidate.substring(0, 50));
+            if (candidateData && candidateData.candidate) {
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidateData));
+              console.log('🔄 ICE candidate added successfully:', candidateData.candidate.substring(0, 50));
             } else {
               console.log('🔄 ICE candidate is null/empty (end of candidates)');
             }
@@ -517,8 +524,8 @@ export class WebRTCService {
           }
         } else {
           console.log('🔄 Remote description not set yet, queuing candidate');
-          if (signalData.candidate && signalData.candidate.candidate) {
-            this.candidateQueue.push(signalData.candidate);
+          if (candidateData && candidateData.candidate) {
+            this.candidateQueue.push(candidateData as RTCIceCandidate);
             console.log('🔄 Queued. Total queued candidates:', this.candidateQueue.length);
           }
         }
@@ -620,6 +627,10 @@ export class WebRTCService {
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
+    }
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
     }
   }
 }
