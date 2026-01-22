@@ -165,6 +165,7 @@ const appointments = [
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, role } = useAuth();
   const navigate = useNavigate();
 
@@ -341,7 +342,10 @@ const DoctorPortal = () => {
                 </span>
               </Button>
 
-              <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              >
                 <Avatar className="w-9 h-9">
                   <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
@@ -350,19 +354,19 @@ const DoctorPortal = () => {
                   <p className="text-sm font-medium">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
                   <p className="text-xs text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
                 </div>
-              </div>
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid lg:grid-cols-4 gap-8">
+      <div className="container mx-auto px-4 py-4 sm:py-6 md:py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className="lg:col-span-1">
-            <Card className="sticky top-24">
-              <CardContent className="p-4">
-                <nav className="space-y-1">
+          <aside className={`md:col-span-1 ${sidebarOpen ? 'block' : 'hidden md:block'} fixed md:static inset-0 md:inset-auto top-20 z-40 bg-background md:bg-transparent`}>
+            <Card className="md:sticky md:top-24 rounded-none md:rounded-lg">
+              <CardContent className="p-3 md:p-4">
+                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto md:max-h-none">
                   {[
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
                     { id: 'schedule', label: 'My Appointments', icon: Calendar },
@@ -376,8 +380,11 @@ const DoctorPortal = () => {
                   ].map((item) => (
                     <button
                       key={item.id}
-                      onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === item.id
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setSidebarOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                         }`}
@@ -411,19 +418,19 @@ const DoctorPortal = () => {
           </aside>
 
           {/* Main Content */}
-          <main className="lg:col-span-3 space-y-6">
+          <main className="md:col-span-3 space-y-4 md:space-y-6">
             {/* Welcome Banner */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="rounded-2xl gradient-primary p-6 md:p-8 text-primary-foreground"
+              className="rounded-lg md:rounded-2xl gradient-primary p-4 md:p-8 text-primary-foreground"
             >
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                 <div>
-                  <h1 className="text-2xl md:text-3xl font-bold mb-2">
+                  <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
                     Welcome back, Dr {displayName.split(' ')[0]}! 👋
                   </h1>
-                  <p className="text-primary-foreground/80">
+                  <p className="text-xs sm:text-sm text-primary-foreground/80">
                     You have {todaySchedule.filter(s => s.status === 'upcoming').length} consultations scheduled today.
                   </p>
                 </div>
@@ -437,7 +444,7 @@ const DoctorPortal = () => {
             </motion.div>
 
             {/* Quick Stats */}
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4">
               {[
                 { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
                 { label: 'This Month', value: stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
