@@ -75,37 +75,21 @@ export class WebRTCService {
     this.peerConnection.ontrack = (event) => {
       console.log('🎥 Received remote track:', event.track.kind, 'enabled:', event.track.enabled, 'readyState:', event.track.readyState);
       
-      // Create or use existing remote stream
       if (!this.remoteStream) {
         this.remoteStream = new MediaStream();
         console.log('🎥 Creating new remote MediaStream');
       }
       
-      // Add track to remote stream
       this.remoteStream.addTrack(event.track);
       console.log('🎥 Added track to remote stream, total tracks:', this.remoteStream.getTracks().length);
-      console.log('🎥 Remote stream ID:', this.remoteStream.id);
-      console.log('🎥 Tracks:', this.remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
       
-      // Check if we now have both audio and video
-      const tracks = this.remoteStream.getTracks();
-      const hasAudio = tracks.some(t => t.kind === 'audio');
-      const hasVideo = tracks.some(t => t.kind === 'video');
-      
-      // Only call callback once we have at least video, or when we get a new track
-      if (this.onStreamCallback) {
-        console.log('🎥 Calling onStream callback with remote stream (audio:', hasAudio, ', video:', hasVideo, ')');
+      // Only call callback once if track is enabled and live
+      if (event.track.enabled && event.track.readyState === 'live' && this.onStreamCallback && !this.streamCallbackFired) {
+        console.log('🎥 Calling onStream callback - track is enabled and live');
+        this.streamCallbackFired = true;
         this.onStreamCallback(this.remoteStream);
       } else {
-        console.warn('🎥 WARNING: onStreamCallback not set!');
-      }
-      
-      if (hasAudio && hasVideo) {
-        console.log('✅ Got both audio and video tracks - connection is working!');
-        // Check connection state
-        if (this.peerConnection?.connectionState !== 'connected') {
-          console.log('⚠️ Note: Connection state is still', this.peerConnection?.connectionState, 'but media is flowing');
-        }
+        console.log('🎥 Not calling callback - enabled:', event.track.enabled, 'readyState:', event.track.readyState, 'already fired:', this.streamCallbackFired);
       }
     };
 
