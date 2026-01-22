@@ -166,7 +166,7 @@ const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, role } = useAuth();
+  const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
 
   // Fetch appointments for this doctor
@@ -406,12 +406,17 @@ const DoctorPortal = () => {
                 </nav>
 
                 <div className="mt-6 pt-6 border-t border-border">
-                  <Link to="/">
-                    <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground">
-                      <LogOut className="w-5 h-5" />
-                      Sign Out
-                    </Button>
-                  </Link>
+                  <Button 
+                    onClick={async () => {
+                      await signOut();
+                      navigate('/');
+                    }}
+                    variant="ghost" 
+                    className="w-full justify-start gap-3 text-muted-foreground"
+                  >
+                    <LogOut className="w-5 h-5" />
+                    Sign Out
+                  </Button>
                 </div>
               </CardContent>
             </Card>
