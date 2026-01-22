@@ -1,19 +1,22 @@
 # WebRTC Remote Video Streaming Fix
 
 ## Problem
+
 Remote video was not streaming between doctor and patient in video calls. Both participants could connect but the remote video element remained empty.
 
 ## Root Causes Identified and Fixed
 
 ### 1. **Improper Remote Stream Handling**
+
 **Issue**: The `ontrack` callback was directly passing `event.streams[0]` which could be empty or undefined.
 
 **Fix**: Created a dedicated `remoteStream` MediaStream object that properly collects all incoming tracks:
+
 ```typescript
 const remoteStream = new MediaStream();
 
 this.peerConnection.ontrack = (event) => {
-  if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+  if (!remoteStream.getTracks().some((t) => t.id === event.track.id)) {
     remoteStream.addTrack(event.track);
   }
   if (this.onStreamCallback && remoteStream.getTracks().length > 0) {
@@ -23,46 +26,53 @@ this.peerConnection.ontrack = (event) => {
 ```
 
 ### 2. **Signaling State Validation Issues**
+
 **Issue**: The offer handler was checking for `signalingState === 'stable'` but WebRTC connections don't necessarily start in stable state after initialization.
 
 **Fix**: Removed unnecessary state checks for offer handling and added proper RTCSessionDescription wrapping:
+
 ```typescript
-if (signalData.type === 'offer') {
+if (signalData.type === "offer") {
   await this.peerConnection.setRemoteDescription(
-    new RTCSessionDescription(signalData.offer)
+    new RTCSessionDescription(signalData.offer),
   );
   const answer = await this.peerConnection.createAnswer();
   await this.peerConnection.setLocalDescription(answer);
-  await this.sendSignal({ type: 'answer', answer });
+  await this.sendSignal({ type: "answer", answer });
 }
 ```
 
 ### 3. **ICE Candidate Wrapping**
+
 **Issue**: ICE candidates weren't being wrapped in `RTCIceCandidate` objects.
 
 **Fix**: Properly wrap candidates:
+
 ```typescript
 await this.peerConnection.addIceCandidate(
-  new RTCIceCandidate(signalData.candidate)
+  new RTCIceCandidate(signalData.candidate),
 );
 ```
 
 ### 4. **Video Playback Not Triggered**
+
 **Issue**: The remote video element had `autoPlay` but wasn't actively calling `.play()` with proper error handling.
 
 **Fix**: Explicitly call play() with retry logic:
+
 ```typescript
-remoteVideoRef.current.play().catch(e => {
-  console.warn('Remote video autoplay failed:', e);
+remoteVideoRef.current.play().catch((e) => {
+  console.warn("Remote video autoplay failed:", e);
   setTimeout(() => {
-    remoteVideoRef.current?.play().catch(err => 
-      console.error('Retry play failed:', err)
-    );
+    remoteVideoRef.current
+      ?.play()
+      .catch((err) => console.error("Retry play failed:", err));
   }, 500);
 });
 ```
 
 ### 5. **Video Element Configuration**
+
 **Issue**: Missing background styling and incomplete video element attributes.
 
 **Fix**: Added `backgroundColor: '#000'` to prevent white flash while streaming loads.
@@ -100,6 +110,7 @@ remoteVideoRef.current.play().catch(e => {
 ## Debugging Tips
 
 If issues persist:
+
 1. Check browser console for WebRTC errors
 2. Verify microphone/camera permissions are granted
 3. Check STUN server connectivity (`stun:stun.l.google.com:19302`)
