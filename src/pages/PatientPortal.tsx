@@ -151,6 +151,7 @@ const notifications = [
 
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, signOut } = useAuth();
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const navigate = useNavigate();
@@ -441,7 +442,10 @@ const PatientPortal = () => {
                 </span>
               </Button>
 
-              <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              >
                 <Avatar className="w-9 h-9">
                   <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
@@ -450,19 +454,19 @@ const PatientPortal = () => {
                   <p className="text-sm font-medium">{displayName}</p>
                   <p className="text-xs text-muted-foreground">Patient</p>
                 </div>
-              </div>
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-8">
-        <div className="grid lg:grid-cols-4 gap-8">
+      <div className="container mx-auto px-4 py-4 sm:py-6 md:py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className="lg:col-span-1">
-            <Card className="sticky top-24">
-              <CardContent className="p-4">
-                <nav className="space-y-1">
+          <aside className={`md:col-span-1 ${sidebarOpen ? 'block' : 'hidden md:block'} fixed md:static inset-0 md:inset-auto top-20 z-40 bg-background md:bg-transparent`}>
+            <Card className="md:sticky md:top-24 rounded-none md:rounded-lg">
+              <CardContent className="p-3 md:p-4">
+                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto md:max-h-none">
                   {[
                     { id: 'overview', label: 'Overview', icon: Activity },
                     { id: 'appointments', label: 'Appointments', icon: Calendar },
@@ -474,8 +478,11 @@ const PatientPortal = () => {
                   ].map((item) => (
                     <button
                       key={item.id}
-                      onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === item.id
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setSidebarOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                         }`}
@@ -501,19 +508,19 @@ const PatientPortal = () => {
           </aside>
 
           {/* Main Content */}
-          <main className="lg:col-span-3 space-y-6">
+          <main className="md:col-span-3 space-y-4 md:space-y-6">
             {/* Welcome Banner */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="rounded-2xl gradient-primary p-6 md:p-8 text-primary-foreground"
+              className="rounded-lg md:rounded-2xl gradient-primary p-4 md:p-8 text-primary-foreground"
             >
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                 <div>
-                  <h1 className="text-2xl md:text-3xl font-bold mb-2">
+                  <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
                     Welcome back, {displayName.split(' ')[0]}! 👋
                   </h1>
-                  <p className="text-primary-foreground/80">
+                  <p className="text-xs sm:text-sm text-primary-foreground/80">
                     You have {appointments.filter(apt => {
                       const appointmentDate = new Date(apt.date);
                       const today = new Date();
@@ -522,9 +529,10 @@ const PatientPortal = () => {
                     }).length} upcoming appointments.
                   </p>
                 </div>
-                <Button onClick={openBooking} variant="secondary" size="lg" className="gap-2">
-                  <Plus className="w-5 h-5" />
-                  Book Appointment
+                <Button onClick={openBooking} variant="secondary" size="sm" className="gap-1 text-xs sm:text-sm">
+                  <Plus className="w-4 sm:w-5 h-4 sm:h-5" />
+                  <span className="hidden sm:inline">Book Appointment</span>
+                  <span className="sm:hidden">Book</span>
                 </Button>
               </div>
             </motion.div>
