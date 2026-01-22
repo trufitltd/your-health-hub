@@ -6,15 +6,15 @@ import { supabase } from '@/integrations/supabase/client';
 export const doctorSyncService = {
   /**
    * Manually sync a doctor from auth.users to doctors table
-   * Called automatically on signup, but can be used manually if needed
+   * Note: This requires the user to be authenticated as the doctor
    */
   async syncDoctorProfile(userId: string): Promise<boolean> {
     try {
-      // Get user data from auth
-      const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
+      // Get current user data
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
       
-      if (userError || !user) {
-        console.error('User not found:', userError);
+      if (userError || !user || user.id !== userId) {
+        console.error('User not found or mismatch:', userError);
         return false;
       }
 
@@ -52,40 +52,11 @@ export const doctorSyncService = {
 
   /**
    * Sync all doctors from auth to doctors table
-   * Useful for initial setup or recovery
+   * Note: This requires admin privileges - should be called from edge function
    */
   async syncAllDoctors(): Promise<{ success: number; failed: number }> {
-    try {
-      // Get all doctor users from auth
-      const { data: { users }, error: usersError } = await supabase.auth.admin.listUsers();
-
-      if (usersError || !users) {
-        console.error('Error fetching users:', usersError);
-        return { success: 0, failed: 0 };
-      }
-
-      // Filter doctors
-      const doctors = users.filter(u => u.user_metadata?.role === 'doctor');
-
-      let success = 0;
-      let failed = 0;
-
-      // Sync each doctor
-      for (const doctor of doctors) {
-        const synced = await this.syncDoctorProfile(doctor.id);
-        if (synced) {
-          success++;
-        } else {
-          failed++;
-        }
-      }
-
-      console.log(`Sync complete: ${success} success, ${failed} failed`);
-      return { success, failed };
-    } catch (error) {
-      console.error('Error in syncAllDoctors:', error);
-      return { success: 0, failed: 0 };
-    }
+    console.warn('syncAllDoctors requires admin privileges - use edge function instead');
+    return { success: 0, failed: 0 };
   },
 
   /**
@@ -127,7 +98,7 @@ export const doctorSyncService = {
   /**
    * Update doctor profile
    */
-  async updateDoctorProfile(doctorId: string, updates: any) {
+  async updateDoctorProfile(doctorId: string, updates: Record<string, unknown>) {
     const { data, error } = await supabase
       .from('doctors')
       .update({
@@ -216,7 +187,6 @@ export const doctorSyncService = {
       .single();
 
     if (error && error.code === 'PGRST116') {
-      // Not found
       return false;
     }
 
