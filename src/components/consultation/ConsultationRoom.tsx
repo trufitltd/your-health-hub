@@ -278,38 +278,12 @@ export function ConsultationRoom({
         const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
         webrtc.onStream((remoteStream) => {
-          console.log('[ConsultationRoom] 🎥 Remote stream received:', {
-            tracks: remoteStream.getTracks().length,
-            videoTracks: remoteStream.getVideoTracks().length,
-            audioTracks: remoteStream.getAudioTracks().length
-          });
-          
-          // Set video stream
           if (remoteVideoRef.current) {
-            console.log('[ConsultationRoom] 🎥 Setting remote video srcObject');
             remoteVideoRef.current.srcObject = remoteStream;
-            // Explicitly play with retry
-            remoteVideoRef.current.play().catch((e) => {
-              console.warn('[ConsultationRoom] 🎥 Video autoplay failed:', e);
-              setTimeout(() => {
-                remoteVideoRef.current?.play().catch((err) => 
-                  console.error('[ConsultationRoom] 🎥 Retry play failed:', err)
-                );
-              }, 500);
-            });
-          } else {
-            console.warn('[ConsultationRoom] ⚠️ remoteVideoRef.current is null!');
           }
-          
-          // Set audio stream
           if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
-            console.log('[ConsultationRoom] 🔊 Setting remote audio srcObject');
             remoteAudioRef.current.srcObject = remoteStream;
-            remoteAudioRef.current.play().catch((e) => 
-              console.warn('[ConsultationRoom] 🔊 Audio autoplay failed:', e)
-            );
           }
-          
           setHasRemoteStream(true);
         });
 
@@ -360,35 +334,12 @@ export function ConsultationRoom({
         const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
         webrtc.onStream((remoteStream) => {
-          console.log('[ConsultationRoom] 🎥 Remote stream received (patient):', {
-            tracks: remoteStream.getTracks().length,
-            videoTracks: remoteStream.getVideoTracks().length,
-            audioTracks: remoteStream.getAudioTracks().length
-          });
-          
           if (remoteVideoRef.current) {
-            console.log('[ConsultationRoom] 🎥 Setting remote video srcObject (patient)');
             remoteVideoRef.current.srcObject = remoteStream;
-            remoteVideoRef.current.play().catch((e) => {
-              console.warn('[ConsultationRoom] 🎥 Video autoplay failed (patient):', e);
-              setTimeout(() => {
-                remoteVideoRef.current?.play().catch((err) => 
-                  console.error('[ConsultationRoom] 🎥 Retry play failed (patient):', err)
-                );
-              }, 500);
-            });
-          } else {
-            console.warn('[ConsultationRoom] ⚠️ remoteVideoRef.current is null (patient)!');
           }
-          
           if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
-            console.log('[ConsultationRoom] 🔊 Setting remote audio srcObject (patient)');
             remoteAudioRef.current.srcObject = remoteStream;
-            remoteAudioRef.current.play().catch((e) => 
-              console.warn('[ConsultationRoom] 🔊 Audio autoplay failed (patient):', e)
-            );
           }
-          
           setHasRemoteStream(true);
         });
 
@@ -725,24 +676,14 @@ export function ConsultationRoom({
               <div className="relative w-full h-full flex items-center justify-center">
                 {/* Remote video (main view) */}
                 <div className="relative w-full h-full max-w-5xl rounded-2xl overflow-hidden bg-[#252542]">
-                  {/* Always render video element so ref is available */}
-                  <video
-                    ref={remoteVideoRef}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-cover"
-                    style={{ 
-                      display: hasRemoteStream ? 'block' : 'none',
-                      backgroundColor: '#000'
-                    }}
-                    onLoadedMetadata={() => console.log('[ConsultationRoom] 🎥 Remote video metadata loaded')}
-                    onPlay={() => console.log('[ConsultationRoom] 🎥 Remote video playing')}
-                    onCanPlay={() => console.log('[ConsultationRoom] 🎥 Remote video can play')}
-                    onStalled={() => console.warn('[ConsultationRoom] ⚠️ Remote video stalled')}
-                    onError={(e) => console.error('[ConsultationRoom] ❌ Remote video error:', e)}
-                  />
-                  {/* Fallback avatar when no remote stream */}
-                  {!hasRemoteStream && (
+                  {hasRemoteStream ? (
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
                     <div className="w-full h-full flex items-center justify-center">
                       <div className="text-center">
                         <Avatar className="w-24 h-24 sm:w-32 sm:h-32 mx-auto mb-4">
