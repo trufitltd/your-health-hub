@@ -415,8 +415,8 @@ const PatientPortal = () => {
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
       <header className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="container mx-auto px-4">
-          <div className="flex items-center justify-between h-16">
+        <div className="container mx-auto px-2 sm:px-4">
+          <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2">
               <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
                 <Heart className="w-5 h-5 text-primary-foreground" />
@@ -427,11 +427,11 @@ const PatientPortal = () => {
             </Link>
 
             <div className="flex items-center gap-4">
-              <div className="relative hidden md:block">
+              <div className="relative hidden sm:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   placeholder="Search doctors, appointments..."
-                  className="pl-10 w-64 bg-muted/50"
+                  className="pl-10 w-48 sm:w-64 bg-muted/50"
                 />
               </div>
 
@@ -450,7 +450,7 @@ const PatientPortal = () => {
                   <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
                 </Avatar>
-                <div className="hidden md:block">
+                <div className="hidden sm:block">
                   <p className="text-sm font-medium">{displayName}</p>
                   <p className="text-xs text-muted-foreground">Patient</p>
                 </div>
@@ -460,13 +460,13 @@ const PatientPortal = () => {
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-4 sm:py-6 md:py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-8">
+      <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-6 md:py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className={`md:col-span-1 ${sidebarOpen ? 'block' : 'hidden md:block'} fixed md:static inset-0 md:inset-auto top-20 z-40 bg-background md:bg-transparent`}>
-            <Card className="md:sticky md:top-24 rounded-none md:rounded-lg">
-              <CardContent className="p-3 md:p-4">
-                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto md:max-h-none">
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+            <Card className="lg:sticky lg:top-24 rounded-lg">
+              <CardContent className="p-3 sm:p-4">
+                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
                   {[
                     { id: 'overview', label: 'Overview', icon: Activity },
                     { id: 'appointments', label: 'Appointments', icon: Calendar },
@@ -508,7 +508,7 @@ const PatientPortal = () => {
           </aside>
 
           {/* Main Content */}
-          <main className="md:col-span-3 space-y-4 md:space-y-6">
+          <main className="lg:col-span-3 space-y-4 md:space-y-6">
             {/* Welcome Banner */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -617,7 +617,7 @@ const PatientPortal = () => {
             </Dialog>
 
             {/* Quick Stats */}
-            <div className="grid sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {healthMetrics.map((metric, index) => (
                 <motion.div
                   key={metric.label}
@@ -692,8 +692,8 @@ const PatientPortal = () => {
                           today.setHours(0, 0, 0, 0);
                           return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
                         }).slice(0, 3).map((apt) => (
-                          <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
-                            <div className="flex items-center gap-4">
+                          <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
+                            <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <Avatar>
                                 <AvatarImage src="" />
                                 <AvatarFallback className="bg-primary/10 text-primary">
@@ -709,7 +709,7 @@ const PatientPortal = () => {
                                 <p className="text-sm text-muted-foreground">{apt.type}</p>
                               </div>
                             </div>
-                            <div className="flex flex-col items-end gap-2">
+                            <div className="flex flex-col gap-2">
                               <div className="flex items-center gap-2">
                                 <Calendar className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
@@ -727,6 +727,7 @@ const PatientPortal = () => {
                                   status={apt.status}
                                   variant="default"
                                   size="sm"
+                                  className="w-full sm:w-auto"
                                 />
                               )}
                             </div>
@@ -824,8 +825,8 @@ const PatientPortal = () => {
                     ) : (
                       <div className="space-y-4">
                         {appointments.map((apt) => (
-                          <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
-                            <div className="flex items-center gap-4">
+                          <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
+                            <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <Avatar className="w-12 h-12">
                                 <AvatarImage src="" />
                                 <AvatarFallback className="bg-primary/10 text-primary">
@@ -851,8 +852,8 @@ const PatientPortal = () => {
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                              <div className="text-right">
+                            <div className="flex flex-col gap-3">
+                              <div className="text-left sm:text-right">
                                 <div className="flex items-center gap-2 mb-2">
                                   {(apt as unknown as { type?: string }).type === 'Video' ? (
                                     <Badge variant="outline" className="gap-1">
@@ -870,24 +871,27 @@ const PatientPortal = () => {
                                 </div>
                                 {getStatusBadge(apt.status)}
                               </div>
-                              <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                Reschedule
-                              </Button>
-                              {apt.status === 'pending' && (
-                                <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
-                                  Cancel
+                              <div className="flex flex-col gap-2 w-full sm:w-auto">
+                                <Button size="sm" variant="outline" onClick={() => initReschedule(apt)} className="w-full">
+                                  Reschedule
                                 </Button>
-                              )}
-                              {(apt.status === 'confirmed' || apt.status === 'pending') && (
-                                <JoinConsultationButton
-                                  appointmentId={apt.id}
-                                  consultationType={apt.type}
-                                  participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                                  status={apt.status}
-                                  variant="default"
-                                  size="sm"
-                                />
-                              )}
+                                {apt.status === 'pending' && (
+                                  <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)} className="w-full">
+                                    Cancel
+                                  </Button>
+                                )}
+                                {(apt.status === 'confirmed' || apt.status === 'pending') && (
+                                  <JoinConsultationButton
+                                    appointmentId={apt.id}
+                                    consultationType={apt.type}
+                                    participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                    status={apt.status}
+                                    variant="default"
+                                    size="sm"
+                                    className="w-full"
+                                  />
+                                )}
+                              </div>
                             </div>
                           </div>
                         ))}
