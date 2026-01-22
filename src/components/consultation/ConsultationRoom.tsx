@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
-  Maximize2, Minimize2, Settings, Volume2, VolumeX,
-  Send, Paperclip, MoreVertical, X, User, AlertCircle, Camera
+  Settings, Send, X, User, AlertCircle, Camera
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,7 +16,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage as ConsultationMessageType } from '@/services/consultationService';
 import { supabase } from '@/integrations/supabase/client';
-import { WebRTCService } from '@/services/webrtcService';
+import { WebRTCService, type WebRTCSignal } from '@/services/webrtcService';
+import { PatientLobby } from './PatientLobby';
 
 interface Message {
   id: string;
@@ -47,9 +47,6 @@ export function ConsultationRoom({
   const navigate = useNavigate();
   const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
   const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
-  const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(consultationType !== 'chat');
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(consultationType === 'chat');
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [callDuration, setCallDuration] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -61,6 +58,7 @@ export function ConsultationRoom({
   const [webrtcService, setWebrtcService] = useState<WebRTCService | null>(null);
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [isPatientWaiting, setIsPatientWaiting] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(consultationType === 'chat');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -68,10 +66,12 @@ export function ConsultationRoom({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
-  const lobbyChannelRef = useRef<any>(null);
-  const wakeLockRef = useRef<any>(null);
+  const lobbyChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
-  // Initialize consultation session and load existing messages
+  const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+
+  // Initialize consultation session
   useEffect(() => {
     const initializeSession = async () => {
       if (!user || !appointmentId) {
@@ -81,22 +81,18 @@ export function ConsultationRoom({
       }
 
       try {
-        // Get or create consultation session
         let session = await consultationService.getSessionByAppointmentId(appointmentId);
         let patientId: string | null = null;
         let doctorId: string | null = null;
 
         if (!session) {
-          // Get appointment data to find the real patient and doctor IDs
           const { data: appointmentData, error: appointmentError } = await supabase
             .from('appointments')
             .select('patient_id, doctor_id')
             .eq('id', appointmentId)
             .single();
 
-          if (appointmentError) {
-            throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
-          }
+          if (appointmentError) throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
 
           patientId = appointmentData.patient_id;
           doctorId = appointmentData.doctor_id;
@@ -108,108 +104,78 @@ export function ConsultationRoom({
             consultationType
           );
         } else {
-          // If session already exists, get patient/doctor IDs from the session
           patientId = session.patient_id;
           doctorId = session.doctor_id;
         }
 
-        // Initialize WebRTC based on role and admission status
         if (participantRole === 'doctor') {
           setIsAdmitted(true);
-          console.log('[Doctor] Doctor joined, looking for patient waiting signal. patientId:', patientId);
-          // Doctor should check if patient is already waiting
           if (patientId) {
-            try {
-              const { data: existingSignals, error: signalError } = await supabase
-                .from('webrtc_signals')
-                .select('*')
-                .eq('session_id', session.id)
-                .eq('sender_id', patientId);
-              
-              console.log('[Doctor] Query result - signals:', existingSignals?.length, 'error:', signalError);
-              
-              if (signalError) {
-                console.error('[Doctor] Error querying signals:', signalError);
-              }
-              
-              if (existingSignals && existingSignals.length > 0) {
-                console.log('[Doctor] Found signals from patient:', existingSignals.map((s: any) => ({ type: s.signal_data?.type, created_at: s.created_at })));
-                const joinLobbySignal = existingSignals.find((sig: any) => sig.signal_data?.type === 'join_lobby');
-                if (joinLobbySignal) {
-                  console.log('[Lobby] Found existing patient waiting signal - BUT waiting for real-time confirmation');
-                  // Don't set isPatientWaiting here - wait for real-time signal
-                  // This prevents showing old signals from previous consultations
-                } else {
-                  console.log('[Doctor] No join_lobby signals found. Signal types:', existingSignals.map((s: any) => s.signal_data?.type));
-                }
-              } else {
-                console.log('[Doctor] No existing signals from patient yet');
-              }
-            } catch (error) {
-              console.error('[Doctor] Exception querying signals:', error);
-            }
-          } else {
-            console.log('[Doctor] patientId is null, cannot query for patient signals');
-          }
-        }
-
-        // Subscribe to lobby signals
-        const lobbyChannel = supabase.channel(`lobby_${session.id}`);
-        lobbyChannelRef.current = lobbyChannel;
-        lobbyChannel
-          .on('postgres_changes', {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'webrtc_signals',
-            filter: `session_id=eq.${session.id}`
-          }, (payload) => {
-            console.log('[Lobby RT] New signal received:', { sender: payload.new.sender_id, type: payload.new.signal_data?.type, role: participantRole });
-            const signal = payload.new;
-            if (signal.sender_id !== user.id) {
-              console.log('[Lobby RT] Signal is from other participant');
-              if (signal.signal_data?.type === 'join_lobby' && participantRole === 'doctor') {
-                console.log('[Lobby RT] 🎯 Patient joined! Showing admit button');
+            const { data: existingSignals } = await supabase
+              .from('webrtc_signals')
+              .select('*')
+              .eq('session_id', session.id)
+              .eq('sender_id', patientId);
+            
+            if (existingSignals && existingSignals.length > 0) {
+              const joinLobbySignal = existingSignals.find((sig: WebRTCSignal) => sig.signal_data?.type === 'join_lobby');
+              if (joinLobbySignal) {
                 setIsPatientWaiting(true);
                 toast({
                   title: 'Patient Waiting',
-                  description: `${participantName} is waiting in the lobby.`,
+                  description: 'A patient is in the waiting room and ready to be admitted.',
                 });
-              } else if (signal.signal_data?.type === 'admit' && participantRole === 'patient') {
-                console.log('[Lobby RT] Patient admitted by doctor');
-                setIsAdmitted(true);
-                toast({
-                  title: 'Admitted',
-                  description: 'The doctor has admitted you to the call.',
-                });
-              } else {
-                console.log('[Lobby RT] Signal not matching conditions', { type: signal.signal_data?.type, role: participantRole });
               }
-            } else {
-              console.log('[Lobby RT] Signal is from self, ignoring');
             }
-          })
-          .subscribe((status) => {
-            console.log('[Lobby RT] Channel subscription status:', status);
-          });
+          }
+        }
 
-        // If patient, announce presence in lobby
+        // Set up lobby signal listener
+        const lobbyChannel = supabase.channel(`lobby:${session.id}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'webrtc_signals',
+              filter: `session_id=eq.${session.id}`
+            },
+            (payload: { new: WebRTCSignal }) => {
+              const signal = payload.new;
+              if (signal.sender_id !== user?.id) {
+                if (participantRole === 'doctor' && signal.signal_data?.type === 'join_lobby') {
+                  setIsPatientWaiting(true);
+                  toast({
+                    title: 'Patient Waiting',
+                    description: 'A patient has joined the waiting room.',
+                  });
+                } else if (participantRole === 'patient' && signal.signal_data?.type === 'admit_patient') {
+                  setIsAdmitted(true);
+                  toast({
+                    title: 'Admitted',
+                    description: 'The doctor has admitted you to the call.',
+                  });
+                } else if (participantRole === 'doctor' && signal.signal_data?.type === 'patient_admitted_acknowledge') {
+                  setIsPatientWaiting(false);
+                }
+              }
+            }
+          )
+          .subscribe();
+
+        lobbyChannelRef.current = lobbyChannel;
+
         if (participantRole === 'patient') {
-          console.log('[Patient] Sending join_lobby signal. sessionId:', session.id, 'userId:', user.id);
           const { error: insertError } = await supabase.from('webrtc_signals').insert({
             session_id: session.id,
             sender_id: user.id,
             signal_data: { type: 'join_lobby' }
           });
-          if (insertError) {
-            console.error('[Patient] Error sending join_lobby signal:', insertError);
-          } else {
-            console.log('[Patient] ✅ join_lobby signal sent successfully');
-          }
+          if (insertError) console.error('Error sending join_lobby signal:', insertError);
         }
 
         setSessionId(session.id);
 
-        // Load existing messages
         const existingMessages = await consultationService.getMessages(session.id);
         setMessages(existingMessages.map(msg => ({
           id: msg.id,
@@ -220,7 +186,6 @@ export function ConsultationRoom({
           type: msg.message_type as 'text' | 'file'
         })));
 
-        // Subscribe to real-time messages
         const unsubscribe = consultationService.subscribeToMessages(
           session.id,
           (dbMessage) => {
@@ -234,31 +199,14 @@ export function ConsultationRoom({
                 type: dbMessage.message_type as 'text' | 'file'
               }]);
             }
-          },
-          (err) => {
-            console.error('Error receiving message:', err);
-            toast({
-              title: 'Error',
-              description: 'Failed to receive messages',
-              variant: 'destructive'
-            });
           }
         );
 
         unsubscribeRef.current = unsubscribe;
-        
-        // Don't mark as connected yet - wait for media/WebRTC to be ready
-        // This will be updated when isAdmitted changes and media is initialized
-        setConnectionStatus('connecting');
+        setIsLoading(false);
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Failed to initialize session';
-        setError(errorMsg);
-        toast({
-          title: 'Error',
-          description: errorMsg,
-          variant: 'destructive'
-        });
-      } finally {
+        console.error('Error initializing session:', err);
+        setError(err instanceof Error ? err.message : 'Failed to initialize consultation');
         setIsLoading(false);
       }
     };
@@ -266,49 +214,32 @@ export function ConsultationRoom({
     initializeSession();
 
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-      }
-      if (lobbyChannelRef.current) {
-        supabase.removeChannel(lobbyChannelRef.current);
-      }
+      if (unsubscribeRef.current) unsubscribeRef.current();
+      if (lobbyChannelRef.current) lobbyChannelRef.current.unsubscribe();
     };
-  }, [user, appointmentId, participantRole, consultationType, participantName]);
+  }, [user, appointmentId, participantRole, consultationType]);
 
-  // Initialize local media and WebRTC
+  // Timer effect
   useEffect(() => {
+    if (connectionStatus === 'connected') {
+      const interval = setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [connectionStatus]);
+
+  // Initialize media and WebRTC
+  useEffect(() => {
+    // For patients: initialize media immediately (show local video in waiting room)
+    // For doctors: initialize media only after session is ready
+    const shouldInitialize = participantRole === 'patient' 
+      ? (sessionId && !webrtcService && user)
+      : (sessionId && isAdmitted && !webrtcService && user);
+
+    if (!shouldInitialize) return;
+
     const initializeMedia = async () => {
-      const isDoctor = participantRole === 'doctor';
-      
-      if (consultationType === 'chat' || !sessionId || !user) {
-        console.log('[Media Init] Skipping - chat:', consultationType === 'chat', 'sessionId:', !!sessionId, 'user:', !!user);
-        return;
-      }
-      
-      // Doctors initialize media immediately; patients wait until admitted
-      if (!isDoctor && !isAdmitted) {
-        console.log('[Media Init] Patient waiting for admission...');
-        return;
-      }
-
-      console.log('[Media Init] Starting media initialization...');
-
-      // Check for WebRTC support
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        toast({
-          title: 'Browser Not Supported',
-          description: 'Your browser does not support video calls',
-          variant: 'destructive'
-        });
-        return;
-      }
-
-      // Prevent duplicate initialization
-      if (webrtcService) {
-        console.log('[Media Init] WebRTC already initialized, skipping');
-        return;
-      }
-
       try {
         const constraints: MediaStreamConstraints = {
           video: consultationType === 'video' ? {
@@ -319,396 +250,249 @@ export function ConsultationRoom({
           audio: consultationType !== 'chat' ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
         };
 
-        console.log('[Media Init] Requesting user media with constraints:', constraints);
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
-        console.log('[Media Init] Got local stream with', stream.getTracks().length, 'tracks');
-        stream.getTracks().forEach((track, idx) => {
-          console.log(`[Media Init] Track ${idx}:`, track.kind, 'enabled:', track.enabled, 'readyState:', track.readyState, 'label:', track.label);
-        });
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
-          console.log('[Media Init] Set local video element srcObject');
+          console.log('[Media Init] Local video ref set with stream');
         }
 
-        // Initialize WebRTC service only after media is ready
-        try {
-          const isInitiator = participantRole === 'doctor';
-          console.log('[Media Init] Initializing WebRTC with isInitiator:', isInitiator);
-          const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+        // Only initialize WebRTC if admitted
+        if (!isAdmitted) {
+          console.log('[Media Init] Media initialized but not admitted yet, WebRTC will initialize after admission');
+          return;
+        }
 
-          webrtc.onStream((remoteStream) => {
-            console.log('[WebRTC] 🎥 Remote stream received with', remoteStream.getTracks().length, 'tracks');
-            console.log('[WebRTC] 🎥 Stream ID:', remoteStream.id);
-            console.log('[WebRTC] 🎥 Tracks:', remoteStream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, readyState: t.readyState })));
-            
-            // Set remote video if we have video tracks
-            if (remoteVideoRef.current) {
-              console.log('[WebRTC] 🎥 Setting remote video ref srcObject');
-              remoteVideoRef.current.srcObject = remoteStream;
-              console.log('[WebRTC] 🎥 Remote video element srcObject set');
-              console.log('[WebRTC] 🎥 Remote video element ready:', remoteVideoRef.current.readyState);
-              console.log('[WebRTC] 🎥 Remote video element networkState:', remoteVideoRef.current.networkState);
-              // Don't call play() here - autoPlay attribute handles it
-              // Play promise rejection happens when srcObject is set multiple times
-            } else {
-              console.warn('[WebRTC] 🎥 WARNING: remoteVideoRef.current is null!');
-            }
+        const isInitiator = participantRole === 'doctor';
+        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
-            // Set remote audio if we have audio tracks (for audio-only or audio in video calls)
-            if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
-              console.log('[WebRTC] 🔊 Setting remote audio ref srcObject');
-              remoteAudioRef.current.srcObject = remoteStream;
-              console.log('[WebRTC] 🔊 Remote audio element srcObject set. readyState:', remoteAudioRef.current.readyState);
-              // Don't call play() - autoPlay handles it
-            } else if (!remoteAudioRef.current) {
-              console.warn('[WebRTC] 🔊 WARNING: remoteAudioRef.current is null!');
-            }
-
-            // NOW set hasRemoteStream to trigger render
-            setHasRemoteStream(true);
-            // Don't set connectionStatus here - wait for onConnected callback
-          });
-
-          webrtc.onConnected(() => {
-            console.log('[WebRTC] ✅ ICE connection established! Setting connectionStatus to connected');
-            setConnectionStatus('connected');
-            console.log('[WebRTC] connectionStatus state updated');
-          });
-
-          // Monitor connection and provide diagnostics after 15 seconds
-          const connectionDiagnosticsTimeout = setTimeout(() => {
-            if (connectionStatus !== 'connected') {
-              console.warn('[WebRTC] ⚠️ Connection still in progress. This may indicate:');
-              console.warn('  - Peers are on different networks with restrictive firewalls');
-              console.warn('  - NAT/firewall blocking peer-to-peer connections');
-              console.warn('  - STUN servers not reachable (check network settings)');
-              console.warn('  - In some environments, audio/video may still work despite ICE showing as "checking"');
-              
-              // Don't show error toast, allow connection to keep trying
-              // The system may establish media despite ICE diagnostics showing issues
-            }
-          }, 15000);
-
-          webrtc.onError((error) => {
-            console.error('[WebRTC] Error:', error);
-            toast({
-              title: 'Connection Error',
-              description: 'Failed to establish video connection',
-              variant: 'destructive'
-            });
-          });
-
-          console.log('[Media Init] Calling initializePeer...');
-          await webrtc.initializePeer(stream);
-          setWebrtcService(webrtc);
-          console.log('[Media Init] WebRTC service initialized successfully');
-          
-          // For doctor role, immediately attempt to create offer after peer is initialized
-          if (participantRole === 'doctor') {
-            console.log('[Media Init] Doctor role - WebRTC ready, offer will be created when patient signals ready');
+        webrtc.onStream((remoteStream) => {
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remoteStream;
           }
-        } catch (webrtcError) {
-          console.error('[Media Init] WebRTC initialization error:', webrtcError);
+          if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
+            remoteAudioRef.current.srcObject = remoteStream;
+          }
+          setHasRemoteStream(true);
+        });
+
+        webrtc.onConnected(() => {
+          setConnectionStatus('connected');
+        });
+
+        webrtc.onError((error) => {
+          console.error('WebRTC Error:', error);
           toast({
-            title: 'WebRTC Error',
-            description: 'Failed to initialize video connection',
+            title: 'Connection Error',
+            description: 'Failed to establish connection',
             variant: 'destructive'
           });
-        }
+        });
 
-      } catch (error) {
-        console.error('[Media Init] Failed to get media devices:', error);
+        webrtc.initializePeer(stream);
+        setWebrtcService(webrtc);
+
+        // Request wake lock
+        if ('wakeLock' in navigator) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const wakeLock = (navigator as any).wakeLock as { request: (type: string) => Promise<WakeLockSentinel> };
+            wakeLockRef.current = await wakeLock.request('screen');
+          } catch (err) {
+            console.log('Wake lock not available');
+          }
+        }
+      } catch (err) {
+        console.error('Media initialization error:', err);
         toast({
-          title: 'Media Access Error',
-          description: 'Please allow camera and microphone access',
+          title: 'Media Error',
+          description: 'Unable to access camera/microphone',
           variant: 'destructive'
         });
       }
     };
 
-    // Trigger initialization immediately when admitted and sessionId is ready
     initializeMedia();
+  }, [sessionId, isAdmitted, user, webrtcService, consultationType, participantRole]);
 
-    return () => {
-      // Don't stop tracks here - let the component unmount handle cleanup
-      // This prevents killing streams when webrtcService is set
-    };
-  }, [consultationType, sessionId, user, participantRole, isAdmitted]);
-
-  // Call duration timer
+  // Initialize WebRTC when patient gets admitted (media already ready)
   useEffect(() => {
-    if (connectionStatus !== 'connected') return;
+    if (participantRole !== 'patient' || !isAdmitted || !sessionId || webrtcService || !localStreamRef.current || !user) return;
 
-    const timer = setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [connectionStatus]);
-
-  // Screen wake lock - prevent screen from turning off during active consultation
-  useEffect(() => {
-    const requestWakeLock = async () => {
+    const initializeWebRTC = async () => {
       try {
-        if ('wakeLock' in navigator && connectionStatus === 'connected') {
-          // Request wake lock to keep screen on during consultation
-          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
-          console.log('[WakeLock] Screen wake lock acquired');
-          
-          // Handle release events (e.g., when browser tab loses focus)
-          wakeLockRef.current.addEventListener('release', () => {
-            console.log('[WakeLock] Screen wake lock released');
+        const isInitiator = false; // Patients are not initiators
+        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+
+        webrtc.onStream((remoteStream) => {
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remoteStream;
+          }
+          if (remoteAudioRef.current && remoteStream.getAudioTracks().length > 0) {
+            remoteAudioRef.current.srcObject = remoteStream;
+          }
+          setHasRemoteStream(true);
+        });
+
+        webrtc.onConnected(() => {
+          setConnectionStatus('connected');
+        });
+
+        webrtc.onError((error) => {
+          console.error('WebRTC Error:', error);
+          toast({
+            title: 'Connection Error',
+            description: 'Failed to establish connection',
+            variant: 'destructive'
           });
-        }
+        });
+
+        webrtc.initializePeer(localStreamRef.current);
+        setWebrtcService(webrtc);
+
+        console.log('[WebRTC] Patient admitted - WebRTC initialized');
       } catch (err) {
-        console.warn('[WakeLock] Failed to acquire wake lock:', err);
-      }
-    };
-
-    const releaseWakeLock = async () => {
-      if (wakeLockRef.current) {
-        try {
-          await wakeLockRef.current.release();
-          wakeLockRef.current = null;
-          console.log('[WakeLock] Screen wake lock released');
-        } catch (err) {
-          console.warn('[WakeLock] Failed to release wake lock:', err);
-        }
-      }
-    };
-
-    if (connectionStatus === 'connected') {
-      requestWakeLock();
-    } else {
-      releaseWakeLock();
-    }
-
-    return () => {
-      releaseWakeLock();
-    };
-  }, [connectionStatus]);
-
-  // Cleanup on component unmount only
-  useEffect(() => {
-    return () => {
-      console.log('[Cleanup] Component unmounting, stopping tracks');
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => {
-          console.log('[Cleanup] Stopping', track.kind, 'track');
-          track.stop();
+        console.error('WebRTC initialization error:', err);
+        toast({
+          title: 'Connection Error',
+          description: 'Failed to establish WebRTC connection',
+          variant: 'destructive'
         });
       }
-      if (webrtcService) {
-        console.log('[Cleanup] Destroying WebRTC service');
-        webrtcService.destroy();
-      }
-      // Release wake lock on unmount
-      if (wakeLockRef.current) {
-        wakeLockRef.current.release().catch((err: any) => {
-          console.warn('[Cleanup] Failed to release wake lock:', err);
-        });
-        wakeLockRef.current = null;
-      }
     };
-  }, []); // Empty dependency array = only run on unmount
 
-  // Monitor remote stream state changes
-  useEffect(() => {
-    console.log('[Monitor] hasRemoteStream changed to:', hasRemoteStream);
-    if (hasRemoteStream && remoteVideoRef.current) {
-      console.log('[Monitor] Remote video element details:');
-      console.log('  - Display style:', remoteVideoRef.current.style.display);
-      console.log('  - Computed display:', window.getComputedStyle(remoteVideoRef.current).display);
-      console.log('  - Computed visibility:', window.getComputedStyle(remoteVideoRef.current).visibility);
-      console.log('  - Width:', remoteVideoRef.current.offsetWidth);
-      console.log('  - Height:', remoteVideoRef.current.offsetHeight);
-      console.log('  - srcObject:', remoteVideoRef.current.srcObject ? 'SET' : 'NULL');
-      console.log('  - paused:', remoteVideoRef.current.paused);
-      console.log('  - videoWidth:', remoteVideoRef.current.videoWidth);
-      console.log('  - videoHeight:', remoteVideoRef.current.videoHeight);
-      console.log('  - Parent offsetWidth:', remoteVideoRef.current.parentElement?.offsetWidth);
-      console.log('  - Parent offsetHeight:', remoteVideoRef.current.parentElement?.offsetHeight);
+    initializeWebRTC();
+  }, [isAdmitted, participantRole, sessionId, webrtcService, user]);
+
+  const toggleAudio = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !isAudioEnabled;
+      });
+      setIsAudioEnabled(!isAudioEnabled);
     }
-  }, [hasRemoteStream]);
-
-  // Ensure remote video stream persists - guard against srcObject being cleared
-  useEffect(() => {
-    if (!hasRemoteStream) return;
-    
-    const interval = setInterval(() => {
-      if (remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
-        console.warn('[RemoteVideo] ⚠️ Remote video srcObject was cleared! This should not happen.');
-        // Don't try to restore - this indicates a deeper issue
-      }
-    }, 1000); // Check every second
-
-    return () => clearInterval(interval);
-  }, [hasRemoteStream]);
-
-  // Ensure local video stream persists - guard against srcObject being cleared
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (localStreamRef.current && localVideoRef.current) {
-        // Check if local video element lost its srcObject
-        if (!localVideoRef.current.srcObject && consultationType === 'video' && isVideoEnabled) {
-          console.warn('[LocalVideo] ⚠️ Local video srcObject was cleared! Restoring...');
-          localVideoRef.current.srcObject = localStreamRef.current;
-        }
-      }
-    }, 500); // Check every 500ms
-
-    return () => clearInterval(interval);
-  }, [consultationType, isVideoEnabled]);
-
-  // Ensure video element has paused=false when it should be playing
-  useEffect(() => {
-    const ensurePlaying = setInterval(() => {
-      if (localVideoRef.current && isVideoEnabled && consultationType === 'video') {
-        if (localVideoRef.current.paused && localVideoRef.current.srcObject) {
-          console.log('[LocalVideo] Video is paused but should be playing, attempting play...');
-          localVideoRef.current.play().catch(err => {
-            // Expected if already playing, ignore
-          });
-        }
-      }
-    }, 1000);
-
-    return () => clearInterval(ensurePlaying);
-  }, [isVideoEnabled, consultationType]);
-
-  // Auto scroll chat
-  useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const toggleVideo = useCallback(() => {
+  const toggleVideo = () => {
     if (localStreamRef.current) {
-      const videoTrack = localStreamRef.current.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoEnabled(videoTrack.enabled);
-      }
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = !isVideoEnabled;
+      });
+      setIsVideoEnabled(!isVideoEnabled);
     }
-  }, []);
-
-  const toggleAudio = useCallback(() => {
-    if (localStreamRef.current) {
-      const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsAudioEnabled(audioTrack.enabled);
-      }
-    }
-  }, []);
+  };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !sessionId || !user) {
-      console.log('[Chat] Cannot send - message:', !!newMessage.trim(), 'sessionId:', !!sessionId, 'user:', !!user);
-      return;
-    }
-
-    const messageContent = newMessage;
-    setNewMessage('');
+    if (!newMessage.trim() || !sessionId) return;
 
     try {
-      console.log('[Chat] Sending message to session:', sessionId);
-      // Send message to database
       await consultationService.sendMessage(
         sessionId,
-        user.id,
-        participantRole === 'doctor' ? 'doctor' : 'patient',
-        user.user_metadata?.full_name || user.email || 'User',
-        messageContent
+        user!.id,
+        participantRole,
+        participantName,
+        newMessage,
+        'text'
       );
 
-      console.log('[Chat] Message sent successfully');
-      // Optimistically add message to UI
-      const message: Message = {
-        id: Date.now().toString(),
+      setMessages(prev => [...prev, {
+        id: Math.random().toString(),
         sender: 'user',
-        senderName: 'You',
-        content: messageContent,
+        senderName: participantName,
+        content: newMessage,
         timestamp: new Date(),
         type: 'text'
-      };
-      setMessages(prev => [...prev, message]);
+      }]);
+
+      setNewMessage('');
+
+      setTimeout(() => {
+        if (chatScrollRef.current) {
+          chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+        }
+      }, 0);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);
-      console.error('[Chat] Send message error:', errorMsg, err);
+      console.error('Error sending message:', err);
       toast({
         title: 'Error',
-        description: 'Failed to send message: ' + errorMsg,
+        description: 'Failed to send message',
         variant: 'destructive'
       });
-      // Restore message in input if failed
-      setNewMessage(messageContent);
     }
   };
 
-  const handleEndCall = async () => {
-    if (sessionId) {
-      try {
-        await consultationService.endSession(sessionId, callDuration);
-        console.log('[ConsultationRoom] Session ended, status updated to ended');
-        toast({
-          title: 'Success',
-          description: 'Consultation ended successfully'
-        });
-      } catch (err) {
-        console.error('Error ending session:', err);
-        toast({
-          title: 'Error',
-          description: 'Failed to end consultation',
-          variant: 'destructive'
-        });
-      }
-    }
-
-    // Stop all media tracks
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-
-    // Clean up subscriptions and WebRTC
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-    }
-
+  const handleEndCall = useCallback(async () => {
+    // Close WebRTC connection
     if (webrtcService) {
       webrtcService.destroy();
     }
 
+    // Stop all media tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
+      localStreamRef.current = null;
+    }
+
+    // Clear video refs
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+    }
+
+    // Release wake lock
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch (err) {
+        console.log('Wake lock release error:', err);
+      }
+    }
+
+    // Unsubscribe from channels
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+    }
+    if (lobbyChannelRef.current) {
+      lobbyChannelRef.current.unsubscribe();
+    }
+
+    console.log('[End Call] All resources cleaned up');
     onEndCall();
-  };
+  }, [webrtcService, onEndCall]);
 
-  const participantInitials = participantName
-    .split(' ')
-    .map(n => n[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
+  // Only cleanup on component unmount (when ConsultationRoom is removed from DOM)
+  useEffect(() => {
+    return () => {
+      console.log('[ConsultationRoom] Component unmounting, cleaning up');
+      // Just stop media tracks on unmount - don't call handleEndCall to avoid premature end
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+        });
+      }
+    };
+  }, []);
 
-  // Show error state
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full bg-background">
-        <Card className="w-full max-w-md">
+      <div className="flex items-center justify-center h-full bg-black">
+        <Card className="w-full max-w-md bg-slate-900 border-slate-700">
           <CardContent className="pt-6">
             <div className="flex items-center gap-3 text-destructive mb-4">
               <AlertCircle className="w-6 h-6" />
               <h3 className="font-semibold">Error</h3>
             </div>
-            <p className="text-sm text-muted-foreground mb-4">{error}</p>
+            <p className="text-sm text-slate-300 mb-4">{error}</p>
             <Button onClick={onEndCall} className="w-full">Go Back</Button>
           </CardContent>
         </Card>
@@ -717,330 +501,289 @@ export function ConsultationRoom({
   }
 
   return (
-    <div className={`flex flex-col bg-background ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[calc(100vh-4rem)]'}`}>
-      {/* Hidden audio element for remote audio playback */}
+    <div className="w-full h-full bg-black flex flex-col overflow-hidden">
       <audio ref={remoteAudioRef} autoPlay playsInline muted={false} controls={false} className="hidden" />
-      {/* Header */}
-      <div className="flex items-center justify-between px-2 sm:px-3 md:px-4 py-2 sm:py-3 border-b border-border bg-card">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <Avatar className="w-8 h-8 sm:w-10 sm:h-10 flex-shrink-0">
-            <AvatarFallback className="bg-primary/10 text-primary text-xs sm:text-sm">{participantInitials}</AvatarFallback>
-          </Avatar>
-          <div className="min-w-0">
-            <h2 className="font-semibold text-xs sm:text-sm truncate">{participantName}</h2>
-            <div className="flex items-center gap-1 sm:gap-2">
-              <Badge
-                variant="outline"
-                className={`text-xs ${
-                  connectionStatus === 'connected'
-                    ? 'bg-success/10 text-success border-success/20'
-                    : connectionStatus === 'connecting'
-                      ? 'bg-warning/10 text-warning border-warning/20'
-                      : 'bg-destructive/10 text-destructive border-destructive/20'
-                }`}
-              >
-                <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full mr-1 ${connectionStatus === 'connected' ? 'bg-success' :
-                  connectionStatus === 'connecting' ? 'bg-warning animate-pulse' : 'bg-destructive'
-                  }`} />
-                <span className="hidden sm:inline">{connectionStatus === 'connected' ? 'Connected' :
-                  connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
-                <span className="sm:hidden">{connectionStatus === 'connected' ? 'OK' :
-                  connectionStatus === 'connecting' ? '...' : 'X'}</span>
-              </Badge>
-              {connectionStatus === 'connected' && (
-                <span className="text-[10px] sm:text-xs text-muted-foreground whitespace-nowrap">{formatDuration(callDuration)}</span>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-1 sm:gap-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 sm:h-10 sm:w-10"
-                  onClick={() => setIsFullscreen(!isFullscreen)}
-                >
-                  {isFullscreen ? <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="text-xs sm:text-sm">{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
 
-      {/* Main content area */}
-      <div className="flex-1 flex overflow-hidden relative">
-
-        {/* Doctor Admit Button Overlay - Single consolidated button */}
-        {participantRole === 'doctor' && isPatientWaiting && (
-          <div className="absolute top-2 sm:top-4 left-1/2 transform -translate-x-1/2 z-50 px-2">
-            <Button
-              onClick={async () => {
-                if (!sessionId || !user) return;
-                try {
-                  // Update consultation session to active
-                  const { error } = await supabase
-                    .from('consultation_sessions')
-                    .update({ status: 'active' })
-                    .eq('id', sessionId);
-                  
-                  if (error) throw error;
-                  
-                  // Send admit signal
-                  await supabase.from('webrtc_signals').insert({
-                    session_id: sessionId,
-                    sender_id: user.id,
-                    signal_data: { type: 'admit' }
-                  });
-                  setIsPatientWaiting(false);
-                  toast({ title: "Patient Admitted", description: "Connecting..." });
-                } catch (err) {
-                  console.error('Error admitting patient:', err);
-                  toast({ title: "Error", description: "Failed to admit patient", variant: "destructive" });
-                }
-              }}
-              className="bg-green-600 hover:bg-green-700 text-white shadow-lg animate-pulse gap-2 text-sm sm:text-base"
-            >
-              <User className="w-3 h-3 sm:w-4 sm:h-4" />
-              <span className="hidden sm:inline">Admit Patient</span>
-              <span className="sm:hidden">Admit</span>
-            </Button>
-          </div>
-        )}
-
-        {/* Patient Lobby Screen */}
-        {!isAdmitted && participantRole === 'patient' && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-4">
-            <div className="text-center space-y-3 sm:space-y-4 max-w-sm">
-              <Avatar className="w-20 h-20 sm:w-24 sm:h-24 mx-auto animate-pulse">
-                <AvatarFallback className="text-xl sm:text-2xl">{participantInitials}</AvatarFallback>
-              </Avatar>
-              <h3 className="text-xl sm:text-2xl font-semibold">Waiting Room</h3>
-              <p className="text-sm sm:text-base text-muted-foreground">Waiting for the doctor to admit you...</p>
-              <Button
-                onClick={() => {
-                  toast({
-                    title: 'Left',
-                    description: 'You have left the waiting room.'
-                  });
-                  navigate(-1);
-                }}
-                variant="outline"
-                className="mt-4 w-full"
-              >
-                <X className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
-                Leave
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <div className="flex-1 flex overflow-hidden">
-          {/* Video/Audio area - Hidden if chat only and chat is open (or maybe just hidden completely for chat type) */}
-          {consultationType !== 'chat' && (
-            <div className={`flex-1 relative bg-muted/50 p-2 sm:p-3 md:p-4 ${isChatOpen ? 'hidden md:block' : ''}`}>
-              {/* Remote participant (main view) */}
-              <div className="w-full h-full rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden bg-card relative">
-                {consultationType === 'video' ? (
-                  <>
-                    {/* Remote video stream - ALWAYS in DOM, controlled by display style */}
-                    <video
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      muted={false}
-                      controls={false}
-                      crossOrigin="anonymous"
-                      style={{ 
-                        width: '100%', 
-                        height: '100%', 
-                        objectFit: 'cover',
-                        display: hasRemoteStream ? 'block' : 'none',
-                        backgroundColor: 'transparent'
-                      }}
-                      onLoadedMetadata={(e) => {
-                        console.log('[RemoteVideo] Metadata loaded, readyState:', (e.currentTarget as HTMLVideoElement).readyState);
-                        console.log('[RemoteVideo] Dimensions:', (e.currentTarget as HTMLVideoElement).videoWidth, 'x', (e.currentTarget as HTMLVideoElement).videoHeight);
-                      }}
-                      onPlay={() => {
-                        console.log('[RemoteVideo] Video playing');
-                      }}
-                      onCanPlay={() => {
-                        console.log('[RemoteVideo] Can play');
-                      }}
-                      onStalled={() => {
-                        console.warn('[RemoteVideo] ⚠️ Video stalled');
-                      }}
-                      onError={(e) => {
-                        console.error('[RemoteVideo] Error:', e);
-                      }}
-                    />
-                    {!hasRemoteStream && (
-                      <div className="w-full h-full flex items-center justify-center bg-muted/50">
-                        <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
-                            <Camera className="w-8 h-8 text-muted-foreground/50" />
-                          </div>
-                          <p className="text-sm">Waiting for video stream...</p>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  /* Audio-only view */
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/10 p-4">
-                    <motion.div
-                      className="text-center"
-                      animate={connectionStatus === 'connected' ? { scale: [1, 1.05, 1] } : {}}
-                      transition={{ repeat: Infinity, duration: 2 }}
-                    >
-                      <div className="relative">
-                        <Avatar className="w-24 h-24 sm:w-32 sm:h-32 md:w-40 md:h-40 mx-auto mb-3 sm:mb-4">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-3xl sm:text-4xl md:text-5xl">
-                            {participantInitials}
-                          </AvatarFallback>
-                        </Avatar>
-                        {connectionStatus === 'connected' && (
-                          <motion.div
-                            className="absolute inset-0 rounded-full border-2 sm:border-3 md:border-4 border-primary/30"
-                            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
-                            transition={{ repeat: Infinity, duration: 1.5 }}
-                          />
-                        )}
-                      </div>
-                      <h3 className="text-lg sm:text-xl font-semibold mb-1">{participantName}</h3>
-                      <p className="text-xs sm:text-sm text-muted-foreground">
-                        {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
-                      </p>
-                    </motion.div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Local video (picture-in-picture) - Always visible when in video call, positioned absolutely */}
-          {consultationType === 'video' && (
-            <motion.div
-              drag
-              dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
-              className="fixed bottom-16 sm:bottom-20 md:bottom-4 right-2 sm:right-4 w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36 rounded-lg sm:rounded-xl overflow-hidden bg-card shadow-lg border sm:border-2 border-background z-40"
-            >
-              {isVideoEnabled ? (
+      {/* Main video area */}
+      <div className="flex-1 relative overflow-hidden group">
+        {consultationType !== 'chat' && (
+          <div className="w-full h-full relative">
+            {consultationType === 'video' ? (
+              <>
                 <video
-                  ref={localVideoRef}
+                  ref={remoteVideoRef}
                   autoPlay
                   playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                  onLoadedMetadata={(e) => {
-                    console.log('[LocalVideo] Metadata loaded, stream active');
-                  }}
-                  onPlay={() => {
-                    console.log('[LocalVideo] Video playing');
-                  }}
-                  onStalled={() => {
-                    console.warn('[LocalVideo] ⚠️ Video stalled');
-                  }}
-                  onSuspend={() => {
-                    console.warn('[LocalVideo] ⚠️ Video suspended');
+                  muted={false}
+                  controls={false}
+                  crossOrigin="anonymous"
+                  style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    objectFit: 'cover',
+                    display: hasRemoteStream ? 'block' : 'none',
+                    backgroundColor: '#000'
                   }}
                 />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-muted">
-                  <User className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 text-muted-foreground" />
-                </div>
-              )}
-              {!isAudioEnabled && (
-                <div className="absolute bottom-1 left-1">
-                  <Badge variant="destructive" className="text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5">
-                    <MicOff className="w-2 h-2 sm:w-3 sm:h-3" />
-                  </Badge>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {/* Chat sidebar - Always visible for chat type, togglable for others */}
-          <AnimatePresence>
-            {(isChatOpen || consultationType === 'chat') && (
-              <motion.div
-                initial={consultationType === 'chat' ? { width: '100%', opacity: 1 } : { width: 0, opacity: 0 }}
-                animate={{ width: consultationType === 'chat' ? '100%' : 280, opacity: 1 }}
-                exit={{ width: 0, opacity: 0 }}
-                className={`border-l border-border bg-card flex flex-col overflow-hidden text-sm sm:text-base ${consultationType === 'chat' ? 'w-full border-l-0' : ''}`}
-              >
-                <div className="flex items-center justify-between p-2 sm:p-3 md:p-4 border-b border-border gap-2">
-                  <h3 className="font-semibold text-sm sm:text-base">Chat</h3>
-                  {consultationType !== 'chat' && (
-                    <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)} className="h-8 w-8">
-                      <X className="w-3 h-3 sm:w-4 sm:h-4" />
-                    </Button>
-                  )}
-                </div>
-
-                <ScrollArea ref={chatScrollRef} className="flex-1 p-2 sm:p-3 md:p-4">
-                  <div className="space-y-4">
-                    {messages.length === 0 ? (
-                      <div className="text-center text-muted-foreground py-6 sm:py-8">
-                        <MessageSquare className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 mx-auto mb-2 sm:mb-3 opacity-50" />
-                        <p className="text-xs sm:text-sm">No messages yet</p>
-                        <p className="text-[10px] sm:text-xs">Send a message to start the conversation</p>
+                {!hasRemoteStream && (
+                  <div className="w-full h-full flex items-center justify-center bg-slate-900 z-25 relative">
+                    <div className="flex flex-col items-center gap-4 z-25 relative">
+                      <div className="w-32 h-32 rounded-full bg-slate-800 flex items-center justify-center">
+                        <Camera className="w-16 h-16 text-slate-600" />
                       </div>
-                    ) : (
-                      messages.map((message) => (
-                        <div
-                          key={message.id}
-                          className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div className={`max-w-[80%] ${message.sender === 'user' ? 'order-1' : ''}`}>
-                            <div
-                              className={`rounded-xl sm:rounded-2xl px-2 sm:px-4 py-1 sm:py-2 ${message.sender === 'user'
-                                ? 'bg-primary text-primary-foreground rounded-br-sm'
-                                : 'bg-muted rounded-bl-sm'
-                                }`}
-                            >
-                              <p className="text-xs sm:text-sm break-words">{message.content}</p>
-                            </div>
-                            <p className="text-[8px] sm:text-[10px] text-muted-foreground mt-0.5 sm:mt-1 px-1">
-                              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </p>
-                          </div>
-                        </div>
-                      ))
-                    )}
+                      <p className="text-white text-lg">Waiting for participant...</p>
+                      <p className="text-slate-400 text-sm">{participantName}</p>
+                    </div>
                   </div>
-                </ScrollArea>
+                )}
+              </>
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
+                <motion.div
+                  className="text-center"
+                  animate={connectionStatus === 'connected' ? { scale: [1, 1.05, 1] } : {}}
+                  transition={{ repeat: Infinity, duration: 2 }}
+                >
+                  <Avatar className="w-40 h-40 mx-auto mb-4">
+                    <AvatarFallback className="bg-primary text-primary-foreground text-5xl">{participantInitials}</AvatarFallback>
+                  </Avatar>
+                  <h3 className="text-2xl font-semibold mb-2 text-white">{participantName}</h3>
+                  <p className="text-slate-400">
+                    {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
+                  </p>
+                </motion.div>
+              </div>
+            )}
 
-                <div className="p-2 sm:p-3 md:p-4 border-t border-border">
-                  <form
-                    onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
-                    className="flex gap-1 sm:gap-2"
-                  >
-                    <Input
-                      placeholder="Message..."
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      className="flex-1 text-xs sm:text-sm h-8 sm:h-10"
-                    />
-                    <Button type="submit" size="icon" disabled={!newMessage.trim()} className="h-8 w-8 sm:h-10 sm:w-10">
-                      <Send className="w-3 h-3 sm:w-4 sm:h-4" />
-                    </Button>
-                  </form>
-                </div>
+            {/* Local video PiP - Bottom right */}
+            {consultationType === 'video' && (
+              <motion.div
+                drag
+                dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                className="absolute bottom-20 sm:bottom-24 md:bottom-28 right-2 sm:right-4 w-28 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36 rounded-lg overflow-hidden bg-black shadow-2xl border-2 border-slate-700 z-50 cursor-grab active:cursor-grabbing"
+              >
+                {isVideoEnabled ? (
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                    style={{ 
+                      transform: 'scaleX(-1)',
+                      filter: 'brightness(1.2) contrast(1.1) saturate(1.1)'
+                    }}
+                    onLoadedMetadata={() => {
+                      console.log('[LocalVideo] Stream loaded, dimensions:', localVideoRef.current?.videoWidth, 'x', localVideoRef.current?.videoHeight);
+                    }}
+                    onPlay={() => {
+                      console.log('[LocalVideo] Video playing');
+                    }}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-slate-800">
+                    <User className="w-12 h-12 text-slate-600" />
+                  </div>
+                )}
               </motion.div>
             )}
-          </AnimatePresence>
-        </div>
 
-        {/* Controls bar */}
-        <div className="flex items-center justify-center gap-1.5 sm:gap-2 md:gap-3 p-2 sm:p-3 md:p-4 border-t border-border bg-card overflow-x-auto">
-          <TooltipProvider>
+            {/* Header - Connection status & timer */}
+            <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between p-4 bg-gradient-to-b from-black/60 to-transparent">
+              <Badge variant={connectionStatus === 'connected' ? 'default' : 'secondary'} className="gap-2">
+                <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                {connectionStatus === 'connecting' ? 'Connecting...' : 'Connected'}
+              </Badge>
+              {connectionStatus === 'connected' && (
+                <Badge variant="secondary" className="font-mono">
+                  {String(Math.floor(callDuration / 60)).padStart(2, '0')}:{String(callDuration % 60).padStart(2, '0')}
+                </Badge>
+              )}
+            </div>
+
+            {/* Admit Patient Dialog */}
+            {participantRole === 'doctor' && isPatientWaiting && (
+              <div className="absolute inset-0 z-35 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <div className="text-center">
+                  <h2 className="text-2xl font-semibold text-white mb-4">Patient Waiting</h2>
+                  <p className="text-slate-300 mb-6">A patient is in the waiting room</p>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        await supabase.from('webrtc_signals').insert({
+                          session_id: sessionId!,
+                          sender_id: user?.id,
+                          signal_data: { type: 'admit_patient' }
+                        });
+                        setIsPatientWaiting(false);
+                        setIsAdmitted(true);
+                        toast({ title: "Patient Admitted", description: "Connecting..." });
+                      } catch (err) {
+                        console.error('Error admitting patient:', err);
+                        toast({ title: "Error", description: "Failed to admit patient", variant: "destructive" });
+                      }
+                    }}
+                    className="bg-green-600 hover:bg-green-700 text-white gap-2 text-lg px-8 py-2 rounded-lg"
+                  >
+                    <User className="w-5 h-5" />
+                    Admit Patient
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Chat-only view */}
+        {consultationType === 'chat' && (
+          <div className="w-full h-full flex flex-col bg-slate-900">
+            <div className="p-4 border-b border-slate-700 bg-slate-800/50 z-30 relative">
+              <h2 className="text-xl font-semibold text-white">{participantName}</h2>
+              <p className="text-xs text-slate-400">Chat consultation</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Patient Lobby */}
+      {!isAdmitted && participantRole === 'patient' && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 sm:p-6 pointer-events-auto">
+          <div className="text-center space-y-6 sm:space-y-8 max-w-sm w-full relative">
+            <Avatar className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 mx-auto">
+              <AvatarFallback className="bg-primary text-primary-foreground text-3xl sm:text-4xl">{participantInitials}</AvatarFallback>
+            </Avatar>
+            <div className="space-y-2 sm:space-y-3">
+              <h3 className="text-2xl sm:text-3xl md:text-4xl font-semibold text-white">Waiting Room</h3>
+              <p className="text-slate-300 text-base sm:text-lg">Waiting for the doctor to admit you...</p>
+            </div>
+            <Button
+              onClick={handleEndCall}
+              variant="destructive"
+              className="w-full gap-2 text-sm sm:text-base py-2 sm:py-3"
+            >
+              <X className="w-4 h-4" />
+              Leave Waiting Room
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Chat sidebar */}
+      <AnimatePresence>
+        {(isChatOpen || consultationType === 'chat') && consultationType !== 'chat' && (
+          <motion.div
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 'auto', opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            className="border-l border-slate-700 bg-slate-900 flex flex-col overflow-hidden w-full sm:w-72 md:w-96"
+          >
+            <div className="flex items-center justify-between p-4 border-b border-slate-700 bg-slate-800/50">
+              <h3 className="font-semibold text-white">Chat</h3>
+              <Button variant="ghost" size="icon" onClick={() => setIsChatOpen(false)} className="h-8 w-8">
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            <ScrollArea ref={chatScrollRef} className="flex-1 p-4">
+              <div className="space-y-4">
+                {messages.length === 0 ? (
+                  <div className="text-center text-slate-400 py-8">
+                    <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p className="text-sm">No messages yet</p>
+                  </div>
+                ) : (
+                  messages.map((message) => (
+                    <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className="max-w-xs">
+                        <div className={`rounded-2xl px-4 py-2 ${
+                          message.sender === 'user'
+                            ? 'bg-blue-600 text-white rounded-br-none'
+                            : 'bg-slate-700 text-slate-100 rounded-bl-none'
+                        }`}>
+                          <p className="text-sm break-words">{message.content}</p>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1 px-2">
+                          {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+
+            <div className="p-4 border-t border-slate-700 bg-slate-800/50">
+              <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="flex gap-2">
+                <Input
+                  placeholder="Type a message..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 h-10 rounded-full px-4"
+                />
+                <Button type="submit" disabled={!newMessage.trim()} className="bg-blue-600 hover:bg-blue-700 rounded-full h-10 w-10 p-0">
+                  <Send className="w-4 h-4" />
+                </Button>
+              </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Full-width chat for chat-only consultations */}
+      {consultationType === 'chat' && (
+        <div className="flex-1 flex flex-col">
+          <ScrollArea className="flex-1 p-4">
+            <div className="space-y-4">
+              {messages.length === 0 ? (
+                <div className="text-center text-slate-400 py-12">
+                  <MessageSquare className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <p className="text-base">No messages yet</p>
+                </div>
+              ) : (
+                messages.map((message) => (
+                  <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className="max-w-2xl">
+                      <div className={`rounded-2xl px-4 py-2 ${
+                        message.sender === 'user'
+                          ? 'bg-blue-600 text-white rounded-br-none'
+                          : 'bg-slate-700 text-slate-100 rounded-bl-none'
+                      }`}>
+                        <p className="text-base break-words">{message.content}</p>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 px-2">
+                        {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50">
+            <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="flex gap-2">
+              <Input
+                placeholder="Type a message..."
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 h-12 rounded-full px-4"
+              />
+              <Button type="submit" disabled={!newMessage.trim()} className="bg-blue-600 hover:bg-blue-700 rounded-full h-12 w-12 p-0">
+                <Send className="w-5 h-5" />
+              </Button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Control bar - Bottom */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-center gap-2 sm:gap-4 p-3 sm:p-4 md:p-6 bg-gradient-to-t from-black/80 to-transparent z-40"
+      >
+        <TooltipProvider>
+          <div className="flex items-center gap-2 sm:gap-3 md:gap-4 bg-slate-800/60 backdrop-blur-sm rounded-full px-3 sm:px-4 md:px-6 py-2 sm:py-3">
             {consultationType !== 'chat' && (
               <>
                 <Tooltip>
@@ -1048,13 +791,13 @@ export function ConsultationRoom({
                     <Button
                       variant={isAudioEnabled ? 'secondary' : 'destructive'}
                       size="icon"
-                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
+                      className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex-shrink-0"
                       onClick={toggleAudio}
                     >
-                      {isAudioEnabled ? <Mic className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <MicOff className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
+                      {isAudioEnabled ? <Mic className="w-4 sm:w-5 h-4 sm:h-5" /> : <MicOff className="w-4 sm:w-5 h-4 sm:h-5" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent className="text-xs sm:text-sm">{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
+                  <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
                 </Tooltip>
 
                 {consultationType === 'video' && (
@@ -1063,65 +806,52 @@ export function ConsultationRoom({
                       <Button
                         variant={isVideoEnabled ? 'secondary' : 'destructive'}
                         size="icon"
-                        className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
+                        className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex-shrink-0"
                         onClick={toggleVideo}
                       >
-                        {isVideoEnabled ? <Video className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <VideoOff className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
+                        {isVideoEnabled ? <Video className="w-4 sm:w-5 h-4 sm:h-5" /> : <VideoOff className="w-4 sm:w-5 h-4 sm:h-5" />}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent className="text-xs sm:text-sm"><span className="hidden sm:inline">Turn off camera</span><span className="sm:hidden">Camera</span></TooltipContent>
+                    <TooltipContent>Camera</TooltipContent>
                   </Tooltip>
                 )}
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={isSpeakerEnabled ? 'secondary' : 'destructive'}
-                      size="icon"
-                      className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
-                      onClick={() => setIsSpeakerEnabled(!isSpeakerEnabled)}
-                    >
-                      {isSpeakerEnabled ? <Volume2 className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" /> : <VolumeX className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs sm:text-sm"><span className="hidden sm:inline">{isSpeakerEnabled ? 'Mute speaker' : 'Unmute speaker'}</span><span className="sm:hidden">Speaker</span></TooltipContent>
-                </Tooltip>
-
-                <div className="w-px h-6 sm:h-8 bg-border mx-1 sm:mx-2 flex-shrink-0" />
+                <div className="w-px h-6 sm:h-8 bg-slate-600 mx-1 sm:mx-2 flex-shrink-0" />
               </>
             )}
 
-            {/* Chat button - Always available */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant={isChatOpen ? 'default' : 'secondary'}
                   size="icon"
-                  className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex-shrink-0"
+                  className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex-shrink-0"
                   onClick={() => setIsChatOpen(!isChatOpen)}
                 >
-                  <MessageSquare className="w-3.5 h-3.5 sm:w-4.5 sm:h-4.5 md:w-5 md:h-5" />
+                  <MessageSquare className="w-4 sm:w-5 h-4 sm:h-5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent className="text-xs sm:text-sm">Chat</TooltipContent>
+              <TooltipContent>Chat</TooltipContent>
             </Tooltip>
+
+            <div className="w-px h-6 sm:h-8 bg-slate-600 mx-1 sm:mx-2 flex-shrink-0" />
 
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="destructive"
                   size="icon"
-                  className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-full flex-shrink-0"
+                  className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex-shrink-0"
                   onClick={handleEndCall}
                 >
-                  <Phone className="w-4.5 h-4.5 sm:w-5 sm:h-5 md:w-6 md:h-6 rotate-[135deg]" />
+                  <Phone className="w-4 sm:w-5 h-4 sm:h-5 rotate-[135deg]" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent className="text-xs sm:text-sm">End Call</TooltipContent>
+              <TooltipContent>End Call</TooltipContent>
             </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
+          </div>
+        </TooltipProvider>
+      </motion.div>
     </div>
   );
 }
