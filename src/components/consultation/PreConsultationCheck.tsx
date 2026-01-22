@@ -142,8 +142,8 @@ export function PreConsultationCheck({
       }
     }
 
-    // Check speaker (simulated)
-    if (consultationType !== 'chat') {
+    // Check speaker (simulated) - only for video/audio
+    if (consultationType === 'video' || consultationType === 'audio') {
       setChecks(prev => ({ ...prev, speaker: 'checking' }));
       await new Promise(resolve => setTimeout(resolve, 500));
       setChecks(prev => ({ ...prev, speaker: 'success' }));
