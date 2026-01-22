@@ -312,8 +312,8 @@ const DoctorPortal = () => {
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
       <header className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="container mx-auto px-4">
-          <div className="flex items-center justify-between h-16">
+        <div className="container mx-auto px-2 sm:px-4">
+          <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2">
               <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
                 <Heart className="w-5 h-5 text-primary-foreground" />
@@ -325,7 +325,7 @@ const DoctorPortal = () => {
 
             <div className="flex items-center gap-4">
               {/* Availability Toggle */}
-              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
                 <span className="text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
                 <Switch
@@ -350,7 +350,7 @@ const DoctorPortal = () => {
                   <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
                 </Avatar>
-                <div className="hidden md:block">
+                <div className="hidden sm:block">
                   <p className="text-sm font-medium">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
                   <p className="text-xs text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
                 </div>
@@ -360,13 +360,13 @@ const DoctorPortal = () => {
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-4 sm:py-6 md:py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-8">
+      <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-6 md:py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className={`md:col-span-1 ${sidebarOpen ? 'block' : 'hidden md:block'} fixed md:static inset-0 md:inset-auto top-20 z-40 bg-background md:bg-transparent`}>
-            <Card className="md:sticky md:top-24 rounded-none md:rounded-lg">
-              <CardContent className="p-3 md:p-4">
-                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto md:max-h-none">
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+            <Card className="lg:sticky lg:top-24 rounded-lg">
+              <CardContent className="p-3 sm:p-4">
+                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
                   {[
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
                     { id: 'schedule', label: 'My Appointments', icon: Calendar },
@@ -423,7 +423,7 @@ const DoctorPortal = () => {
           </aside>
 
           {/* Main Content */}
-          <main className="md:col-span-3 space-y-4 md:space-y-6">
+          <main className="lg:col-span-3 space-y-4 md:space-y-6">
             {/* Welcome Banner */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -449,7 +449,7 @@ const DoctorPortal = () => {
             </motion.div>
 
             {/* Quick Stats */}
-            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               {[
                 { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
                 { label: 'This Month', value: stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
@@ -603,13 +603,13 @@ const DoctorPortal = () => {
                   <CardContent>
                     <div className="space-y-4">
                       {fetchedAppointments.filter(apt => apt.status === 'confirmed' || apt.status === 'completed').map((apt) => (
-                        <div key={apt.id} className={`flex items-center justify-between p-4 rounded-xl border ${apt.status === 'in-progress'
+                        <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${apt.status === 'in-progress'
                           ? 'border-primary bg-primary/5'
                           : apt.status === 'completed'
                             ? 'border-success/30 bg-success/5'
                             : 'border-border'
                           }`}>
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-4 mb-3 sm:mb-0">
                             <div className="text-center w-20">
                               <p className="text-sm font-semibold">{apt.time}</p>
                               <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString()}</p>
@@ -625,8 +625,8 @@ const DoctorPortal = () => {
                               <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <div className="text-right">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                            <div className="text-left sm:text-right">
                               {apt.type === 'Video' ? (
                                 <Badge variant="outline" className="gap-1 mb-2">
                                   <Video className="w-3 h-3" /> Video
@@ -638,22 +638,24 @@ const DoctorPortal = () => {
                               )}
                               <div>{getStatusBadge(apt.status)}</div>
                             </div>
-                            {apt.status === 'confirmed' && (
-                              <JoinConsultationButton
-                                appointmentId={apt.id}
-                                consultationType={apt.type}
-                                participantName={apt.patient_name || ''}
-                                status={apt.status}
-                                variant="default"
-                                size="sm"
-                                className="gradient-primary"
-                              />
-                            )}
-                            {apt.status === 'completed' && (
-                              <Button size="sm" variant="outline">
-                                View Notes
-                              </Button>
-                            )}
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              {apt.status === 'confirmed' && (
+                                <JoinConsultationButton
+                                  appointmentId={apt.id}
+                                  consultationType={apt.type}
+                                  participantName={apt.patient_name || ''}
+                                  status={apt.status}
+                                  variant="default"
+                                  size="sm"
+                                  className="gradient-primary w-full sm:w-auto"
+                                />
+                              )}
+                              {apt.status === 'completed' && (
+                                <Button size="sm" variant="outline" className="w-full sm:w-auto">
+                                  View Notes
+                                </Button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -672,8 +674,8 @@ const DoctorPortal = () => {
                   <CardContent>
                     <div className="space-y-4">
                       {pendingRequests.map((request) => (
-                        <div key={request.id} className="flex items-center justify-between p-4 rounded-xl border border-border">
-                          <div className="flex items-center gap-4">
+                        <div key={request.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border">
+                          <div className="flex items-center gap-4 mb-3 sm:mb-0">
                             <Avatar className="w-12 h-12">
                               <AvatarFallback className="bg-primary/10 text-primary">
                                 {request.patient.split(' ').map(n => n[0]).join('')}
@@ -688,19 +690,19 @@ const DoctorPortal = () => {
                               <p className="text-sm text-muted-foreground">{request.reason}</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                            <div className="text-left sm:text-right">
                               <p className="text-sm font-medium">
                                 {new Date(request.requestedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                               </p>
                               <p className="text-sm text-muted-foreground">{request.requestedTime}</p>
                             </div>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleDeclineRequest(request.id)}>
-                                Decline
-                              </Button>
-                              <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(request.id)}>
+                            <div className="flex flex-col gap-2 w-full sm:w-auto">
+                              <Button size="sm" className="bg-success hover:bg-success/90 w-full" onClick={() => handleAcceptRequest(request.id)}>
                                 Accept
+                              </Button>
+                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 w-full" onClick={() => handleDeclineRequest(request.id)}>
+                                Decline
                               </Button>
                             </div>
                           </div>
