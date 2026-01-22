@@ -748,18 +748,18 @@ const DoctorPortal = () => {
 
               <TabsContent value="patients" className="space-y-6">
                 <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
+                  <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                       <CardTitle>My Patients</CardTitle>
                       <CardDescription>All patients under your care</CardDescription>
                     </div>
-                    <Input placeholder="Search patients..." className="w-64" />
+                    <Input placeholder="Search patients..." className="w-full sm:w-64" />
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
                       {patientList.map((patient) => (
-                        <div key={patient.id} className="flex items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
-                          <div className="flex items-center gap-4">
+                        <div key={patient.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
+                          <div className="flex items-center gap-4 mb-3 sm:mb-0">
                             <Avatar className="w-12 h-12">
                               <AvatarFallback className="bg-primary/10 text-primary">
                                 {patient.name.split(' ').map(n => n[0]).join('')}
@@ -768,19 +768,25 @@ const DoctorPortal = () => {
                             <div>
                               <p className="font-semibold">{patient.name}</p>
                               <p className="text-sm text-muted-foreground">{patient.age} years old • {patient.condition}</p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Last visit: {patient.lastVisit === 'New Patient' ? patient.lastVisit : new Date(patient.lastVisit).toLocaleDateString()}
+                              </p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right text-sm">
-                              <p className="text-muted-foreground">Last visit</p>
-                              <p className="font-medium">{patient.lastVisit === 'New Patient' ? patient.lastVisit : new Date(patient.lastVisit).toLocaleDateString()}</p>
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+                            <div className="text-left sm:text-right mb-2 sm:mb-0">
+                              <p className="text-xs text-muted-foreground">Next appointment</p>
+                              <p className="text-sm font-medium">{new Date(patient.nextAppointment).toLocaleDateString()}</p>
                             </div>
-                            <Button size="sm" variant="outline">
-                              View Profile
-                            </Button>
-                            <Button size="sm" variant="ghost">
-                              <MessageSquare className="w-4 h-4" />
-                            </Button>
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <Button size="sm" variant="outline" className="w-full sm:w-auto">
+                                View Profile
+                              </Button>
+                              <Button size="sm" variant="ghost" className="w-full sm:w-auto">
+                                <MessageSquare className="w-4 h-4 mr-2" />
+                                Message
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       ))}
