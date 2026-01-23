@@ -457,6 +457,37 @@ export function ConsultationRoom({
     }
   }, [streamInitialized, isAdmitted, participantRole]);
 
+  // Polling effect to handle cases where ref becomes available after stream is ready
+  useEffect(() => {
+    if (!streamInitialized || !localStreamRef.current) return;
+    if (participantRole === 'patient' && !isAdmitted) return; // Skip for waiting room
+    
+    // Start polling to check if PiP ref becomes available
+    const checkInterval = setInterval(() => {
+      if (localVideoPIPRef.current && !localVideoPIPRef.current.srcObject) {
+        console.log('[Media] ✅ PiP element now available! Setting stream via polling');
+        localVideoPIPRef.current.srcObject = localStreamRef.current;
+        localVideoPIPRef.current.play().catch(err => {
+          console.log('[Media] PiP play() error:', err.message);
+        });
+        clearInterval(checkInterval); // Stop polling once set
+      }
+    }, 100); // Check every 100ms
+    
+    // Clean up interval after 10 seconds (if ref never becomes available)
+    const timeout = setTimeout(() => {
+      clearInterval(checkInterval);
+      if (!localVideoPIPRef.current) {
+        console.warn('[Media] PiP element never became available after 10 seconds');
+      }
+    }, 10000);
+    
+    return () => {
+      clearInterval(checkInterval);
+      clearTimeout(timeout);
+    };
+  }, [streamInitialized, isAdmitted, participantRole]);
+
   // Initialize WebRTC when patient gets admitted
   useEffect(() => {
     if (participantRole !== 'patient' || !isAdmitted || !sessionId || webrtcService || !localStreamRef.current || !user) return;
