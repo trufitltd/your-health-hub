@@ -103,31 +103,60 @@ export function ConsultationRoom({
       }
 
       try {
+        console.log('[Init] Starting consultation room initialization');
         let session = await consultationService.getSessionByAppointmentId(appointmentId);
+        console.log('[Init] getSessionByAppointmentId returned:', session ? session.id : 'null');
         let patientId: string | null = null;
         let doctorId: string | null = null;
 
-        if (!session) {
+        // Check if the existing session is stale (ended or too old)
+        // If we're rejoining after an ended session, create a NEW one to avoid old signals
+        let isStaleSession = false;
+        if (session) {
+          // Check if session is explicitly ended
+          if (session.status === 'ended') {
+            isStaleSession = true;
+            console.log('[Session] Previous session was ended at:', session.ended_at, 'Creating new session for rejoin');
+          }
+          // Also check if session has ended_at timestamp (session was completed)
+          else if (session.ended_at) {
+            isStaleSession = true;
+            console.log('[Session] Previous session was ended, creating new session for rejoin');
+          }
+        }
+
+        if (!session || isStaleSession) {
+          console.log('[Session] Fetching appointment data for:', appointmentId);
           const { data: appointmentData, error: appointmentError } = await supabase
             .from('appointments')
             .select('patient_id, doctor_id')
             .eq('id', appointmentId)
             .single();
 
-          if (appointmentError) throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
+          if (appointmentError) {
+            console.error('[Session] Error fetching appointment:', appointmentError);
+            throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
+          }
+
+          if (!appointmentData) {
+            throw new Error('Appointment not found');
+          }
 
           patientId = appointmentData.patient_id;
           doctorId = appointmentData.doctor_id;
 
+          console.log('[Session] Creating new consultation session for appointment:', appointmentId, 'patient:', patientId, 'doctor:', doctorId);
           session = await consultationService.createSession(
             appointmentId,
             patientId,
             doctorId,
             consultationType
           );
+          console.log('[Session] Created new consultation session:', session.id);
         } else {
           patientId = session.patient_id;
           doctorId = session.doctor_id;
+          console.log('[Session] Using existing active session:', session.id);
         }
 
         if (participantRole === 'doctor') {
@@ -173,26 +202,35 @@ export function ConsultationRoom({
         lobbyChannelRef.current = lobbyChannel;
 
         // For doctors: check if patient already sent join_lobby before subscription was ready
+        // IMPORTANT: Only check signals created AFTER the current session started AND within the last 2 minutes
+        // This prevents false notifications from old signals in previous sessions
         if (participantRole === 'doctor') {
           console.log('[Lobby] Doctor checking for existing join_lobby signals...');
+          console.log('[Lobby] Session started_at:', session.started_at, 'current session id:', session.id);
+          
+          // Only consider signals from the last 2 minutes as "patient waiting"
+          const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+          
           const { data: existingSignals, error: queryError } = await supabase
             .from('webrtc_signals')
             .select('*')
             .eq('session_id', session.id)
             .eq('signal_data->>type', 'join_lobby')
-            .neq('sender_id', user.id);
+            .neq('sender_id', user.id)
+            .gte('created_at', twoMinutesAgo);  // Only signals from the last 2 minutes
           
           if (queryError) {
             console.error('[Lobby] Error checking for existing signals:', queryError);
           } else if (existingSignals && existingSignals.length > 0) {
-            console.log('[Lobby] 🔔 Doctor - Found existing join_lobby signals! Patient is waiting');
+            console.log('[Lobby] 🔔 Doctor - Found recent join_lobby signals! Patient is waiting');
+            console.log('[Lobby] Existing signals count:', existingSignals.length, 'From:', twoMinutesAgo);
             setIsPatientWaiting(true);
             toast({
               title: 'Patient Waiting',
               description: 'A patient is waiting in the lobby.',
             });
           } else {
-            console.log('[Lobby] Doctor - No existing join_lobby signals found');
+            console.log('[Lobby] Doctor - No recent join_lobby signals found (last 2 mins)');
           }
         }
 
@@ -212,7 +250,9 @@ export function ConsultationRoom({
 
         setSessionId(session.id);
 
+        console.log('[Init] Fetching existing messages for session:', session.id);
         const existingMessages = await consultationService.getMessages(session.id);
+        console.log('[Init] Fetched', existingMessages.length, 'existing messages');
         setMessages(existingMessages.map(msg => ({
           id: msg.id,
           sender: msg.sender_id === user?.id ? 'user' : 'remote',
@@ -222,6 +262,7 @@ export function ConsultationRoom({
           type: msg.message_type as 'text' | 'file'
         })));
 
+        console.log('[Init] Subscribing to messages for session:', session.id);
         const unsubscribe = consultationService.subscribeToMessages(
           session.id,
           (dbMessage) => {
@@ -237,11 +278,17 @@ export function ConsultationRoom({
             }
           }
         );
+        console.log('[Init] Message subscription created');
 
         unsubscribeRef.current = unsubscribe;
         setIsLoading(false);
+        console.log('[Init] Session initialization complete!');
       } catch (err) {
         console.error('Error initializing session:', err);
+        if (err instanceof Error) {
+          console.error('Error message:', err.message);
+          console.error('Error stack:', err.stack);
+        }
         setError(err instanceof Error ? err.message : 'Failed to initialize consultation');
         setIsLoading(false);
       }
