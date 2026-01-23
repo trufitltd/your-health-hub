@@ -256,7 +256,12 @@ export class WebRTCService {
       const hasVideoTrack = this.remoteStream?.getVideoTracks().some(t => t.readyState === 'live');
       if (hasVideoTrack) {
         console.log('   Media flow detected with active video - connection appears valid for relay networks');
-        // NOTE: NOT firing onConnectedCallback here - only real ICE connection state should trigger that
+        // CRITICAL FIX: Fire callback for relay networks where connectionState doesn't reach 'connected'
+        // This is necessary for networks with firewall/NAT that can't establish P2P but CAN relay via TURN
+        if (this.onConnectedCallback) {
+          console.log('✅ FALLBACK: Firing onConnectedCallback for relay network connection');
+          this.onConnectedCallback();
+        }
         return true;
       } else {
         console.log('⚠️ FALLBACK: Has SDP but no active video tracks yet');
@@ -296,7 +301,11 @@ export class WebRTCService {
         if (checksWithoutConnection === 2 && !fallbackCheckAttempted && !mediaFlowDetected) {
           fallbackCheckAttempted = true;
           console.log('[WebRTC] 📊 Attempting fallback connection check after 10 seconds stuck...');
-          this.checkFallbackConnection();
+          const fallbackSucceeded = this.checkFallbackConnection();
+          if (fallbackSucceeded) {
+            mediaFlowDetected = true;
+            console.log('[WebRTC] ✅ Fallback check succeeded - connection is valid for relay networks');
+          }
         }
 
         // Try to get stats for better diagnostics
