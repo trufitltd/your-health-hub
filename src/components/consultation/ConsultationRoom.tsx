@@ -333,7 +333,7 @@ export function ConsultationRoom({
           });
           
           if (hasValidRemoteTracks) {
-            console.log('[WebRTC] ✓ Valid remote stream confirmed - setting hasRemoteStream');
+            console.log('[WebRTC] ✓ Valid remote stream confirmed - setting hasRemoteStream (NOT connected yet)');
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
             }
@@ -341,14 +341,15 @@ export function ConsultationRoom({
               remoteAudioRef.current.srcObject = remoteStream;
             }
             setHasRemoteStream(true);
-            setConnectionStatus('connected');
+            // DO NOT set connected here - wait for actual connection establishment
           } else {
             console.log('[WebRTC] ✗ No valid remote tracks yet - stream not ready');
           }
         });
 
         webrtc.onConnected(() => {
-          console.log('[WebRTC] Doctor ICE connected - NOT setting connected status yet');
+          console.log('[WebRTC] 🎉 Doctor - ACTUAL CONNECTION ESTABLISHED - setting connected status');
+          setConnectionStatus('connected');
         });
 
         webrtc.onError((error) => {
@@ -423,14 +424,15 @@ export function ConsultationRoom({
               remoteAudioRef.current.srcObject = remoteStream;
             }
             setHasRemoteStream(true);
-            setConnectionStatus('connected');
+            // DO NOT set connected here - wait for actual connection establishment
           } else {
             console.log('[WebRTC] Patient - ✗ No valid remote tracks yet - stream not ready');
           }
         });
 
         webrtc.onConnected(() => {
-          console.log('[WebRTC] Patient ICE connected - NOT setting connected status yet');
+          console.log('[WebRTC] 🎉 Patient - ACTUAL CONNECTION ESTABLISHED - setting connected status');
+          setConnectionStatus('connected');
         });
 
         webrtc.onError((error) => {
@@ -762,30 +764,14 @@ export function ConsultationRoom({
               <div className="relative w-full h-full flex items-center justify-center">
                 {/* Remote video (main view) */}
                 <div className="relative w-full h-full max-w-5xl rounded-2xl overflow-hidden bg-[#252542]">
-                  {hasRemoteStream ? (
-                    <>
-                      <video
-                        ref={remoteVideoRef}
-                        autoPlay
-                        playsInline
-                        muted={false}
-                        className="w-full h-full object-cover"
-                        style={{ display: remoteVideoEnabled ? 'block' : 'none' }}
-                      />
-                      {!remoteVideoEnabled && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-[#252542]">
-                          <div className="text-center">
-                            <Avatar className="w-24 h-24 mx-auto mb-4">
-                              <AvatarFallback className="bg-primary text-primary-foreground text-3xl">
-                                {participantInitials}
-                              </AvatarFallback>
-                            </Avatar>
-                            <p className="text-white text-lg">{participantName}</p>
-                            <p className="text-slate-400 text-sm">Camera is off</p>
-                          </div>
-                        </div>
-                      )}
-                    </>
+                  {hasRemoteStream && connectionStatus === 'connected' && remoteVideoEnabled ? (
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      muted={false}
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
                       <div className="text-center">
@@ -794,17 +780,15 @@ export function ConsultationRoom({
                             {participantInitials}
                           </AvatarFallback>
                         </Avatar>
-                        <p className="text-white text-lg font-medium">{participantName}</p>
-                        <p className="text-slate-400 text-sm mt-1">
-                          {hasRemoteStream ? 'Waiting for video...' : 'Waiting for participant...'}
-                        </p>
+                        <p className="text-white text-lg">{participantName}</p>
+                        {connectionStatus === 'connected' && !remoteVideoEnabled ? (
+                          <p className="text-slate-400 text-sm">Camera is off</p>
+                        ) : (
+                          <p className="text-slate-400 text-sm">{connectionStatus === 'connecting' ? 'Connecting...' : 'Waiting for video'}</p>
+                        )}
                       </div>
                     </div>
                   )}
-                  {/* Participant name tag */}
-                  <div className="absolute bottom-3 left-3 px-3 py-1.5 bg-black/50 rounded-lg backdrop-blur-sm">
-                    <span className="text-white text-sm font-medium">{participantName}</span>
-                  </div>
                 </div>
 
                 {/* Local video (PIP) */}
