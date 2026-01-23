@@ -52,6 +52,8 @@ export function ConsultationRoom({
   const [newMessage, setNewMessage] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMediaReady, setIsMediaReady] = useState(false);
+  const [streamInitialized, setStreamInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [isParticipantConnected, setIsParticipantConnected] = useState(false);
@@ -67,6 +69,7 @@ export function ConsultationRoom({
   const [handRaised, setHandRaised] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localVideoPIPRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -281,6 +284,16 @@ export function ConsultationRoom({
       ? (sessionId && user && !localStreamRef.current)
       : (sessionId && isAdmitted && !webrtcService && user);
 
+    console.log('[useEffect] Media init check:', {
+      participantRole,
+      sessionId: !!sessionId,
+      user: !!user,
+      isAdmitted,
+      localStreamRef: !!localStreamRef.current,
+      shouldInitialize,
+      isVideo: consultationType === 'video'
+    });
+
     if (!shouldInitialize) return;
 
     const initializeMedia = async () => {
@@ -294,17 +307,25 @@ export function ConsultationRoom({
           audio: consultationType !== 'chat' ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
         };
 
+        console.log('[Media] Requesting getUserMedia with constraints:', constraints);
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log('[Media] getUserMedia successful');
+        
         localStreamRef.current = stream;
 
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-          console.log('[Media] Local video stream set successfully for', participantRole);
-        }
+        console.log('[Media] Stream obtained:', {
+          hasVideo: stream.getVideoTracks().length > 0,
+          hasAudio: stream.getAudioTracks().length > 0,
+          videoTracksEnabled: stream.getVideoTracks().every(t => t.enabled),
+          audioTracksEnabled: stream.getAudioTracks().every(t => t.enabled)
+        });
+        console.log('[Media] Stream stored in localStreamRef, will set to video element when ready');
+        setStreamInitialized(true); // Trigger the video element setup effect
 
         // For patients in waiting room, stop here - WebRTC will initialize after admission
         if (participantRole === 'patient' && !isAdmitted) {
           console.log('[Media] Patient in waiting room - media initialized, WebRTC will start after admission');
+          setIsMediaReady(true); // Mark media as ready for waiting room
           return;
         }
 
@@ -363,6 +384,7 @@ export function ConsultationRoom({
 
         webrtc.initializePeer(stream);
         setWebrtcService(webrtc);
+        setStreamInitialized(true); // Mark stream as ready for doctors
 
         if ('wakeLock' in navigator) {
           try {
@@ -372,6 +394,9 @@ export function ConsultationRoom({
             console.log('Wake lock not available');
           }
         }
+        
+        // Mark media as ready for doctors
+        setIsMediaReady(true);
       } catch (err) {
         console.error('Media initialization error:', err);
         toast({
@@ -384,6 +409,53 @@ export function ConsultationRoom({
 
     initializeMedia();
   }, [sessionId, user, isAdmitted, webrtcService, consultationType, participantRole]);
+
+  // Set stream to waiting room video element once it's available
+  useEffect(() => {
+    if (!streamInitialized || !localStreamRef.current) return;
+    if (participantRole !== 'patient' || isAdmitted) return; // Only in waiting room
+    if (!localVideoRef.current) {
+      console.log('[Media] Waiting for video element to be ready in waiting room...');
+      return; // Will retry when ref becomes available
+    }
+
+    console.log('[Media] ✅ Video element ready! Setting stream to waiting room video');
+    localVideoRef.current.srcObject = localStreamRef.current;
+    localVideoRef.current.play().catch(err => {
+      console.error('[Media] Waiting room video play() error:', err.message);
+    });
+    
+    // Add loadedmetadata listener for debugging
+    const onLoadedMetadata = () => {
+      console.log('[Media] ✅ Waiting room video loaded and playing');
+      localVideoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+    localVideoRef.current.addEventListener('loadedmetadata', onLoadedMetadata);
+  }, [streamInitialized, participantRole, isAdmitted]);
+
+  // Set stream to PiP video element once it's available (after admission)
+  useEffect(() => {
+    if (!streamInitialized || !localStreamRef.current) {
+      return;
+    }
+    
+    // Try to set on PiP if available
+    if (localVideoPIPRef.current && !localVideoPIPRef.current.srcObject) {
+      console.log('[Media] ✅ Setting stream to PiP video element');
+      localVideoPIPRef.current.srcObject = localStreamRef.current;
+      localVideoPIPRef.current.play().catch(err => {
+        console.log('[Media] PiP play() error:', err.message);
+      });
+    }
+    
+    // For patients not in waiting room and doctors, keep retrying until PiP is available
+    if (participantRole === 'patient' && !isAdmitted) return; // Skip for waiting room
+    
+    if (!localVideoPIPRef.current) {
+      console.log('[Media] Waiting for PiP video element to be rendered...');
+      // Will retry on next effect run
+    }
+  }, [streamInitialized, isAdmitted, participantRole]);
 
   // Initialize WebRTC when patient gets admitted
   useEffect(() => {
@@ -604,7 +676,7 @@ export function ConsultationRoom({
   }
 
   // Loading state
-  if (isLoading) {
+  if (isLoading || !isMediaReady) {
     return (
       <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
         <div className="text-center">
@@ -634,6 +706,10 @@ export function ConsultationRoom({
                 muted
                 className="w-full h-full object-cover"
                 style={{ transform: 'scaleX(-1)' }}
+                onLoadedMetadata={() => console.log('[Video] loadedmetadata event fired')}
+                onPlay={() => console.log('[Video] play event fired')}
+                onLoadStart={() => console.log('[Video] loadstart event fired')}
+                onCanPlay={() => console.log('[Video] canplay event fired')}
               />
               <div className="absolute bottom-2 left-2 right-2 flex justify-center gap-2">
                 <Button
@@ -799,7 +875,7 @@ export function ConsultationRoom({
                 >
                   {isVideoEnabled ? (
                     <video
-                      ref={localVideoRef}
+                      ref={localVideoPIPRef}
                       autoPlay
                       playsInline
                       muted
