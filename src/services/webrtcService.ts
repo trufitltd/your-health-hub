@@ -25,6 +25,9 @@ export class WebRTCService {
   private peerReady = false;
   private remoteStream: MediaStream | null = null;
   private streamCallbackFired = false;
+  private hasReceivedVideoTrack = false;
+  private hasReceivedAudioTrack = false;
+  private remoteTracksReceivedTime: number | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean) {
@@ -73,7 +76,23 @@ export class WebRTCService {
 
     // Handle remote stream
     this.peerConnection.ontrack = (event) => {
-      console.log('🎥 Received remote track:', event.track.kind, 'enabled:', event.track.enabled, 'readyState:', event.track.readyState);
+      console.log('🎥 ontrack event - kind:', event.track.kind, 'id:', event.track.id, 'enabled:', event.track.enabled);
+      
+      // CRITICAL: Check if this is self-loopback (doctor's own tracks echoed back)
+      const localTrackIds = this.localStream?.getTracks().map(t => t.id) || [];
+      const isSelfLoopback = localTrackIds.includes(event.track.id);
+      console.log('🎥 Local track IDs:', localTrackIds, 'Received track ID:', event.track.id, 'Is self-loopback:', isSelfLoopback);
+      
+      if (isSelfLoopback) {
+        console.log('❌ 🎥 IGNORING SELF-LOOPBACK TRACK - this is our own track being echoed');
+        return;
+      }
+      
+      // Record when we first receive remote tracks
+      if (!this.remoteTracksReceivedTime) {
+        this.remoteTracksReceivedTime = Date.now();
+        console.log('🎥 First remote track received at:', new Date(this.remoteTracksReceivedTime).toISOString());
+      }
       
       if (!this.remoteStream) {
         this.remoteStream = new MediaStream();
@@ -81,15 +100,33 @@ export class WebRTCService {
       }
       
       this.remoteStream.addTrack(event.track);
-      console.log('🎥 Added track to remote stream, total tracks:', this.remoteStream.getTracks().length);
+      console.log('🎥 Added remote track to stream, total tracks:', this.remoteStream.getTracks().length);
       
-      // Only call callback once if track is enabled and live
-      if (event.track.enabled && event.track.readyState === 'live' && this.onStreamCallback && !this.streamCallbackFired) {
-        console.log('🎥 Calling onStream callback - track is enabled and live');
+      // Track which types of tracks we've received from ACTUAL remote peer
+      if (event.track.kind === 'video') {
+        this.hasReceivedVideoTrack = true;
+      } else if (event.track.kind === 'audio') {
+        this.hasReceivedAudioTrack = true;
+      }
+      
+      // Check if we should fire callback
+      const allTracks = this.remoteStream.getTracks();
+      const enabledTracks = allTracks.filter(t => t.enabled && t.readyState === 'live');
+      const hasAtLeastTwoTrackTypes = this.hasReceivedVideoTrack && this.hasReceivedAudioTrack;
+      
+      console.log('🎥 Remote stream has', allTracks.length, 'total tracks, enabled count:', enabledTracks.length);
+      console.log('🎥 Has video:', this.hasReceivedVideoTrack, 'Has audio:', this.hasReceivedAudioTrack, 'Both:', hasAtLeastTwoTrackTypes);
+      
+      // Only fire once - require BOTH video and audio tracks from actual remote peer
+      if (hasAtLeastTwoTrackTypes && enabledTracks.length >= 2 && this.onStreamCallback && !this.streamCallbackFired) {
+        console.log('✅ 🎥 FIRING CALLBACK - valid remote peer with video and audio');
         this.streamCallbackFired = true;
         this.onStreamCallback(this.remoteStream);
       } else {
-        console.log('🎥 Not calling callback - enabled:', event.track.enabled, 'readyState:', event.track.readyState, 'already fired:', this.streamCallbackFired);
+        const reason = !hasAtLeastTwoTrackTypes ? 'missing video/audio' : 
+                      enabledTracks.length < 2 ? `only ${enabledTracks.length} enabled` :
+                      this.streamCallbackFired ? 'already fired' : 'unknown';
+        console.log(`❌ 🎥 NOT FIRING - reason: ${reason}`);
       }
     };
 
@@ -193,6 +230,11 @@ export class WebRTCService {
     const hasRemoteDescription = this.peerConnection.remoteDescription !== null;
     const signalingState = this.peerConnection.signalingState;
     const hasRemoteTracks = this.remoteStream && this.remoteStream.getTracks().length > 0;
+    
+    // CRITICAL: Only accept if tracks have been present for at least 5 seconds
+    // This prevents accepting premature connections before the actual peer joins
+    const tracksPresentDuration = this.remoteTracksReceivedTime ? Date.now() - this.remoteTracksReceivedTime : 0;
+    const tracksStableEnough = tracksPresentDuration >= 5000; // 5 seconds
 
     console.log('🔄 Fallback connection check:');
     console.log('  - Local description:', hasLocalDescription);
@@ -201,18 +243,20 @@ export class WebRTCService {
     console.log('  - Signaling state:', signalingState);
     console.log('  - Connection state:', this.peerConnection.connectionState);
     console.log('  - ICE state:', this.peerConnection.iceConnectionState);
+    console.log('  - Tracks present for:', tracksPresentDuration, 'ms (need 5000ms)');
 
-    // STRICT: Only accept as valid if we have BOTH descriptions, stable signaling, AND remote tracks
-    // This ensures both sides are truly ready before accepting connection
-    if (hasLocalDescription && hasRemoteDescription && signalingState === 'stable' && hasRemoteTracks) {
-      console.log('✅ FALLBACK: Valid connection detected (SDP + remote tracks present)');
+    // STRICT: Only accept as valid if:
+    // 1. We have BOTH descriptions
+    // 2. Signaling is stable
+    // 3. We have remote tracks that have been present for 5+ seconds
+    // 4. We have video tracks that are actually live
+    if (hasLocalDescription && hasRemoteDescription && signalingState === 'stable' && hasRemoteTracks && tracksStableEnough) {
+      console.log('✅ FALLBACK: Valid connection detected (stable SDP + remote tracks for 5+ seconds)');
       // Extra validation: make sure we have VIDEO tracks if this was a video call
       const hasVideoTrack = this.remoteStream?.getVideoTracks().some(t => t.readyState === 'live');
       if (hasVideoTrack) {
-        if (this.onConnectedCallback) {
-          console.log('   Triggering connection callback with active video');
-          this.onConnectedCallback();
-        }
+        console.log('   Media flow detected with active video - connection appears valid for relay networks');
+        // NOTE: NOT firing onConnectedCallback here - only real ICE connection state should trigger that
         return true;
       } else {
         console.log('⚠️ FALLBACK: Has SDP but no active video tracks yet');
@@ -616,5 +660,11 @@ export class WebRTCService {
       this.localStream.getTracks().forEach(track => track.stop());
       this.localStream = null;
     }
+    // Reset state for next connection
+    this.streamCallbackFired = false;
+    this.hasReceivedVideoTrack = false;
+    this.hasReceivedAudioTrack = false;
+    this.remoteTracksReceivedTime = null;
+    this.remoteStream = null;
   }
 }
