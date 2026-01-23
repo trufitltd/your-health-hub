@@ -358,9 +358,10 @@ export function ConsultationRoom({
   useEffect(() => {
     // For patients: initialize media once per session (show local video in waiting room)
     // For doctors: initialize media only after admitted
+    // For admitted patients: initialize WebRTC after getting admitted
     const shouldInitialize = participantRole === 'patient' 
-      ? (sessionId && user && !localStreamRef.current)
-      : (sessionId && isAdmitted && !webrtcService && user);
+      ? (sessionId && user && !localStreamRef.current)  // Patients: initialize media once
+      : (sessionId && isAdmitted && !webrtcService && user);  // Doctors: need admission + WebRTC
 
     console.log('[useEffect] Media init check:', {
       participantRole,
@@ -368,6 +369,7 @@ export function ConsultationRoom({
       user: !!user,
       isAdmitted,
       localStreamRef: !!localStreamRef.current,
+      webrtcService: !!webrtcService,
       shouldInitialize,
       isVideo: consultationType === 'video'
     });
@@ -407,6 +409,7 @@ export function ConsultationRoom({
           return;
         }
 
+        console.log('[Media] Initializing WebRTC service, isInitiator:', participantRole === 'doctor');
         const isInitiator = participantRole === 'doctor';
         const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
 
@@ -447,7 +450,7 @@ export function ConsultationRoom({
         });
 
         webrtc.onConnected(() => {
-          console.log('[WebRTC] 🎉 Doctor - ACTUAL CONNECTION ESTABLISHED - setting connected status');
+          console.log('[WebRTC] 🎉 Connection established - setting connected status');
           setConnectionStatus('connected');
         });
 
@@ -462,7 +465,7 @@ export function ConsultationRoom({
 
         webrtc.initializePeer(stream);
         setWebrtcService(webrtc);
-        setStreamInitialized(true); // Mark stream as ready for doctors
+        setStreamInitialized(true); // Mark stream as ready
 
         if ('wakeLock' in navigator) {
           try {
@@ -473,7 +476,7 @@ export function ConsultationRoom({
           }
         }
         
-        // Mark media as ready for doctors
+        // Mark media as ready
         setIsMediaReady(true);
       } catch (err) {
         console.error('Media initialization error:', err);
