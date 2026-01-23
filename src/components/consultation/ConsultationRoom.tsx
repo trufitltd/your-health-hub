@@ -147,8 +147,10 @@ export function ConsultationRoom({
             },
             (payload: { new: WebRTCSignal }) => {
               const signal = payload.new;
+              console.log('[Lobby] Received signal:', signal.signal_data?.type, 'from:', signal.sender_id, 'myId:', user?.id);
               if (signal.sender_id !== user?.id) {
                 if (participantRole === 'doctor' && signal.signal_data?.type === 'join_lobby') {
+                  console.log('[Lobby] 🔔 Doctor - Patient is waiting! Setting isPatientWaiting');
                   setIsPatientWaiting(true);
                   toast({
                     title: 'Patient Waiting',
@@ -171,12 +173,17 @@ export function ConsultationRoom({
         lobbyChannelRef.current = lobbyChannel;
 
         if (participantRole === 'patient') {
+          console.log('[Lobby] Patient sending join_lobby signal for session:', session.id);
           const { error: insertError } = await supabase.from('webrtc_signals').insert({
             session_id: session.id,
             sender_id: user.id,
             signal_data: { type: 'join_lobby' }
           });
-          if (insertError) console.error('Error sending join_lobby signal:', insertError);
+          if (insertError) {
+            console.error('Error sending join_lobby signal:', insertError);
+          } else {
+            console.log('[Lobby] ✅ join_lobby signal sent successfully');
+          }
         }
 
         setSessionId(session.id);
