@@ -172,6 +172,30 @@ export function ConsultationRoom({
 
         lobbyChannelRef.current = lobbyChannel;
 
+        // For doctors: check if patient already sent join_lobby before subscription was ready
+        if (participantRole === 'doctor') {
+          console.log('[Lobby] Doctor checking for existing join_lobby signals...');
+          const { data: existingSignals, error: queryError } = await supabase
+            .from('webrtc_signals')
+            .select('*')
+            .eq('session_id', session.id)
+            .eq('signal_data->>type', 'join_lobby')
+            .neq('sender_id', user.id);
+          
+          if (queryError) {
+            console.error('[Lobby] Error checking for existing signals:', queryError);
+          } else if (existingSignals && existingSignals.length > 0) {
+            console.log('[Lobby] 🔔 Doctor - Found existing join_lobby signals! Patient is waiting');
+            setIsPatientWaiting(true);
+            toast({
+              title: 'Patient Waiting',
+              description: 'A patient is waiting in the lobby.',
+            });
+          } else {
+            console.log('[Lobby] Doctor - No existing join_lobby signals found');
+          }
+        }
+
         if (participantRole === 'patient') {
           console.log('[Lobby] Patient sending join_lobby signal for session:', session.id);
           const { error: insertError } = await supabase.from('webrtc_signals').insert({
