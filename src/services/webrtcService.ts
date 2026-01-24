@@ -209,15 +209,15 @@ export class WebRTCService {
     // Always announce readiness so the other peer knows we are online
     await this.sendSignal({ type: 'ready' });
     
-    // If initiator (doctor), create offer after a delay to ensure patient is ready
+    // If initiator (doctor), wait for peer ready signal before creating offer
     if (this.isInitiator) {
-      // Wait longer to ensure patient has time to initialize WebRTC after receiving admit signal
+      // Wait up to 5 seconds for peer ready signal, then create offer anyway
       setTimeout(async () => {
-        if (this.peerConnection && !this.peerConnection.localDescription) {
-          console.log('Creating offer as initiator after delay');
+        if (this.peerConnection && !this.peerConnection.localDescription && !this.peerReady) {
+          console.log('Creating offer as initiator - timeout waiting for peer ready signal');
           await this.createOffer();
         }
-      }, 2000);
+      }, 5000);
     }
   }
 
