@@ -314,30 +314,19 @@ export function ConsultationRoom({
 
   // Monitor remote video track changes
   useEffect(() => {
+    // Track monitoring is now done in the onStream callback
+    // This effect is kept as a backup in case tracks change after initial setup
     if (!hasRemoteStream || !remoteVideoRef.current?.srcObject) return;
 
     const stream = remoteVideoRef.current.srcObject as MediaStream;
     const videoTrack = stream.getVideoTracks()[0];
-    const audioTrack = stream.getAudioTracks()[0];
 
-    console.log('[Video Track Monitor] Checking video tracks - total:', stream.getVideoTracks().length, 'videoTrack:', !!videoTrack);
-    if (videoTrack) {
-      console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', videoTrack.enabled);
+    if (videoTrack && !remoteVideoEnabled) {
+      // Update state if track state has changed
+      console.log('[Video Track Monitor Backup] Updating video track state');
       setRemoteVideoEnabled(videoTrack.enabled);
-      const handleVideoChange = () => setRemoteVideoEnabled(videoTrack.enabled);
-      videoTrack.addEventListener('ended', () => setRemoteVideoEnabled(false));
-      videoTrack.addEventListener('mute', () => setRemoteVideoEnabled(false));
-      videoTrack.addEventListener('unmute', () => setRemoteVideoEnabled(true));
-      
-      return () => {
-        videoTrack.removeEventListener('ended', handleVideoChange);
-        videoTrack.removeEventListener('mute', handleVideoChange);
-        videoTrack.removeEventListener('unmute', handleVideoChange);
-      };
-    } else {
-      console.log('[Video Track Monitor] No video track found in stream');
     }
-  }, [hasRemoteStream, remoteVideoRef.current?.srcObject]);
+  }, [hasRemoteStream, remoteVideoEnabled]);
 
   useEffect(() => {
     if (!hasRemoteStream || !remoteVideoRef.current?.srcObject) return;
@@ -442,6 +431,31 @@ export function ConsultationRoom({
             console.log('[WebRTC] ✓ Valid remote stream confirmed - setting hasRemoteStream (NOT connected yet)');
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
+              // CRITICAL: Monitor video track status immediately after setting srcObject
+              // This must happen before rendering, so we do it here rather than in useEffect
+              if (videoTracks.length > 0) {
+                const videoTrack = videoTracks[0];
+                console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', videoTrack.enabled);
+                setRemoteVideoEnabled(videoTrack.enabled);
+                
+                // Listen for track state changes
+                const handleVideoChange = () => {
+                  console.log('[Video Track Monitor] Video track state changed, enabled:', videoTrack.enabled);
+                  setRemoteVideoEnabled(videoTrack.enabled);
+                };
+                videoTrack.addEventListener('ended', () => {
+                  console.log('[Video Track Monitor] Video track ended');
+                  setRemoteVideoEnabled(false);
+                });
+                videoTrack.addEventListener('mute', () => {
+                  console.log('[Video Track Monitor] Video track muted');
+                  setRemoteVideoEnabled(false);
+                });
+                videoTrack.addEventListener('unmute', () => {
+                  console.log('[Video Track Monitor] Video track unmuted');
+                  setRemoteVideoEnabled(true);
+                });
+              }
             }
             if (remoteAudioRef.current && audioTracks.length > 0) {
               remoteAudioRef.current.srcObject = remoteStream;
