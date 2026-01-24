@@ -349,6 +349,36 @@ export function ConsultationRoom({
       };
     }
   }, [hasRemoteStream]);
+
+  // Ensure remote stream is attached to video element when element becomes available
+  useEffect(() => {
+    if (!hasRemoteStream || !remoteVideoRef.current) {
+      console.log('[Remote Stream Attachment] Waiting for remote stream or video element...');
+      return;
+    }
+
+    // If video element is in DOM and stream exists, attach it
+    if (!remoteVideoRef.current.srcObject && webrtcService) {
+      const remoteStream = webrtcService.getRemoteStream();
+      if (remoteStream) {
+        console.log('[Remote Stream Attachment] Attaching remote stream to video element');
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play().catch(err => {
+          console.log('[Remote Stream Attachment] Video play() error:', err.message);
+        });
+      }
+    }
+
+    // Also ensure audio is attached
+    if (!remoteAudioRef.current?.srcObject && webrtcService) {
+      const remoteStream = webrtcService.getRemoteStream();
+      if (remoteStream && remoteStream.getAudioTracks().length > 0) {
+        console.log('[Remote Stream Attachment] Attaching remote stream to audio element');
+        remoteAudioRef.current!.srcObject = remoteStream;
+      }
+    }
+  }, [hasRemoteStream, connectionStatus, webrtcService]);
+
   useEffect(() => {
     // For patients: initialize media once per session (show local video in waiting room)
     // For doctors: initialize media only after admitted
