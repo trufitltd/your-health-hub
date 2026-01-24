@@ -320,7 +320,9 @@ export function ConsultationRoom({
     const videoTrack = stream.getVideoTracks()[0];
     const audioTrack = stream.getAudioTracks()[0];
 
+    console.log('[Video Track Monitor] Checking video tracks - total:', stream.getVideoTracks().length, 'videoTrack:', !!videoTrack);
     if (videoTrack) {
+      console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', videoTrack.enabled);
       setRemoteVideoEnabled(videoTrack.enabled);
       const handleVideoChange = () => setRemoteVideoEnabled(videoTrack.enabled);
       videoTrack.addEventListener('ended', () => setRemoteVideoEnabled(false));
@@ -332,8 +334,10 @@ export function ConsultationRoom({
         videoTrack.removeEventListener('mute', handleVideoChange);
         videoTrack.removeEventListener('unmute', handleVideoChange);
       };
+    } else {
+      console.log('[Video Track Monitor] No video track found in stream');
     }
-  }, [hasRemoteStream]);
+  }, [hasRemoteStream, remoteVideoRef.current?.srcObject]);
 
   useEffect(() => {
     if (!hasRemoteStream || !remoteVideoRef.current?.srcObject) return;
