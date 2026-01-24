@@ -656,6 +656,13 @@ export class WebRTCService {
     this.onConnectedCallback = callback;
   }
 
+  /**
+   * Get the current remote stream (for manual attachment to video/audio elements if needed)
+   */
+  getRemoteStream(): MediaStream | null {
+    return this.remoteStream;
+  }
+
   destroy() {
     this.stopPolling();
     if (this.unsubscribe) {

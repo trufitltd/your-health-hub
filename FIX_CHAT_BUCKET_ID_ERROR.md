@@ -9,7 +9,31 @@ Database error: record "new" has no field "bucket_id"
 ## Root Cause
 There's a trigger or function in your Supabase database trying to access a `bucket_id` field that doesn't exist in the `consultation_messages` table.
 
-## Solution: Run This SQL in Supabase
+## 🚀 QUICK FIX (2 minutes)
+
+Go to **Supabase Dashboard → SQL Editor** and paste this entire script:
+
+```sql
+-- STEP 1: Drop all problematic triggers and functions
+DROP TRIGGER IF EXISTS on_consultation_message_created ON public.consultation_messages CASCADE;
+DROP TRIGGER IF EXISTS handle_consultation_message_insert ON public.consultation_messages CASCADE;
+DROP TRIGGER IF EXISTS consultation_messages_audit ON public.consultation_messages CASCADE;
+DROP FUNCTION IF EXISTS public.handle_new_consultation_message() CASCADE;
+DROP FUNCTION IF EXISTS public.consultation_audit_trigger() CASCADE;
+DROP FUNCTION IF EXISTS public.sync_consultation_metadata() CASCADE;
+
+-- STEP 2: Ensure RLS is enabled
+ALTER TABLE public.consultation_messages ENABLE ROW LEVEL SECURITY;
+
+-- STEP 3: Ensure realtime is enabled
+ALTER PUBLICATION supabase_realtime ADD TABLE consultation_messages;
+```
+
+Click "Run" and chat messages should now work!
+
+---
+
+## Detailed Troubleshooting (if quick fix doesn't work)
 
 Go to **Supabase Dashboard → SQL Editor** and run these commands:
 
