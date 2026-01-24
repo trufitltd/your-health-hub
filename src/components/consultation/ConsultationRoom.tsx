@@ -622,6 +622,34 @@ export function ConsultationRoom({
           
           if (hasValidRemoteTracks) {
             console.log('[WebRTC] Patient - ✓ Valid remote stream confirmed - setting hasRemoteStream');
+            
+            // CRITICAL: Set remoteVideoEnabled from the tracks BEFORE rendering the video element
+            // We do this regardless of whether ref exists, since ref might not be in DOM yet
+            if (videoTracks.length > 0) {
+              const videoTrack = videoTracks[0];
+              const isVideoEnabled = videoTrack.enabled && videoTrack.readyState === 'live';
+              console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', isVideoEnabled);
+              setRemoteVideoEnabled(isVideoEnabled);
+              
+              // Listen for track state changes
+              videoTrack.addEventListener('ended', () => {
+                console.log('[Video Track Monitor] Video track ended');
+                setRemoteVideoEnabled(false);
+              });
+              videoTrack.addEventListener('mute', () => {
+                console.log('[Video Track Monitor] Video track muted');
+                setRemoteVideoEnabled(false);
+              });
+              videoTrack.addEventListener('unmute', () => {
+                console.log('[Video Track Monitor] Video track unmuted');
+                setRemoteVideoEnabled(true);
+              });
+            } else {
+              console.log('[Video Track Monitor] No video tracks found');
+              setRemoteVideoEnabled(false);
+            }
+            
+            // Attach to refs if they exist (they might not be in DOM yet)
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
             }
