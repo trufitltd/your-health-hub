@@ -56,17 +56,18 @@ export function ConsultationRoom({
   const [streamInitialized, setStreamInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
-  const [isParticipantConnected, setIsParticipantConnected] = useState(false);
   const [remoteVideoEnabled, setRemoteVideoEnabled] = useState(true);
   const [remoteAudioEnabled, setRemoteAudioEnabled] = useState(true);
-  const [isRemoteVideoEnabled, setIsRemoteVideoEnabled] = useState(true);
   const [webrtcService, setWebrtcService] = useState<WebRTCService | null>(null);
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [isPatientWaiting, setIsPatientWaiting] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isParticipantsPanelOpen, setIsParticipantsPanelOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
+  const [waitingForPatient, setWaitingForPatient] = useState(false);
+  const [isCallStarted, setIsCallStarted] = useState(false);
+  const [shouldInitializeWebRTC, setShouldInitializeWebRTC] = useState(false);
+  const [localVideoAttached, setLocalVideoAttached] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoPIPRef = useRef<HTMLVideoElement>(null);
@@ -78,10 +79,12 @@ export function ConsultationRoom({
   const lobbyChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const webrtcInitializedRef = useRef(false); // Track if WebRTC has been initialized
+  const webrtcInitializedRef = useRef(false);
+  const sessionInitializedRef = useRef(false);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
+  const myInitials = participantRole === 'doctor' ? 'DR' : 'PT';
 
   // Format duration
   const formatDuration = (seconds: number) => {
@@ -96,74 +99,51 @@ export function ConsultationRoom({
 
   // Initialize consultation session
   useEffect(() => {
+    let isMounted = true;
+    
     const initializeSession = async () => {
-      if (!user || !appointmentId) {
-        setError('Missing user or appointment information');
-        setIsLoading(false);
+      if (!user || !appointmentId || sessionInitializedRef.current) {
         return;
       }
 
       try {
         console.log('[Init] Starting consultation room initialization');
+        
+        // Create or get session
         let session = await consultationService.getSessionByAppointmentId(appointmentId);
-        console.log('[Init] getSessionByAppointmentId returned:', session ? session.id : 'null');
-        let patientId: string | null = null;
-        let doctorId: string | null = null;
-
-        // Check if the existing session is stale (ended or too old)
-        // If we're rejoining after an ended session, create a NEW one to avoid old signals
-        let isStaleSession = false;
-        if (session) {
-          // Check if session is explicitly ended
-          if (session.status === 'ended') {
-            isStaleSession = true;
-            console.log('[Session] Previous session was ended at:', session.ended_at, 'Creating new session for rejoin');
-          }
-          // Also check if session has ended_at timestamp (session was completed)
-          else if (session.ended_at) {
-            isStaleSession = true;
-            console.log('[Session] Previous session was ended, creating new session for rejoin');
-          }
-        }
-
-        if (!session || isStaleSession) {
-          console.log('[Session] Fetching appointment data for:', appointmentId);
-          const { data: appointmentData, error: appointmentError } = await supabase
+        
+        if (!session) {
+          console.log('[Session] No existing session, creating new one');
+          
+          const { data: appointmentData } = await supabase
             .from('appointments')
             .select('patient_id, doctor_id')
             .eq('id', appointmentId)
             .single();
 
-          if (appointmentError) {
-            console.error('[Session] Error fetching appointment:', appointmentError);
-            throw new Error(`Failed to get appointment data: ${appointmentError.message}`);
-          }
-
           if (!appointmentData) {
             throw new Error('Appointment not found');
           }
 
-          patientId = appointmentData.patient_id;
-          doctorId = appointmentData.doctor_id;
-
-          console.log('[Session] Creating new consultation session for appointment:', appointmentId, 'patient:', patientId, 'doctor:', doctorId);
           session = await consultationService.createSession(
             appointmentId,
-            patientId,
-            doctorId,
+            appointmentData.patient_id,
+            appointmentData.doctor_id,
             consultationType
           );
           console.log('[Session] Created new consultation session:', session.id);
         } else {
-          patientId = session.patient_id;
-          doctorId = session.doctor_id;
-          console.log('[Session] Using existing active session:', session.id);
+          console.log('[Session] Using existing session:', session.id);
         }
 
-        if (participantRole === 'doctor') {
-          setIsAdmitted(true);
-          setConnectionStatus('connecting'); // Reset to connecting for doctor
-        }
+        if (!isMounted) return;
+        
+        setSessionId(session.id);
+        sessionInitializedRef.current = true;
+
+        // Initialize media immediately for both roles
+        console.log('[Media] Initializing media for', participantRole);
+        await initializeMedia();
 
         // Set up lobby signal listener
         const lobbyChannel = supabase.channel(`lobby:${session.id}`)
@@ -175,85 +155,86 @@ export function ConsultationRoom({
               table: 'webrtc_signals',
               filter: `session_id=eq.${session.id}`
             },
-            (payload: { new: WebRTCSignal }) => {
+            async (payload: { new: WebRTCSignal }) => {
               const signal = payload.new;
-              console.log('[Lobby] Received signal:', signal.signal_data?.type, 'from:', signal.sender_id, 'myId:', user?.id);
-              if (signal.sender_id !== user?.id) {
-                if (participantRole === 'doctor' && signal.signal_data?.type === 'join_lobby') {
-                  console.log('[Lobby] 🔔 Doctor - Patient is waiting! Setting isPatientWaiting');
-                  setIsPatientWaiting(true);
-                  toast({
-                    title: 'Patient Waiting',
-                    description: 'A patient has joined the waiting room.',
-                  });
-                } else if (participantRole === 'patient' && signal.signal_data?.type === 'admit_patient') {
-                  setIsAdmitted(true);
-                  toast({
-                    title: 'Admitted',
-                    description: 'The doctor has admitted you to the call.',
-                  });
-                } else if (participantRole === 'doctor' && signal.signal_data?.type === 'patient_admitted_acknowledge') {
-                  setIsPatientWaiting(false);
-                }
+              console.log('[Lobby] Received signal:', signal.signal_data?.type, 'from:', signal.sender_id);
+              
+              if (signal.sender_id === user?.id) return;
+              
+              // Doctor receives join_lobby signal from patient
+              if (signal.signal_data?.type === 'join_lobby' && participantRole === 'doctor') {
+                console.log('[Lobby] 🔔 Patient has joined the lobby');
+                setIsPatientWaiting(true);
+                toast({
+                  title: 'Patient Waiting',
+                  description: 'A patient has joined the waiting room.',
+                  duration: 5000,
+                });
+              }
+              
+              // Patient receives admit_patient signal from doctor
+              if (signal.signal_data?.type === 'admit_patient' && participantRole === 'patient') {
+                console.log('[Lobby] 🎉 Doctor is admitting patient to call');
+                setIsAdmitted(true);
+                setIsCallStarted(true);
+                setShouldInitializeWebRTC(true);
+                toast({
+                  title: 'Admitted to Call',
+                  description: 'The doctor has admitted you to the consultation.',
+                  duration: 3000,
+                });
               }
             }
           )
-          .subscribe();
+          .subscribe((status) => {
+            console.log('[Lobby] Subscription status:', status);
+          });
 
         lobbyChannelRef.current = lobbyChannel;
 
-        // For doctors: check if patient already sent join_lobby before subscription was ready
-        // IMPORTANT: Only check signals created AFTER the current session started AND within the last 2 minutes
-        // This prevents false notifications from old signals in previous sessions
-        if (participantRole === 'doctor') {
-          console.log('[Lobby] Doctor checking for existing join_lobby signals...');
-          console.log('[Lobby] Session started_at:', session.started_at, 'current session id:', session.id);
-          
-          // Only consider signals from the last 2 minutes as "patient waiting"
+        // Send initial lobby signal based on role
+        if (participantRole === 'patient') {
+          console.log('[Lobby] Patient sending join_lobby signal');
+          await supabase.from('webrtc_signals').insert({
+            session_id: session.id,
+            sender_id: user.id,
+            signal_data: { type: 'join_lobby', role: 'patient' }
+          });
+        } else {
+          // Doctor - check if patient already waiting
+          console.log('[Lobby] Doctor joined, checking for patient in lobby');
           const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
           
-          const { data: existingSignals, error: queryError } = await supabase
+          const { data: existingSignals } = await supabase
             .from('webrtc_signals')
             .select('*')
             .eq('session_id', session.id)
             .eq('signal_data->>type', 'join_lobby')
             .neq('sender_id', user.id)
-            .gte('created_at', twoMinutesAgo);  // Only signals from the last 2 minutes
+            .gte('created_at', twoMinutesAgo);
           
-          if (queryError) {
-            console.error('[Lobby] Error checking for existing signals:', queryError);
-          } else if (existingSignals && existingSignals.length > 0) {
-            console.log('[Lobby] 🔔 Doctor - Found recent join_lobby signals! Patient is waiting');
-            console.log('[Lobby] Existing signals count:', existingSignals.length, 'From:', twoMinutesAgo);
+          if (existingSignals && existingSignals.length > 0) {
+            console.log('[Lobby] 🔔 Patient already waiting in lobby');
             setIsPatientWaiting(true);
             toast({
               title: 'Patient Waiting',
               description: 'A patient is waiting in the lobby.',
+              duration: 5000,
             });
           } else {
-            console.log('[Lobby] Doctor - No recent join_lobby signals found (last 2 mins)');
+            console.log('[Lobby] No patient in lobby yet');
+            setWaitingForPatient(true);
           }
+          
+          // Doctor starts WebRTC immediately
+          setShouldInitializeWebRTC(true);
+          setIsCallStarted(true);
         }
 
-        if (participantRole === 'patient') {
-          console.log('[Lobby] Patient sending join_lobby signal for session:', session.id);
-          const { error: insertError } = await supabase.from('webrtc_signals').insert({
-            session_id: session.id,
-            sender_id: user.id,
-            signal_data: { type: 'join_lobby' }
-          });
-          if (insertError) {
-            console.error('Error sending join_lobby signal:', insertError);
-          } else {
-            console.log('[Lobby] ✅ join_lobby signal sent successfully');
-          }
-        }
-
-        setSessionId(session.id);
-
-        console.log('[Init] Fetching existing messages for session:', session.id);
+        // Load existing messages
         const existingMessages = await consultationService.getMessages(session.id);
-        console.log('[Init] Fetched', existingMessages.length, 'existing messages');
+        console.log('[Init] Loaded', existingMessages.length, 'messages');
+        
         setMessages(existingMessages.map(msg => ({
           id: msg.id,
           sender: msg.sender_id === user?.id ? 'user' : 'remote',
@@ -263,7 +244,7 @@ export function ConsultationRoom({
           type: msg.message_type as 'text' | 'file'
         })));
 
-        console.log('[Init] Subscribing to messages for session:', session.id);
+        // Subscribe to new messages
         const unsubscribe = consultationService.subscribeToMessages(
           session.id,
           (dbMessage) => {
@@ -279,17 +260,12 @@ export function ConsultationRoom({
             }
           }
         );
-        console.log('[Init] Message subscription created');
-
+        
         unsubscribeRef.current = unsubscribe;
         setIsLoading(false);
-        console.log('[Init] Session initialization complete!');
+
       } catch (err) {
         console.error('Error initializing session:', err);
-        if (err instanceof Error) {
-          console.error('Error message:', err.message);
-          console.error('Error stack:', err.stack);
-        }
         setError(err instanceof Error ? err.message : 'Failed to initialize consultation');
         setIsLoading(false);
       }
@@ -298,10 +274,177 @@ export function ConsultationRoom({
     initializeSession();
 
     return () => {
+      isMounted = false;
       if (unsubscribeRef.current) unsubscribeRef.current();
       if (lobbyChannelRef.current) lobbyChannelRef.current.unsubscribe();
     };
   }, [user, appointmentId, participantRole, consultationType]);
+
+  // Initialize media stream
+  const initializeMedia = async () => {
+    try {
+      const constraints: MediaStreamConstraints = {
+        video: consultationType === 'video' ? {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user'
+        } : false,
+        audio: consultationType !== 'chat' ? { 
+          echoCancellation: true, 
+          noiseSuppression: true, 
+          autoGainControl: true 
+        } : false
+      };
+
+      console.log('[Media] Requesting media with constraints:', constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('[Media] Media stream obtained:', {
+        video: stream.getVideoTracks().length > 0,
+        audio: stream.getAudioTracks().length > 0
+      });
+
+      localStreamRef.current = stream;
+      setStreamInitialized(true);
+      setIsMediaReady(true);
+
+      // Attach to waiting room video if patient in waiting room
+      if (participantRole === 'patient' && !isAdmitted && localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(console.error);
+      }
+
+    } catch (err) {
+      console.error('[Media] Error initializing media:', err);
+      toast({
+        title: 'Media Error',
+        description: 'Unable to access camera/microphone. Please check permissions.',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  // Attach local stream to video elements
+  useEffect(() => {
+    if (!streamInitialized || !localStreamRef.current) return;
+    
+    // For doctor waiting screen: attach to localVideoRef
+    if (participantRole === 'doctor' && waitingForPatient && !isPatientWaiting) {
+      if (localVideoRef.current && !localVideoAttached) {
+        console.log('[Media] Attaching doctor stream to waiting screen video');
+        localVideoRef.current.srcObject = localStreamRef.current;
+        localVideoRef.current.play().catch(console.error);
+        setLocalVideoAttached(true);
+      }
+    }
+    
+    // For PIP video: attach when in call
+    if ((participantRole === 'doctor' && isCallStarted) || 
+        (participantRole === 'patient' && isAdmitted)) {
+      if (localVideoPIPRef.current && !localVideoPIPRef.current.srcObject) {
+        console.log('[Media] Setting stream to PIP video element');
+        localVideoPIPRef.current.srcObject = localStreamRef.current;
+        localVideoPIPRef.current.play().catch(console.error);
+      }
+    }
+  }, [streamInitialized, participantRole, waitingForPatient, isPatientWaiting, isCallStarted, isAdmitted, localVideoAttached]);
+
+  // Initialize WebRTC when conditions are met
+  useEffect(() => {
+    if (!sessionId || !user || !localStreamRef.current || !shouldInitializeWebRTC) return;
+    if (webrtcInitializedRef.current) return;
+
+    // Doctor: initialize immediately, Patient: only when admitted
+    const shouldInitialize = participantRole === 'doctor' || 
+                           (participantRole === 'patient' && isAdmitted);
+    
+    if (!shouldInitialize) return;
+
+    const initializeWebRTC = async () => {
+      try {
+        console.log('[WebRTC] Initializing WebRTC for', participantRole);
+        const isInitiator = participantRole === 'doctor';
+        
+        console.log('[WebRTC] Creating WebRTCService with initiator:', isInitiator);
+        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+
+        webrtc.onStream((remoteStream) => {
+          console.log('[WebRTC] Remote stream received, tracks:', remoteStream.getTracks().length);
+          
+          if (remoteStream && remoteStream.getTracks().length > 0) {
+            setHasRemoteStream(true);
+            
+            // Check if remote has video
+            const hasVideo = remoteStream.getVideoTracks().length > 0;
+            setRemoteVideoEnabled(hasVideo);
+            
+            // Use setTimeout to ensure DOM is ready
+            setTimeout(() => {
+              // Attach to video element
+              if (remoteVideoRef.current) {
+                console.log('[WebRTC] Attaching remote stream to video element');
+                remoteVideoRef.current.srcObject = remoteStream;
+                remoteVideoRef.current.play().catch(err => {
+                  console.log('[WebRTC] Video play error:', err);
+                });
+              } else {
+                console.log('[WebRTC] Remote video ref not available yet');
+              }
+              
+              // Attach to audio element
+              if (remoteAudioRef.current) {
+                remoteAudioRef.current.srcObject = remoteStream;
+              }
+            }, 100);
+          }
+        });
+
+        webrtc.onConnected(() => {
+          console.log('[WebRTC] 🎉 Connection established via callback');
+          setConnectionStatus('connected');
+        });
+
+        webrtc.onError((error) => {
+          console.error('[WebRTC] Error:', error);
+          setConnectionStatus('disconnected');
+          toast({
+            title: 'Connection Error',
+            description: 'Failed to establish WebRTC connection',
+            variant: 'destructive'
+          });
+        });
+
+        console.log('[WebRTC] Calling initializePeer with local stream');
+        webrtc.initializePeer(localStreamRef.current!);
+        setWebrtcService(webrtc);
+        webrtcInitializedRef.current = true;
+        
+        console.log('[WebRTC] Initialization complete, setting connecting status');
+        setConnectionStatus('connecting');
+
+      } catch (err) {
+        console.error('[WebRTC] Initialization error:', err);
+        toast({
+          title: 'Connection Error',
+          description: 'Failed to initialize WebRTC connection',
+          variant: 'destructive'
+        });
+      }
+    };
+
+    initializeWebRTC();
+  }, [sessionId, user, shouldInitializeWebRTC, isAdmitted, participantRole]);
+
+  // Ensure remote stream is attached when ref becomes available
+  useEffect(() => {
+    if (hasRemoteStream && webrtcService && remoteVideoRef.current) {
+      const remoteStream = webrtcService.getRemoteStream();
+      if (remoteStream && remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
+        console.log('[Video Attachment] Attaching remote stream to video element');
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play().catch(console.error);
+      }
+    }
+  }, [hasRemoteStream, webrtcService]);
 
   // Timer effect
   useEffect(() => {
@@ -312,392 +455,6 @@ export function ConsultationRoom({
       return () => clearInterval(interval);
     }
   }, [connectionStatus]);
-
-  // Monitor remote video track changes
-  useEffect(() => {
-    // Track monitoring is now done in the onStream callback
-    // This effect is kept as a backup in case tracks change after initial setup
-    if (!hasRemoteStream || !remoteVideoRef.current?.srcObject) return;
-
-    const stream = remoteVideoRef.current.srcObject as MediaStream;
-    const videoTrack = stream.getVideoTracks()[0];
-
-    if (videoTrack && !remoteVideoEnabled) {
-      // Update state if track state has changed
-      console.log('[Video Track Monitor Backup] Updating video track state');
-      setRemoteVideoEnabled(videoTrack.enabled);
-    }
-  }, [hasRemoteStream, remoteVideoEnabled]);
-
-  useEffect(() => {
-    if (!hasRemoteStream || !remoteVideoRef.current?.srcObject) return;
-
-    const stream = remoteVideoRef.current.srcObject as MediaStream;
-    const audioTrack = stream.getAudioTracks()[0];
-
-    if (audioTrack) {
-      setRemoteAudioEnabled(audioTrack.enabled);
-      const handleAudioChange = () => setRemoteAudioEnabled(audioTrack.enabled);
-      audioTrack.addEventListener('ended', () => setRemoteAudioEnabled(false));
-      audioTrack.addEventListener('mute', () => setRemoteAudioEnabled(false));
-      audioTrack.addEventListener('unmute', () => setRemoteAudioEnabled(true));
-      
-      return () => {
-        audioTrack.removeEventListener('ended', handleAudioChange);
-        audioTrack.removeEventListener('mute', handleAudioChange);
-        audioTrack.removeEventListener('unmute', handleAudioChange);
-      };
-    }
-  }, [hasRemoteStream]);
-
-  // Ensure remote stream is attached to video element when element becomes available
-  useEffect(() => {
-    if (!hasRemoteStream || !remoteVideoRef.current) {
-      console.log('[Remote Stream Attachment] Waiting for remote stream or video element...');
-      return;
-    }
-
-    // If video element is in DOM and stream exists, attach it
-    if (!remoteVideoRef.current.srcObject && webrtcService) {
-      const remoteStream = webrtcService.getRemoteStream();
-      if (remoteStream) {
-        console.log('[Remote Stream Attachment] Attaching remote stream to video element');
-        remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play().catch(err => {
-          console.log('[Remote Stream Attachment] Video play() error:', err.message);
-        });
-      }
-    }
-
-    // Also ensure audio is attached
-    if (!remoteAudioRef.current?.srcObject && webrtcService) {
-      const remoteStream = webrtcService.getRemoteStream();
-      if (remoteStream && remoteStream.getAudioTracks().length > 0) {
-        console.log('[Remote Stream Attachment] Attaching remote stream to audio element');
-        remoteAudioRef.current!.srcObject = remoteStream;
-      }
-    }
-  }, [hasRemoteStream, connectionStatus, webrtcService]);
-
-  useEffect(() => {
-    // For patients: initialize media once per session (show local video in waiting room)
-    // For doctors: initialize media only after admitted
-    // For admitted patients: initialize WebRTC after getting admitted
-    const shouldInitialize = participantRole === 'patient' 
-      ? (sessionId && user && !localStreamRef.current)  // Patients: initialize media once
-      : (sessionId && isAdmitted && !webrtcInitializedRef.current && user);  // Doctors: need admission + WebRTC (only once)
-
-    console.log('[useEffect] Media init check:', {
-      participantRole,
-      sessionId: !!sessionId,
-      user: !!user,
-      isAdmitted,
-      localStreamRef: !!localStreamRef.current,
-      webrtcService: !!webrtcService,
-      shouldInitialize,
-      isVideo: consultationType === 'video'
-    });
-
-    if (!shouldInitialize) return;
-
-    const initializeMedia = async () => {
-      try {
-        const constraints: MediaStreamConstraints = {
-          video: consultationType === 'video' ? {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: 'user'
-          } : false,
-          audio: consultationType !== 'chat' ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
-        };
-
-        console.log('[Media] Requesting getUserMedia with constraints:', constraints);
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log('[Media] getUserMedia successful');
-        
-        localStreamRef.current = stream;
-
-        console.log('[Media] Stream obtained:', {
-          hasVideo: stream.getVideoTracks().length > 0,
-          hasAudio: stream.getAudioTracks().length > 0,
-          videoTracksEnabled: stream.getVideoTracks().every(t => t.enabled),
-          audioTracksEnabled: stream.getAudioTracks().every(t => t.enabled)
-        });
-        console.log('[Media] Stream stored in localStreamRef, will set to video element when ready');
-        setStreamInitialized(true); // Trigger the video element setup effect
-
-        // For patients in waiting room, stop here - WebRTC will initialize after admission
-        if (participantRole === 'patient' && !isAdmitted) {
-          console.log('[Media] Patient in waiting room - media initialized, WebRTC will start after admission');
-          setIsMediaReady(true); // Mark media as ready for waiting room
-          return;
-        }
-
-        console.log('[Media] Initializing WebRTC service, isInitiator:', participantRole === 'doctor');
-        const isInitiator = participantRole === 'doctor';
-        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
-
-        webrtc.onStream((remoteStream) => {
-          console.log('[WebRTC] Remote stream received - checking for valid remote content');
-          
-          if (!remoteStream) {
-            console.log('[WebRTC] Remote stream is null, ignoring');
-            return;
-          }
-          
-          const videoTracks = remoteStream.getVideoTracks();
-          const audioTracks = remoteStream.getAudioTracks();
-          const allTracks = [...videoTracks, ...audioTracks];
-          
-          console.log('[WebRTC] Remote tracks - video:', videoTracks.length, 'audio:', audioTracks.length, 'enabled count:', allTracks.filter(t => t.enabled).length);
-          
-          // Must have at least one ENABLED track with 'live' readyState
-          const hasValidRemoteTracks = allTracks.length > 0 && allTracks.some(track => {
-            const isValid = track.enabled && track.readyState === 'live';
-            console.log('[WebRTC] Track check - kind:', track.kind, 'enabled:', track.enabled, 'readyState:', track.readyState, 'valid:', isValid);
-            return isValid;
-          });
-          
-          if (hasValidRemoteTracks) {
-            console.log('[WebRTC] ✓ Valid remote stream confirmed - setting hasRemoteStream (NOT connected yet)');
-            
-            // CRITICAL: Set remoteVideoEnabled to true if video tracks exist
-            // Don't check enabled/readyState as these can fluctuate with network conditions
-            // The track existing is sufficient - the browser may mute it temporarily but we still want to display the video element
-            if (videoTracks.length > 0) {
-              console.log('[Video Track Monitor] Video track received - enabling remote video display');
-              setRemoteVideoEnabled(true);
-              
-              // Only listen for track ended event - ignore mute/unmute as they fluctuate with network
-              const videoTrack = videoTracks[0];
-              videoTrack.addEventListener('ended', () => {
-                console.log('[Video Track Monitor] Video track ended');
-                setRemoteVideoEnabled(false);
-              }, { once: true });
-            } else {
-              console.log('[Video Track Monitor] No video tracks found');
-              setRemoteVideoEnabled(false);
-            }
-            
-            // Attach to refs if they exist (they might not be in DOM yet)
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remoteStream;
-            }
-            if (remoteAudioRef.current && audioTracks.length > 0) {
-              remoteAudioRef.current.srcObject = remoteStream;
-            }
-            setHasRemoteStream(true);
-            // DO NOT set connected here - wait for actual connection establishment
-          } else {
-            console.log('[WebRTC] ✗ No valid remote tracks yet - stream not ready');
-          }
-        });
-
-        webrtc.onConnected(() => {
-          console.log('[WebRTC] 🎉 Connection established - setting connected status');
-          setConnectionStatus('connected');
-        });
-
-        webrtc.onError((error) => {
-          console.error('WebRTC Error:', error);
-          toast({
-            title: 'Connection Error',
-            description: 'Failed to establish connection',
-            variant: 'destructive'
-          });
-        });
-
-        webrtc.initializePeer(stream);
-        setWebrtcService(webrtc);
-        webrtcInitializedRef.current = true; // Mark WebRTC as initialized
-        setStreamInitialized(true); // Mark stream as ready
-
-        if ('wakeLock' in navigator) {
-          try {
-            const wakeLock = (navigator as unknown as { wakeLock: { request: (type: string) => Promise<WakeLockSentinel> } }).wakeLock;
-            wakeLockRef.current = await wakeLock.request('screen');
-          } catch (err) {
-            console.log('Wake lock not available');
-          }
-        }
-        
-        // Mark media as ready
-        setIsMediaReady(true);
-      } catch (err) {
-        console.error('Media initialization error:', err);
-        toast({
-          title: 'Media Error',
-          description: 'Unable to access camera/microphone',
-          variant: 'destructive'
-        });
-      }
-    };
-
-    initializeMedia();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, user, isAdmitted, consultationType, participantRole]);
-
-  // Set stream to waiting room video element once it's available
-  useEffect(() => {
-    if (!streamInitialized || !localStreamRef.current) return;
-    if (participantRole !== 'patient' || isAdmitted) return; // Only in waiting room
-    if (!localVideoRef.current) {
-      console.log('[Media] Waiting for video element to be ready in waiting room...');
-      return; // Will retry when ref becomes available
-    }
-
-    console.log('[Media] ✅ Video element ready! Setting stream to waiting room video');
-    localVideoRef.current.srcObject = localStreamRef.current;
-    localVideoRef.current.play().catch(err => {
-      console.error('[Media] Waiting room video play() error:', err.message);
-    });
-    
-    // Add loadedmetadata listener for debugging
-    const onLoadedMetadata = () => {
-      console.log('[Media] ✅ Waiting room video loaded and playing');
-      localVideoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
-    };
-    localVideoRef.current.addEventListener('loadedmetadata', onLoadedMetadata);
-  }, [streamInitialized, participantRole, isAdmitted]);
-
-  // Set stream to PiP video element once it's available (after admission)
-  useEffect(() => {
-    if (!streamInitialized || !localStreamRef.current) {
-      return;
-    }
-    
-    // Try to set on PiP if available
-    if (localVideoPIPRef.current && !localVideoPIPRef.current.srcObject) {
-      console.log('[Media] ✅ Setting stream to PiP video element');
-      localVideoPIPRef.current.srcObject = localStreamRef.current;
-      localVideoPIPRef.current.play().catch(err => {
-        console.log('[Media] PiP play() error:', err.message);
-      });
-    }
-    
-    // For patients not in waiting room and doctors, keep retrying until PiP is available
-    if (participantRole === 'patient' && !isAdmitted) return; // Skip for waiting room
-    
-    if (!localVideoPIPRef.current) {
-      console.log('[Media] Waiting for PiP video element to be rendered...');
-      // Will retry on next effect run
-    }
-  }, [streamInitialized, isAdmitted, participantRole]);
-
-  // Polling effect to handle cases where ref becomes available after stream is ready
-  useEffect(() => {
-    if (!streamInitialized || !localStreamRef.current) return;
-    if (participantRole === 'patient' && !isAdmitted) return; // Skip for waiting room
-    
-    // Start polling to check if PiP ref becomes available
-    const checkInterval = setInterval(() => {
-      if (localVideoPIPRef.current && !localVideoPIPRef.current.srcObject) {
-        console.log('[Media] ✅ PiP element now available! Setting stream via polling');
-        localVideoPIPRef.current.srcObject = localStreamRef.current;
-        localVideoPIPRef.current.play().catch(err => {
-          console.log('[Media] PiP play() error:', err.message);
-        });
-        clearInterval(checkInterval); // Stop polling once set
-      }
-    }, 100); // Check every 100ms
-    
-    // Clean up interval after 10 seconds (if ref never becomes available)
-    const timeout = setTimeout(() => {
-      clearInterval(checkInterval);
-      if (!localVideoPIPRef.current) {
-        console.warn('[Media] PiP element never became available after 10 seconds');
-      }
-    }, 10000);
-    
-    return () => {
-      clearInterval(checkInterval);
-      clearTimeout(timeout);
-    };
-  }, [streamInitialized, isAdmitted, participantRole]);
-
-  // Initialize WebRTC when patient gets admitted
-  useEffect(() => {
-    if (participantRole !== 'patient' || !isAdmitted || !sessionId || webrtcInitializedRef.current || !localStreamRef.current || !user) return;
-
-    const initializeWebRTC = async () => {
-      try {
-        const isInitiator = false;
-        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
-
-        webrtc.onStream((remoteStream) => {
-          console.log('[WebRTC] Patient - Remote stream received - checking for valid remote content');
-          
-          if (!remoteStream) {
-            console.log('[WebRTC] Patient - Remote stream is null, ignoring');
-            return;
-          }
-          
-          const videoTracks = remoteStream.getVideoTracks();
-          const audioTracks = remoteStream.getAudioTracks();
-          const allTracks = [...videoTracks, ...audioTracks];
-          
-          console.log('[WebRTC] Patient - Remote tracks - video:', videoTracks.length, 'audio:', audioTracks.length, 'enabled count:', allTracks.filter(t => t.enabled).length);
-          
-          // Must have at least one ENABLED track with 'live' readyState
-          const hasValidRemoteTracks = allTracks.length > 0 && allTracks.some(track => {
-            const isValid = track.enabled && track.readyState === 'live';
-            console.log('[WebRTC] Patient - Track check - kind:', track.kind, 'enabled:', track.enabled, 'readyState:', track.readyState, 'valid:', isValid);
-            return isValid;
-          });
-          
-          if (hasValidRemoteTracks) {
-            console.log('[WebRTC] Patient - ✓ Valid remote stream confirmed - setting hasRemoteStream');
-            
-            // CRITICAL: Set remoteVideoEnabled to true if video tracks exist
-            // Don't check enabled/readyState as these can fluctuate with network conditions
-            if (videoTracks.length > 0) {
-              console.log('[Video Track Monitor] Video track received - enabling remote video display');
-              setRemoteVideoEnabled(true);
-              
-              // Only listen for track ended event - ignore mute/unmute
-              const videoTrack = videoTracks[0];
-              videoTrack.addEventListener('ended', () => {
-                console.log('[Video Track Monitor] Video track ended');
-                setRemoteVideoEnabled(false);
-              }, { once: true });
-            } else {
-              console.log('[Video Track Monitor] No video tracks found');
-              setRemoteVideoEnabled(false);
-            }
-            
-            // Attach to refs if they exist (they might not be in DOM yet)
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remoteStream;
-            }
-            if (remoteAudioRef.current && audioTracks.length > 0) {
-              remoteAudioRef.current.srcObject = remoteStream;
-            }
-            setHasRemoteStream(true);
-            // DO NOT set connected here - wait for actual connection establishment
-          } else {
-            console.log('[WebRTC] Patient - ✗ No valid remote tracks yet - stream not ready');
-          }
-        });
-
-        webrtc.onConnected(() => {
-          console.log('[WebRTC] 🎉 Patient - ACTUAL CONNECTION ESTABLISHED - setting connected status');
-          setConnectionStatus('connected');
-        });
-
-        webrtc.onError((error) => {
-          console.error('WebRTC Error:', error);
-        });
-
-        webrtc.initializePeer(localStreamRef.current);
-        setWebrtcService(webrtc);
-        webrtcInitializedRef.current = true; // Mark WebRTC as initialized
-      } catch (err) {
-        console.error('WebRTC initialization error:', err);
-      }
-    };
-
-    initializeWebRTC();
-  }, [isAdmitted, participantRole, sessionId, user]);
 
   const toggleAudio = () => {
     if (localStreamRef.current) {
@@ -735,7 +492,7 @@ export function ConsultationRoom({
     if (!newMessage.trim() || !sessionId) return;
 
     try {
-      await consultationService.sendMessage(
+      const sentMessage = await consultationService.sendMessage(
         sessionId,
         user!.id,
         participantRole,
@@ -744,17 +501,19 @@ export function ConsultationRoom({
         'text'
       );
 
+      // Add message to UI immediately
       setMessages(prev => [...prev, {
-        id: Math.random().toString(),
+        id: sentMessage.id,
         sender: 'user',
         senderName: myName,
         content: newMessage,
-        timestamp: new Date(),
+        timestamp: new Date(sentMessage.created_at),
         type: 'text'
       }]);
 
       setNewMessage('');
 
+      // Scroll to bottom
       setTimeout(() => {
         if (chatScrollRef.current) {
           chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
@@ -771,6 +530,8 @@ export function ConsultationRoom({
   };
 
   const handleEndCall = useCallback(async () => {
+    console.log('[Cleanup] Ending call and cleaning up...');
+    
     if (webrtcService) {
       webrtcService.destroy();
     }
@@ -780,16 +541,6 @@ export function ConsultationRoom({
         track.stop();
       });
       localStreamRef.current = null;
-    }
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = null;
     }
 
     if (wakeLockRef.current) {
@@ -812,55 +563,133 @@ export function ConsultationRoom({
 
   const handleAdmitPatient = async () => {
     try {
-      await supabase.from('webrtc_signals').insert({
+      console.log('[Admission] Doctor admitting patient');
+      
+      // Send admit signal to patient
+      const { error } = await supabase.from('webrtc_signals').insert({
         session_id: sessionId!,
-        sender_id: user?.id,
+        sender_id: user!.id,
         signal_data: { type: 'admit_patient' }
       });
+      
+      if (error) {
+        console.error('[Admission] Error sending admit signal:', error);
+        throw error;
+      }
+      
+      console.log('[Admission] Admit signal sent successfully');
+      
+      // Update local state
       setIsPatientWaiting(false);
-      setIsAdmitted(true);
-      toast({ title: "Patient Admitted", description: "Connecting..." });
+      setWaitingForPatient(false);
+      
+      toast({
+        title: 'Patient Admitted',
+        description: 'Patient is being connected to the call.',
+        duration: 3000,
+      });
+      
     } catch (err) {
       console.error('Error admitting patient:', err);
-      toast({ title: "Error", description: "Failed to admit patient", variant: "destructive" });
+      toast({
+        title: 'Error',
+        description: 'Failed to admit patient',
+        variant: 'destructive'
+      });
     }
   };
 
-  useEffect(() => {
-    return () => {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => {
-          track.stop();
-        });
-      }
-    };
-  }, []);
-
-  if (error) {
+  // Doctor waiting for patient overlay
+  if (participantRole === 'doctor' && waitingForPatient && !isPatientWaiting) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
-        <Card className="w-full max-w-md bg-[#252542] border-[#3d3d5c]">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3 text-destructive mb-4">
-              <AlertCircle className="w-6 h-6" />
-              <h3 className="font-semibold">Error</h3>
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-[#1a1a2e] via-[#16213e] to-[#0f0f23]">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center space-y-8 p-8 max-w-md"
+        >
+          {/* Doctor's local video preview */}
+          {consultationType === 'video' && (
+            <div className="relative w-64 h-48 mx-auto rounded-2xl overflow-hidden bg-[#252542] shadow-2xl">
+              {isVideoEnabled ? (
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                  style={{ transform: 'scaleX(-1)' }}
+                  onLoadedMetadata={() => console.log('[Doctor Waiting] Local video loaded')}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-800">
+                  <Avatar className="w-20 h-20">
+                    <AvatarFallback className="bg-primary text-primary-foreground text-2xl">
+                      {myInitials}
+                    </AvatarFallback>
+                  </Avatar>
+                </div>
+              )}
+              <div className="absolute bottom-2 left-2 right-2 flex justify-center gap-2">
+                <Button
+                  variant={isVideoEnabled ? 'secondary' : 'destructive'}
+                  size="sm"
+                  className="rounded-full w-10 h-10"
+                  onClick={toggleVideo}
+                >
+                  {isVideoEnabled ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+                </Button>
+                <Button
+                  variant={isAudioEnabled ? 'secondary' : 'destructive'}
+                  size="sm"
+                  className="rounded-full w-10 h-10"
+                  onClick={toggleAudio}
+                >
+                  {isAudioEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+                </Button>
+              </div>
             </div>
-            <p className="text-sm text-slate-300 mb-4">{error}</p>
-            <Button onClick={onEndCall} className="w-full">Go Back</Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+          )}
 
-  // Loading state
-  if (isLoading || !isMediaReady) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Setting up your consultation...</p>
-        </div>
+          {(!isVideoEnabled || consultationType !== 'video') && (
+            <Avatar className="w-24 h-24 mx-auto">
+              <AvatarFallback className="bg-primary text-primary-foreground text-3xl">
+                {myInitials}
+              </AvatarFallback>
+            </Avatar>
+          )}
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-center gap-3">
+              <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
+              <h2 className="text-2xl font-semibold text-white">Waiting for Patient</h2>
+            </div>
+            
+            <p className="text-slate-400">
+              You've joined the consultation. Please wait for the patient to join the waiting room.
+            </p>
+            
+            <div className="flex items-center justify-center gap-2 text-slate-500 text-sm">
+              <Clock className="w-4 h-4" />
+              <span>Ready to admit {participantName}</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Button
+              onClick={handleEndCall}
+              variant="outline"
+              className="border-slate-600 text-slate-300 hover:bg-slate-800 w-full"
+            >
+              <X className="w-4 h-4 mr-2" />
+              Leave Consultation
+            </Button>
+            
+            <div className="text-xs text-slate-500">
+              You'll be notified when the patient joins
+            </div>
+          </div>
+        </motion.div>
       </div>
     );
   }
@@ -884,10 +713,6 @@ export function ConsultationRoom({
                 muted
                 className="w-full h-full object-cover"
                 style={{ transform: 'scaleX(-1)' }}
-                onLoadedMetadata={() => console.log('[Video] loadedmetadata event fired')}
-                onPlay={() => console.log('[Video] play event fired')}
-                onLoadStart={() => console.log('[Video] loadstart event fired')}
-                onCanPlay={() => console.log('[Video] canplay event fired')}
               />
               <div className="absolute bottom-2 left-2 right-2 flex justify-center gap-2">
                 <Button
@@ -933,6 +758,35 @@ export function ConsultationRoom({
             Leave Waiting Room
           </Button>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
+        <Card className="w-full max-w-md bg-[#252542] border-[#3d3d5c]">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3 text-destructive mb-4">
+              <AlertCircle className="w-6 h-6" />
+              <h3 className="font-semibold">Error</h3>
+            </div>
+            <p className="text-sm text-slate-300 mb-4">{error}</p>
+            <Button onClick={onEndCall} className="w-full">Go Back</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Loading state
+  if (isLoading || !isMediaReady) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-slate-400">Setting up your consultation...</p>
+        </div>
       </div>
     );
   }
@@ -1001,13 +855,22 @@ export function ConsultationRoom({
                   <h3 className="text-xl font-semibold text-white mb-2">Patient Waiting</h3>
                   <p className="text-slate-400 text-sm">{participantName} is in the waiting room</p>
                 </div>
-                <Button
-                  onClick={handleAdmitPatient}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white gap-2"
-                >
-                  <User className="w-4 h-4" />
-                  Admit to Call
-                </Button>
+                <div className="space-y-3">
+                  <Button
+                    onClick={handleAdmitPatient}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white gap-2"
+                  >
+                    <User className="w-4 h-4" />
+                    Admit to Call
+                  </Button>
+                  <Button
+                    onClick={() => setIsPatientWaiting(false)}
+                    variant="outline"
+                    className="w-full border-slate-600 text-slate-300 hover:bg-slate-800"
+                  >
+                    Not Now
+                  </Button>
+                </div>
               </motion.div>
             </div>
           )}
@@ -1016,8 +879,9 @@ export function ConsultationRoom({
           <div className="flex-1 relative p-2 sm:p-4 flex items-center justify-center">
             {consultationType === 'video' ? (
               <div className="relative w-full h-full flex items-center justify-center">
-                {/* Remote video (main view) */}
+                {/* Main video area - shows remote when connected, otherwise local */}
                 <div className="relative w-full h-full max-w-5xl rounded-2xl overflow-hidden bg-[#252542]">
+                  {/* Show remote video when connected and remote video is enabled */}
                   {hasRemoteStream && connectionStatus === 'connected' && remoteVideoEnabled ? (
                     <video
                       ref={remoteVideoRef}
@@ -1027,25 +891,83 @@ export function ConsultationRoom({
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <div className="text-center">
-                        <Avatar className="w-24 h-24 sm:w-32 sm:h-32 mx-auto mb-4">
-                          <AvatarFallback className="bg-slate-700 text-slate-300 text-3xl sm:text-4xl">
-                            {participantInitials}
-                          </AvatarFallback>
-                        </Avatar>
-                        <p className="text-white text-lg">{participantName}</p>
-                        {connectionStatus === 'connected' && !remoteVideoEnabled ? (
+                    /* Show local video when waiting or no remote video */
+                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
+                      {connectionStatus === 'connected' && !remoteVideoEnabled ? (
+                        // Connected but remote video is off - show avatar
+                        <div className="text-center">
+                          <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4">
+                            <AvatarFallback className="bg-slate-700 text-slate-300 text-3xl sm:text-4xl">
+                              {participantInitials}
+                            </AvatarFallback>
+                          </Avatar>
+                          <p className="text-white text-lg">{participantName}</p>
                           <p className="text-slate-400 text-sm">Camera is off</p>
-                        ) : (
-                          <p className="text-slate-400 text-sm">{connectionStatus === 'connecting' ? 'Connecting...' : 'Waiting for video'}</p>
-                        )}
-                      </div>
+                        </div>
+                      ) : connectionStatus === 'connecting' ? (
+                        // Connecting - show local video or avatar
+                        <div className="w-full h-full">
+                          {isVideoEnabled ? (
+                            <video
+                              ref={localVideoRef}
+                              autoPlay
+                              playsInline
+                              muted
+                              className="w-full h-full object-cover"
+                              style={{ transform: 'scaleX(-1)' }}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4">
+                                <AvatarFallback className="bg-primary text-primary-foreground text-3xl sm:text-4xl">
+                                  {myInitials}
+                                </AvatarFallback>
+                              </Avatar>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        // Not connected yet - show local video for doctor, avatar for waiting
+                        <div className="w-full h-full">
+                          {participantRole === 'doctor' || isAdmitted ? (
+                            isVideoEnabled ? (
+                              <video
+                                ref={localVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="w-full h-full object-cover"
+                                style={{ transform: 'scaleX(-1)' }}
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4">
+                                  <AvatarFallback className="bg-primary text-primary-foreground text-3xl sm:text-4xl">
+                                    {myInitials}
+                                  </AvatarFallback>
+                                </Avatar>
+                              </div>
+                            )
+                          ) : (
+                            <div className="text-center">
+                              <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4">
+                                <AvatarFallback className="bg-slate-700 text-slate-300 text-3xl sm:text-4xl">
+                                  {participantInitials}
+                                </AvatarFallback>
+                              </Avatar>
+                              <p className="text-white text-lg">{participantName}</p>
+                              <p className="text-slate-400 text-sm">
+                                {connectionStatus === 'connecting' ? 'Connecting...' : 'Waiting to connect'}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Local video (PIP) */}
+                {/* Local video (PIP) - always shown when video is enabled */}
                 <motion.div
                   drag
                   dragConstraints={containerRef}
@@ -1065,7 +987,7 @@ export function ConsultationRoom({
                       <div className="text-center">
                         <Avatar className="w-16 h-16 mx-auto mb-1">
                           <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                            {participantRole === 'doctor' ? 'DR' : 'PT'}
+                            {myInitials}
                           </AvatarFallback>
                         </Avatar>
                         <p className="text-white text-xs font-medium">You</p>
@@ -1089,19 +1011,29 @@ export function ConsultationRoom({
                   animate={{ scale: connectionStatus === 'connected' ? [1, 1.05, 1] : 1 }}
                   transition={{ repeat: connectionStatus === 'connected' ? Infinity : 0, duration: 2 }}
                 >
-                  <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mb-6">
-                    <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-4xl sm:text-5xl">
-                      {participantInitials}
-                    </AvatarFallback>
-                  </Avatar>
+                  {hasRemoteStream && connectionStatus === 'connected' ? (
+                    <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mb-6">
+                      <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-4xl sm:text-5xl">
+                        {participantInitials}
+                      </AvatarFallback>
+                    </Avatar>
+                  ) : (
+                    <Avatar className="w-32 h-32 sm:w-40 sm:h-40 mb-6">
+                      <AvatarFallback className="bg-gradient-to-br from-slate-700 to-slate-800 text-slate-300 text-4xl sm:text-5xl">
+                        {myInitials}
+                      </AvatarFallback>
+                    </Avatar>
+                  )}
                 </motion.div>
-                <h3 className="text-2xl font-semibold text-white mb-2">{participantName}</h3>
+                <h3 className="text-2xl font-semibold text-white mb-2">
+                  {hasRemoteStream && connectionStatus === 'connected' ? participantName : 'Waiting to connect'}
+                </h3>
                 <p className="text-slate-400">
                   {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
                 </p>
               </div>
             ) : (
-              // Chat-only view - handled by chat sidebar
+              // Chat-only view
               <div className="flex flex-col items-center justify-center">
                 <MessageSquare className="w-16 h-16 text-slate-600 mb-4" />
                 <p className="text-slate-400">Chat with {participantName}</p>
