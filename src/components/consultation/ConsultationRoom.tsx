@@ -431,27 +431,19 @@ export function ConsultationRoom({
           if (hasValidRemoteTracks) {
             console.log('[WebRTC] ✓ Valid remote stream confirmed - setting hasRemoteStream (NOT connected yet)');
             
-            // CRITICAL: Set remoteVideoEnabled from the tracks BEFORE rendering the video element
-            // We do this regardless of whether ref exists, since ref might not be in DOM yet
+            // CRITICAL: Set remoteVideoEnabled to true if video tracks exist
+            // Don't check enabled/readyState as these can fluctuate with network conditions
+            // The track existing is sufficient - the browser may mute it temporarily but we still want to display the video element
             if (videoTracks.length > 0) {
-              const videoTrack = videoTracks[0];
-              const isVideoEnabled = videoTrack.enabled && videoTrack.readyState === 'live';
-              console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', isVideoEnabled);
-              setRemoteVideoEnabled(isVideoEnabled);
+              console.log('[Video Track Monitor] Video track received - enabling remote video display');
+              setRemoteVideoEnabled(true);
               
-              // Listen for track state changes
+              // Only listen for track ended event - ignore mute/unmute as they fluctuate with network
+              const videoTrack = videoTracks[0];
               videoTrack.addEventListener('ended', () => {
                 console.log('[Video Track Monitor] Video track ended');
                 setRemoteVideoEnabled(false);
-              });
-              videoTrack.addEventListener('mute', () => {
-                console.log('[Video Track Monitor] Video track muted');
-                setRemoteVideoEnabled(false);
-              });
-              videoTrack.addEventListener('unmute', () => {
-                console.log('[Video Track Monitor] Video track unmuted');
-                setRemoteVideoEnabled(true);
-              });
+              }, { once: true });
             } else {
               console.log('[Video Track Monitor] No video tracks found');
               setRemoteVideoEnabled(false);
@@ -626,27 +618,18 @@ export function ConsultationRoom({
           if (hasValidRemoteTracks) {
             console.log('[WebRTC] Patient - ✓ Valid remote stream confirmed - setting hasRemoteStream');
             
-            // CRITICAL: Set remoteVideoEnabled from the tracks BEFORE rendering the video element
-            // We do this regardless of whether ref exists, since ref might not be in DOM yet
+            // CRITICAL: Set remoteVideoEnabled to true if video tracks exist
+            // Don't check enabled/readyState as these can fluctuate with network conditions
             if (videoTracks.length > 0) {
-              const videoTrack = videoTracks[0];
-              const isVideoEnabled = videoTrack.enabled && videoTrack.readyState === 'live';
-              console.log('[Video Track Monitor] Setting remoteVideoEnabled to:', isVideoEnabled);
-              setRemoteVideoEnabled(isVideoEnabled);
+              console.log('[Video Track Monitor] Video track received - enabling remote video display');
+              setRemoteVideoEnabled(true);
               
-              // Listen for track state changes
+              // Only listen for track ended event - ignore mute/unmute
+              const videoTrack = videoTracks[0];
               videoTrack.addEventListener('ended', () => {
                 console.log('[Video Track Monitor] Video track ended');
                 setRemoteVideoEnabled(false);
-              });
-              videoTrack.addEventListener('mute', () => {
-                console.log('[Video Track Monitor] Video track muted');
-                setRemoteVideoEnabled(false);
-              });
-              videoTrack.addEventListener('unmute', () => {
-                console.log('[Video Track Monitor] Video track unmuted');
-                setRemoteVideoEnabled(true);
-              });
+              }, { once: true });
             } else {
               console.log('[Video Track Monitor] No video tracks found');
               setRemoteVideoEnabled(false);
