@@ -78,6 +78,7 @@ export function ConsultationRoom({
   const lobbyChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const webrtcInitializedRef = useRef(false); // Track if WebRTC has been initialized
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -354,7 +355,7 @@ export function ConsultationRoom({
     // For admitted patients: initialize WebRTC after getting admitted
     const shouldInitialize = participantRole === 'patient' 
       ? (sessionId && user && !localStreamRef.current)  // Patients: initialize media once
-      : (sessionId && isAdmitted && !webrtcService && user);  // Doctors: need admission + WebRTC
+      : (sessionId && isAdmitted && !webrtcInitializedRef.current && user);  // Doctors: need admission + WebRTC (only once)
 
     console.log('[useEffect] Media init check:', {
       participantRole,
@@ -486,6 +487,7 @@ export function ConsultationRoom({
 
         webrtc.initializePeer(stream);
         setWebrtcService(webrtc);
+        webrtcInitializedRef.current = true; // Mark WebRTC as initialized
         setStreamInitialized(true); // Mark stream as ready
 
         if ('wakeLock' in navigator) {
@@ -510,7 +512,8 @@ export function ConsultationRoom({
     };
 
     initializeMedia();
-  }, [sessionId, user, isAdmitted, webrtcService, consultationType, participantRole]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, user, isAdmitted, consultationType, participantRole]);
 
   // Set stream to waiting room video element once it's available
   useEffect(() => {
@@ -592,7 +595,7 @@ export function ConsultationRoom({
 
   // Initialize WebRTC when patient gets admitted
   useEffect(() => {
-    if (participantRole !== 'patient' || !isAdmitted || !sessionId || webrtcService || !localStreamRef.current || !user) return;
+    if (participantRole !== 'patient' || !isAdmitted || !sessionId || webrtcInitializedRef.current || !localStreamRef.current || !user) return;
 
     const initializeWebRTC = async () => {
       try {
@@ -674,13 +677,14 @@ export function ConsultationRoom({
 
         webrtc.initializePeer(localStreamRef.current);
         setWebrtcService(webrtc);
+        webrtcInitializedRef.current = true; // Mark WebRTC as initialized
       } catch (err) {
         console.error('WebRTC initialization error:', err);
       }
     };
 
     initializeWebRTC();
-  }, [isAdmitted, participantRole, sessionId, webrtcService, user]);
+  }, [isAdmitted, participantRole, sessionId, user]);
 
   const toggleAudio = () => {
     if (localStreamRef.current) {
