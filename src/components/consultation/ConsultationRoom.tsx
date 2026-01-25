@@ -2,9 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
-  Send, X, User, AlertCircle, Camera, Users, Maximize2,
+  X, User, AlertCircle, Camera, Users, Maximize2,
   Minimize2, MoreVertical, Hand, Monitor, Settings,
-  PhoneOff, ChevronRight, ChevronLeft, Clock
+  PhoneOff, ChevronRight, ChevronLeft, Clock, FileText
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -18,6 +18,9 @@ import { toast } from '@/components/ui/use-toast';
 import { consultationService } from '@/services/consultationService';
 import { supabase } from '@/integrations/supabase/client';
 import { WebRTCService, type WebRTCSignal } from '@/services/webrtcService';
+import { ChatSidebar } from './ChatSidebar';
+import { ControlBar } from './ControlBar';
+import { DoctorNotesPanel } from './DoctorNotesPanel';
 
 interface Message {
   id: string;
@@ -50,7 +53,9 @@ export function ConsultationRoom({
   const [callDuration, setCallDuration] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [sessionData, setSessionData] = useState<{ id: string; created_at: string } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [patientId, setPatientId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [streamInitialized, setStreamInitialized] = useState(false);
@@ -62,6 +67,7 @@ export function ConsultationRoom({
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [isPatientWaiting, setIsPatientWaiting] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isNotesOpen, setIsNotesOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [waitingForPatient, setWaitingForPatient] = useState(false);
@@ -73,14 +79,14 @@ export function ConsultationRoom({
   const localVideoPIPRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
-  const lobbyChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const webrtcInitializedRef = useRef(false);
   const sessionInitializedRef = useRef(false);
+  const messageSubscriptionRef = useRef<(() => void) | null>(null);
+  const isCleaningUpRef = useRef(false);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -138,97 +144,22 @@ export function ConsultationRoom({
 
         if (!isMounted) return;
         
+        setSessionData({ id: session.id, created_at: session.created_at });
         setSessionId(session.id);
+        setPatientId(session.patient_id);
         sessionInitializedRef.current = true;
 
         // Initialize media immediately for both roles
         console.log('[Media] Initializing media for', participantRole);
         await initializeMedia();
 
-        // Set up lobby signal listener
-        const lobbyChannel = supabase.channel(`lobby:${session.id}`)
-          .on(
-            'postgres_changes',
-            {
-              event: 'INSERT',
-              schema: 'public',
-              table: 'webrtc_signals',
-              filter: `session_id=eq.${session.id}`
-            },
-            async (payload: { new: WebRTCSignal }) => {
-              const signal = payload.new;
-              console.log('[Lobby] Received signal:', signal.signal_data?.type, 'from:', signal.sender_id);
-              
-              if (signal.sender_id === user?.id) return;
-              
-              // Doctor receives join_lobby signal from patient
-              if (signal.signal_data?.type === 'join_lobby' && participantRole === 'doctor') {
-                console.log('[Lobby] 🔔 Patient has joined the lobby');
-                setIsPatientWaiting(true);
-                toast({
-                  title: 'Patient Waiting',
-                  description: 'A patient has joined the waiting room.',
-                  duration: 5000,
-                });
-              }
-              
-              // Patient receives admit_patient signal from doctor
-              if (signal.signal_data?.type === 'admit_patient' && participantRole === 'patient') {
-                console.log('[Lobby] 🎉 Doctor is admitting patient to call');
-                setIsAdmitted(true);
-                setIsCallStarted(true);
-                setShouldInitializeWebRTC(true);
-                toast({
-                  title: 'Admitted to Call',
-                  description: 'The doctor has admitted you to the consultation.',
-                  duration: 3000,
-                });
-              }
-            }
-          )
-          .subscribe((status) => {
-            console.log('[Lobby] Subscription status:', status);
-          });
-
-        lobbyChannelRef.current = lobbyChannel;
-
-        // Send initial lobby signal based on role
-        if (participantRole === 'patient') {
-          console.log('[Lobby] Patient sending join_lobby signal');
-          await supabase.from('webrtc_signals').insert({
-            session_id: session.id,
-            sender_id: user.id,
-            signal_data: { type: 'join_lobby', role: 'patient' }
-          });
-        } else {
-          // Doctor - check if patient already waiting
-          console.log('[Lobby] Doctor joined, checking for patient in lobby');
-          const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-          
-          const { data: existingSignals } = await supabase
-            .from('webrtc_signals')
-            .select('*')
-            .eq('session_id', session.id)
-            .eq('signal_data->>type', 'join_lobby')
-            .neq('sender_id', user.id)
-            .gte('created_at', twoMinutesAgo);
-          
-          if (existingSignals && existingSignals.length > 0) {
-            console.log('[Lobby] 🔔 Patient already waiting in lobby');
-            setIsPatientWaiting(true);
-            toast({
-              title: 'Patient Waiting',
-              description: 'A patient is waiting in the lobby.',
-              duration: 5000,
-            });
-          } else {
-            console.log('[Lobby] No patient in lobby yet');
-            setWaitingForPatient(true);
-          }
-          
-          // Doctor starts WebRTC immediately
+        if (participantRole === 'doctor') {
           setShouldInitializeWebRTC(true);
           setIsCallStarted(true);
+          setWaitingForPatient(true);
+        } else {
+          // Patient initializes WebRTC to receive admit signals
+          setShouldInitializeWebRTC(true);
         }
 
         // Load existing messages
@@ -244,11 +175,11 @@ export function ConsultationRoom({
           type: msg.message_type as 'text' | 'file'
         })));
 
-        // Subscribe to new messages
+        // Subscribe to new messages - keep subscription alive for entire session
         const unsubscribe = consultationService.subscribeToMessages(
           session.id,
           (dbMessage) => {
-            if (dbMessage.sender_id !== user?.id) {
+            if (isMounted && dbMessage.sender_id !== user?.id) {
               setMessages(prev => [...prev, {
                 id: dbMessage.id,
                 sender: 'remote',
@@ -261,7 +192,7 @@ export function ConsultationRoom({
           }
         );
         
-        unsubscribeRef.current = unsubscribe;
+        messageSubscriptionRef.current = unsubscribe;
         setIsLoading(false);
 
       } catch (err) {
@@ -275,8 +206,6 @@ export function ConsultationRoom({
 
     return () => {
       isMounted = false;
-      if (unsubscribeRef.current) unsubscribeRef.current();
-      if (lobbyChannelRef.current) lobbyChannelRef.current.unsubscribe();
     };
   }, [user, appointmentId, participantRole, consultationType]);
 
@@ -350,12 +279,11 @@ export function ConsultationRoom({
 
   // Initialize WebRTC when conditions are met
   useEffect(() => {
-    if (!sessionId || !user || !localStreamRef.current || !shouldInitializeWebRTC) return;
+    if (!sessionData || !user || !localStreamRef.current || !shouldInitializeWebRTC) return;
     if (webrtcInitializedRef.current) return;
 
-    // Doctor: initialize immediately, Patient: only when admitted
-    const shouldInitialize = participantRole === 'doctor' || 
-                           (participantRole === 'patient' && isAdmitted);
+    // Both initialize WebRTC but patient doesn't start peer connection until admitted
+    const shouldInitialize = true;
     
     if (!shouldInitialize) return;
 
@@ -365,7 +293,8 @@ export function ConsultationRoom({
         const isInitiator = participantRole === 'doctor';
         
         console.log('[WebRTC] Creating WebRTCService with initiator:', isInitiator);
-        const webrtc = new WebRTCService(sessionId, user.id, isInitiator);
+        const sessionStartTime = new Date(sessionData.created_at);
+        const webrtc = new WebRTCService(sessionData.id, user.id, isInitiator, sessionStartTime);
 
         webrtc.onStream((remoteStream) => {
           console.log('[WebRTC] Remote stream received, tracks:', remoteStream.getTracks().length);
@@ -413,10 +342,47 @@ export function ConsultationRoom({
           });
         });
 
+        webrtc.onPatientJoinedLobby(() => {
+          console.log('[Lobby] 🔔 Patient has joined the lobby');
+          setIsPatientWaiting(true);
+          setWaitingForPatient(false); // Exit waiting screen to show admit overlay
+          toast({
+            title: 'Patient Waiting',
+            description: 'A patient has joined the waiting room.',
+            duration: 5000,
+          });
+        });
+
+        webrtc.onAdmitted(() => {
+          console.log('[Lobby] 🎉 Doctor is admitting patient to call');
+          setIsAdmitted(true);
+          setIsCallStarted(true);
+          // Now initialize peer connection for patient
+          if (participantRole === 'patient' && localStreamRef.current) {
+            webrtc.initializePeer(localStreamRef.current);
+          }
+          toast({
+            title: 'Admitted to Call',
+            description: 'The doctor has admitted you to the consultation.',
+            duration: 3000,
+          });
+        });
+
         console.log('[WebRTC] Calling initializePeer with local stream');
-        webrtc.initializePeer(localStreamRef.current!);
+        if (participantRole === 'doctor') {
+          webrtc.initializePeer(localStreamRef.current!);
+        } else {
+          // Patient only subscribes to signals initially
+          webrtc.subscribeToSignalsOnly();
+        }
         setWebrtcService(webrtc);
         webrtcInitializedRef.current = true;
+        
+        if (participantRole === 'doctor') {
+          await webrtc.checkExistingLobbySignals();
+        } else {
+          await webrtc.sendJoinLobby();
+        }
         
         console.log('[WebRTC] Initialization complete, setting connecting status');
         setConnectionStatus('connecting');
@@ -432,7 +398,7 @@ export function ConsultationRoom({
     };
 
     initializeWebRTC();
-  }, [sessionId, user, shouldInitializeWebRTC, isAdmitted, participantRole]);
+  }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole]);
 
   // Ensure remote stream is attached when ref becomes available
   useEffect(() => {
@@ -489,11 +455,11 @@ export function ConsultationRoom({
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !sessionId) return;
+    if (!newMessage.trim() || !sessionData) return;
 
     try {
       const sentMessage = await consultationService.sendMessage(
-        sessionId,
+        sessionData.id,
         user!.id,
         participantRole,
         myName,
@@ -512,13 +478,6 @@ export function ConsultationRoom({
       }]);
 
       setNewMessage('');
-
-      // Scroll to bottom
-      setTimeout(() => {
-        if (chatScrollRef.current) {
-          chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-        }
-      }, 0);
     } catch (err) {
       console.error('Error sending message:', err);
       toast({
@@ -531,6 +490,7 @@ export function ConsultationRoom({
 
   const handleEndCall = useCallback(async () => {
     console.log('[Cleanup] Ending call and cleaning up...');
+    isCleaningUpRef.current = true;
     
     if (webrtcService) {
       webrtcService.destroy();
@@ -551,11 +511,10 @@ export function ConsultationRoom({
       }
     }
 
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-    }
-    if (lobbyChannelRef.current) {
-      lobbyChannelRef.current.unsubscribe();
+    // Unsubscribe from messages only during cleanup
+    if (messageSubscriptionRef.current) {
+      messageSubscriptionRef.current();
+      messageSubscriptionRef.current = null;
     }
 
     onEndCall();
@@ -565,17 +524,11 @@ export function ConsultationRoom({
     try {
       console.log('[Admission] Doctor admitting patient');
       
-      // Send admit signal to patient
-      const { error } = await supabase.from('webrtc_signals').insert({
-        session_id: sessionId!,
-        sender_id: user!.id,
-        signal_data: { type: 'admit_patient' }
-      });
-      
-      if (error) {
-        console.error('[Admission] Error sending admit signal:', error);
-        throw error;
+      if (!webrtcService) {
+        throw new Error('WebRTC service not initialized');
       }
+
+      await webrtcService.sendAdmitPatient();
       
       console.log('[Admission] Admit signal sent successfully');
       
@@ -821,6 +774,23 @@ export function ConsultationRoom({
             </div>
             <div className="flex items-center gap-2">
               <TooltipProvider>
+                {participantRole === 'doctor' && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className={`w-8 h-8 text-white/70 hover:text-white hover:bg-white/10 ${
+                          isNotesOpen ? 'bg-primary/20 text-primary' : ''
+                        }`}
+                        onClick={() => setIsNotesOpen(!isNotesOpen)}
+                      >
+                        <FileText className="w-4 h-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Consultation Notes</TooltipContent>
+                  </Tooltip>
+                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button 
@@ -1042,197 +1012,41 @@ export function ConsultationRoom({
           </div>
 
           {/* Control bar */}
-          <div className="relative z-30 p-3 sm:p-4 bg-gradient-to-t from-black/60 to-transparent">
-            <div className="flex items-center justify-center">
-              <div className="flex items-center gap-2 sm:gap-3 bg-[#252542]/80 backdrop-blur-md rounded-full px-3 sm:px-6 py-2 sm:py-3">
-                <TooltipProvider>
-                  {consultationType !== 'chat' && (
-                    <>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant={isAudioEnabled ? 'secondary' : 'destructive'}
-                            size="icon"
-                            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all ${
-                              isAudioEnabled 
-                                ? 'bg-white/10 hover:bg-white/20 text-white' 
-                                : 'bg-red-500 hover:bg-red-600'
-                            }`}
-                            onClick={toggleAudio}
-                          >
-                            {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
-                      </Tooltip>
-
-                      {consultationType === 'video' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant={isVideoEnabled ? 'secondary' : 'destructive'}
-                              size="icon"
-                              className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all ${
-                                isVideoEnabled 
-                                  ? 'bg-white/10 hover:bg-white/20 text-white' 
-                                  : 'bg-red-500 hover:bg-red-600'
-                              }`}
-                              onClick={toggleVideo}
-                            >
-                              {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Camera</TooltipContent>
-                        </Tooltip>
-                      )}
-
-                      <div className="w-px h-8 bg-white/20 mx-1 hidden sm:block" />
-                    </>
-                  )}
-
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${
-                          isChatOpen 
-                            ? 'bg-primary text-primary-foreground' 
-                            : 'bg-white/10 hover:bg-white/20 text-white'
-                        }`}
-                        onClick={() => setIsChatOpen(!isChatOpen)}
-                      >
-                        <MessageSquare className="w-5 h-5" />
-                        {messages.length > 0 && !isChatOpen && (
-                          <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-[10px] rounded-full flex items-center justify-center">
-                            {messages.length > 9 ? '9+' : messages.length}
-                          </span>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Chat</TooltipContent>
-                  </Tooltip>
-
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${
-                          handRaised 
-                            ? 'bg-amber-500 text-white' 
-                            : 'bg-white/10 hover:bg-white/20 text-white'
-                        }`}
-                        onClick={() => setHandRaised(!handRaised)}
-                      >
-                        <Hand className="w-5 h-5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{handRaised ? 'Lower hand' : 'Raise hand'}</TooltipContent>
-                  </Tooltip>
-
-                  <div className="w-px h-8 bg-white/20 mx-1 hidden sm:block" />
-
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="destructive"
-                        size="icon"
-                        className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
-                        onClick={handleEndCall}
-                      >
-                        <PhoneOff className="w-5 h-5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>End Call</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-            </div>
-          </div>
+          <ControlBar
+            consultationType={consultationType}
+            isAudioEnabled={isAudioEnabled}
+            isVideoEnabled={isVideoEnabled}
+            isChatOpen={isChatOpen}
+            handRaised={handRaised}
+            messageCount={messages.length}
+            onToggleAudio={toggleAudio}
+            onToggleVideo={toggleVideo}
+            onToggleChat={() => setIsChatOpen(!isChatOpen)}
+            onToggleHand={() => setHandRaised(!handRaised)}
+            onEndCall={handleEndCall}
+          />
         </div>
 
         {/* Chat sidebar */}
-        <AnimatePresence>
-          {isChatOpen && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 'auto', opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="w-80 sm:w-96 flex flex-col bg-[#252542] border-l border-white/10 overflow-hidden"
-            >
-              {/* Chat header */}
-              <div className="flex items-center justify-between p-4 border-b border-white/10">
-                <h3 className="font-semibold text-white flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4" />
-                  Meeting Chat
-                </h3>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="w-8 h-8 text-white/70 hover:text-white"
-                  onClick={() => setIsChatOpen(false)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
+        <ChatSidebar
+          isOpen={isChatOpen}
+          onClose={() => setIsChatOpen(false)}
+          messages={messages}
+          newMessage={newMessage}
+          onMessageChange={setNewMessage}
+          onSendMessage={handleSendMessage}
+        />
 
-              {/* Messages */}
-              <ScrollArea ref={chatScrollRef} className="flex-1 p-4">
-                <div className="space-y-4">
-                  {messages.length === 0 ? (
-                    <div className="text-center py-12">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-3 text-slate-600" />
-                      <p className="text-slate-400 text-sm">No messages yet</p>
-                      <p className="text-slate-500 text-xs mt-1">Start the conversation</p>
-                    </div>
-                  ) : (
-                    messages.map((message) => (
-                      <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className="max-w-[85%]">
-                          {message.sender === 'remote' && (
-                            <p className="text-xs text-slate-500 mb-1 px-1">{message.senderName}</p>
-                          )}
-                          <div className={`rounded-2xl px-4 py-2 ${
-                            message.sender === 'user'
-                              ? 'bg-primary text-primary-foreground rounded-br-sm'
-                              : 'bg-[#3d3d5c] text-white rounded-bl-sm'
-                          }`}>
-                            <p className="text-sm break-words">{message.content}</p>
-                          </div>
-                          <p className="text-[10px] text-slate-500 mt-1 px-1">
-                            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </ScrollArea>
-
-              {/* Chat input */}
-              <div className="p-4 border-t border-white/10">
-                <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="flex gap-2">
-                  <Input
-                    placeholder="Type a message..."
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1 bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary"
-                  />
-                  <Button 
-                    type="submit" 
-                    disabled={!newMessage.trim()} 
-                    size="icon"
-                    className="bg-primary hover:bg-primary/90"
-                  >
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </form>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Doctor notes panel */}
+        {participantRole === 'doctor' && sessionData && (
+          <DoctorNotesPanel
+            isOpen={isNotesOpen}
+            onClose={() => setIsNotesOpen(false)}
+            sessionId={sessionData.id}
+            patientId={patientId!}
+            doctorId={user!.id}
+          />
+        )}
       </div>
     </div>
   );
