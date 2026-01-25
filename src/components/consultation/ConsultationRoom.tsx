@@ -302,26 +302,21 @@ export function ConsultationRoom({
           if (remoteStream && remoteStream.getTracks().length > 0) {
             setHasRemoteStream(true);
             
-            // Check if remote has video
+            // Check if remote has video - update whenever tracks change
             const hasVideo = remoteStream.getVideoTracks().length > 0;
+            console.log('[WebRTC] Remote video tracks:', remoteStream.getVideoTracks().length, 'hasVideo:', hasVideo);
             setRemoteVideoEnabled(hasVideo);
             
             // Use setTimeout to ensure DOM is ready
             setTimeout(() => {
-              // Attach to video element
-              if (remoteVideoRef.current) {
-                console.log('[WebRTC] Attaching remote stream to video element');
-                remoteVideoRef.current.srcObject = remoteStream;
-                remoteVideoRef.current.play().catch(err => {
-                  console.log('[WebRTC] Video play error:', err);
-                });
-              } else {
-                console.log('[WebRTC] Remote video ref not available yet');
-              }
-              
-              // Attach to audio element
+              // Attach to audio element for audio playback
               if (remoteAudioRef.current) {
                 remoteAudioRef.current.srcObject = remoteStream;
+                remoteAudioRef.current.play().then(() => {
+                  console.log('[Audio Play] Remote audio started playing successfully');
+                }).catch(error => {
+                  console.error('[Audio Play] Failed to play remote audio:', error);
+                });
               }
             }, 100);
           }
@@ -400,6 +395,24 @@ export function ConsultationRoom({
     initializeWebRTC();
   }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole]);
 
+  // Monitor remote stream for video track changes
+  useEffect(() => {
+    if (hasRemoteStream && webrtcService) {
+      const remoteStream = webrtcService.getRemoteStream();
+      if (remoteStream) {
+        const hasVideo = remoteStream.getVideoTracks().length > 0;
+        console.log('[Video Monitor] Remote stream video tracks:', remoteStream.getVideoTracks().length, 'updating remoteVideoEnabled to:', hasVideo);
+        setRemoteVideoEnabled(hasVideo);
+        
+        // Debug video element visibility
+        if (remoteVideoRef.current) {
+          const isVisible = hasVideo && hasRemoteStream;
+          console.log('[Video Debug] Remote video element should be visible:', isVisible, 'hasRemoteStream:', hasRemoteStream, 'hasVideo:', hasVideo);
+        }
+      }
+    }
+  }, [hasRemoteStream, webrtcService]);
+
   // Ensure remote stream is attached when ref becomes available
   useEffect(() => {
     if (hasRemoteStream && webrtcService && remoteVideoRef.current) {
@@ -407,10 +420,41 @@ export function ConsultationRoom({
       if (remoteStream && remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
         console.log('[Video Attachment] Attaching remote stream to video element');
         remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play().catch(console.error);
+        remoteVideoRef.current.play().then(() => {
+          console.log('[Video Play] Remote video started playing successfully');
+        }).catch(error => {
+          console.error('[Video Play] Failed to play remote video:', error);
+        });
       }
     }
   }, [hasRemoteStream, webrtcService]);
+
+  // Additional effect to retry video attachment after connection is established
+  useEffect(() => {
+    if (connectionStatus === 'connected' && webrtcService) {
+      console.log('[Video Debug] Connection established - hasRemoteStream:', hasRemoteStream, 'remoteVideoEnabled:', remoteVideoEnabled);
+      const remoteStream = webrtcService.getRemoteStream();
+      if (remoteStream) {
+        // Try multiple times with delays to ensure video element is ready
+        const tryAttach = (attempt = 1) => {
+          if (remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
+            console.log(`[Video Retry ${attempt}] Attaching remote stream after connection`);
+            remoteVideoRef.current.srcObject = remoteStream;
+            remoteVideoRef.current.play().catch(console.error);
+          } else if (remoteVideoRef.current && remoteVideoRef.current.srcObject) {
+            console.log('[Video Debug] Remote video already has stream attached');
+            // Check if video element is actually visible
+            const isHidden = remoteVideoRef.current.classList.contains('hidden');
+            const computedStyle = window.getComputedStyle(remoteVideoRef.current);
+            console.log('[Video Debug] Video element hidden class:', isHidden, 'display:', computedStyle.display, 'visibility:', computedStyle.visibility);
+          } else if (attempt < 10) {
+            setTimeout(() => tryAttach(attempt + 1), 500);
+          }
+        };
+        tryAttach();
+      }
+    }
+  }, [connectionStatus, webrtcService, hasRemoteStream, remoteVideoEnabled]);
 
   // Timer effect
   useEffect(() => {
@@ -851,16 +895,23 @@ export function ConsultationRoom({
               <div className="relative w-full h-full flex items-center justify-center">
                 {/* Main video area - shows remote when connected, otherwise local */}
                 <div className="relative w-full h-full max-w-5xl rounded-2xl overflow-hidden bg-[#252542]">
-                  {/* Show remote video when connected and remote video is enabled */}
-                  {hasRemoteStream && connectionStatus === 'connected' && remoteVideoEnabled ? (
-                    <video
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      muted={false}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
+                  {/* Remote video element - always rendered, show when we have remote stream with video */}
+                  <video
+                    ref={remoteVideoRef}
+                    autoPlay
+                    playsInline
+                    muted={false}
+                    controls={false}
+                    className={`w-full h-full object-cover ${
+                      hasRemoteStream && remoteVideoEnabled ? 'block' : 'hidden'
+                    }`}
+                    onLoadedMetadata={() => console.log('[Remote Video] Video element loaded and ready')}
+                    onPlay={() => console.log('[Remote Video] Video started playing')}
+                    onError={(e) => console.error('[Remote Video] Video error:', e)}
+                  />
+                  
+                  {/* Show fallback content when no remote video */}
+                  {!(hasRemoteStream && remoteVideoEnabled) && (
                     /* Show local video when waiting or no remote video */
                     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
                       {connectionStatus === 'connected' && !remoteVideoEnabled ? (

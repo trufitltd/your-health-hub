@@ -35,6 +35,7 @@ export class WebRTCService {
   private maxIceRestarts = 2;
   private sessionStartedAt: Date;
   private doctorJoinedAt: Date;
+  private pendingRemoteStream: MediaStream | null = null;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -48,29 +49,10 @@ export class WebRTCService {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
     this.localStream = localStream;
     
-    // Use public STUN/TURN servers with reliable fallbacks
+    // Simplified STUN/TURN configuration
     const iceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-      // More reliable TURN servers from Metered
-      { 
-        urls: 'turn:a.relay.metered.ca:80',
-        username: 'e8dd65c92c0d89a91c7a0a57',
-        credential: 'ZhvP5X6ydChSpQxl'
-      },
-      { 
-        urls: 'turn:a.relay.metered.ca:443',
-        username: 'e8dd65c92c0d89a91c7a0a57',
-        credential: 'ZhvP5X6ydChSpQxl'
-      },
-      { 
-        urls: 'turn:a.relay.metered.ca:443?transport=tcp',
-        username: 'e8dd65c92c0d89a91c7a0a57',
-        credential: 'ZhvP5X6ydChSpQxl'
-      }
+      { urls: 'stun:stun1.l.google.com:19302' }
     ];
 
     try {
@@ -104,6 +86,16 @@ export class WebRTCService {
         this.remoteStream.addTrack(event.track);
         console.log('Added track to remote stream. Total tracks:', this.remoteStream.getTracks().length);
         
+        // Check if we have both audio and video tracks and consider connection established
+        const audioTracks = this.remoteStream.getAudioTracks().length;
+        const videoTracks = this.remoteStream.getVideoTracks().length;
+        if (audioTracks > 0 && videoTracks > 0 && this.peerConnection?.iceConnectionState === 'checking') {
+          console.log('✅ Both audio and video tracks received, considering connection established');
+          if (this.onConnectedCallback) {
+            this.onConnectedCallback();
+          }
+        }
+        
         if (this.onStreamCallback && !this.streamCallbackFired && this.remoteStream.getTracks().length > 0) {
           this.streamCallbackFired = true;
           console.log('Firing stream callback with remote stream');
@@ -113,10 +105,14 @@ export class WebRTCService {
 
       this.peerConnection.onicecandidate = async (event) => {
         if (event.candidate) {
-          console.log('Sending ICE candidate:', event.candidate.candidate.substring(0, 50));
+          const candidate = event.candidate.candidate;
+          const type = candidate.includes('typ host') ? 'host' : 
+                      candidate.includes('typ srflx') ? 'srflx' : 
+                      candidate.includes('typ relay') ? 'relay' : 'unknown';
+          console.log(`📡 Sending ICE candidate [${type}]:`, candidate.substring(0, 80));
           await this.sendSignal({ type: 'ice-candidate', candidate: event.candidate });
         } else {
-          console.log('ICE candidate gathering complete');
+          console.log('✅ ICE candidate gathering complete');
           await this.sendSignal({ type: 'ice-candidate', candidate: null });
         }
       };
@@ -148,7 +144,7 @@ export class WebRTCService {
 
       this.peerConnection.oniceconnectionstatechange = () => {
         const state = this.peerConnection?.iceConnectionState;
-        console.log('ICE connection state:', state);
+        console.log('🧊 ICE connection state:', state);
         
         if (state === 'connected' || state === 'completed') {
           console.log('✅ ICE connection established!');
@@ -169,8 +165,21 @@ export class WebRTCService {
             this.onErrorCallback(new Error('ICE connection failed after retries'));
           }
         } else if (state === 'checking') {
-          // Start a shorter timeout specifically for the checking phase
           console.log('🔍 ICE checking candidates...');
+          // Log current ICE candidates being tested
+          this.logIceCandidatePairs();
+          
+          // Set a timeout to check if we have media flowing even if ICE is stuck
+          setTimeout(() => {
+            if (this.peerConnection?.iceConnectionState === 'checking' && this.remoteStream && this.remoteStream.getTracks().length > 0) {
+              console.log('🔧 ICE stuck in checking but media is flowing, considering connected');
+              if (this.onConnectedCallback) {
+                this.onConnectedCallback();
+              }
+            }
+          }, 15000);
+        } else if (state === 'disconnected') {
+          console.warn('⚠️ ICE disconnected');
         }
       };
 
@@ -198,34 +207,34 @@ export class WebRTCService {
 
       await this.sendSignal({ type: 'ready' });
       
-      // Connection timeout with ICE restart for stuck connections
-      this.connectionTimeoutId = setTimeout(() => {
-        if (!this.peerConnection) return;
-        
-        const connState = this.peerConnection.connectionState;
-        const iceState = this.peerConnection.iceConnectionState;
-        
-        console.log('⏰ Connection timeout check - connection:', connState, 'ICE:', iceState);
-        
-        // Only restart if truly stuck (ICE is checking/failed but not connected)
-        if ((connState === 'connecting' || connState === 'new') && 
-            (iceState === 'checking' || iceState === 'failed' || iceState === 'disconnected') &&
-            this.iceRestartCount < this.maxIceRestarts) {
-          console.warn('⚠️ Connection timeout - restarting ICE (attempt', this.iceRestartCount + 1, ')');
-          this.iceRestartCount++;
-          this.peerConnection.restartIce?.();
-          
-          // Set another timeout for the restart attempt
-          this.connectionTimeoutId = setTimeout(() => {
-            if (this.peerConnection?.connectionState !== 'connected' && 
-                this.iceRestartCount < this.maxIceRestarts) {
-              console.warn('⚠️ ICE restart failed, trying again...');
-              this.iceRestartCount++;
-              this.peerConnection?.restartIce?.();
-            }
-          }, 10000);
-        }
-      }, 15000);
+      // Connection timeout disabled - let ICE negotiation complete naturally
+      // this.connectionTimeoutId = setTimeout(() => {
+      //   if (!this.peerConnection) return;
+      //   
+      //   const connState = this.peerConnection.connectionState;
+      //   const iceState = this.peerConnection.iceConnectionState;
+      //   
+      //   console.log('⏰ Connection timeout check - connection:', connState, 'ICE:', iceState);
+      //   
+      //   // Only restart if truly stuck (ICE is checking/failed but not connected)
+      //   if ((connState === 'connecting' || connState === 'new') && 
+      //       (iceState === 'checking' || iceState === 'failed' || iceState === 'disconnected') &&
+      //       this.iceRestartCount < this.maxIceRestarts) {
+      //     console.warn('⚠️ Connection timeout - restarting ICE (attempt', this.iceRestartCount + 1, ')');
+      //     this.iceRestartCount++;
+      //     this.peerConnection.restartIce?.();
+      //     
+      //     // Set another timeout for the restart attempt
+      //     this.connectionTimeoutId = setTimeout(() => {
+      //       if (this.peerConnection?.connectionState !== 'connected' && 
+      //           this.iceRestartCount < this.maxIceRestarts) {
+      //         console.warn('⚠️ ICE restart failed, trying again...');
+      //         this.iceRestartCount++;
+      //         this.peerConnection?.restartIce?.();
+      //       }
+      //     }, 10000);
+      //   }
+      // }, 30000);
 
       if (this.isInitiator) {
         console.log('Initiator: waiting for peer ready');
@@ -419,24 +428,28 @@ export class WebRTCService {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
           console.log('Remote description set from answer');
           await this.flushCandidateQueue();
-        } else if (pc.remoteDescription) {
-          console.log('Already have remote description, ignoring answer');
         } else {
-          console.log('Cannot set answer - signalingState:', pc.signalingState);
+          console.log('Ignoring answer - signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
         }
       }
       else if (signalData.type === 'ice-candidate') {
         const candidateData = signalData.candidate as RTCIceCandidateInit;
         if (candidateData) {
+          const candidate = candidateData.candidate || '';
+          const type = candidate.includes('typ host') ? 'host' : 
+                      candidate.includes('typ srflx') ? 'srflx' : 
+                      candidate.includes('typ relay') ? 'relay' : 'unknown';
+          
           if (pc.remoteDescription) {
-            console.log('Adding ICE candidate');
+            console.log(`📥 Adding ICE candidate [${type}]:`, candidate.substring(0, 80));
             try {
               await pc.addIceCandidate(new RTCIceCandidate(candidateData));
+              console.log('✅ ICE candidate added successfully');
             } catch (error) {
-              console.warn('Failed to add ICE candidate:', error);
+              console.warn('⚠️ Failed to add ICE candidate:', error);
             }
           } else {
-            console.log('Queueing ICE candidate');
+            console.log(`📋 Queueing ICE candidate [${type}]:`, candidate.substring(0, 80));
             this.candidateQueue.push(new RTCIceCandidate(candidateData));
           }
         }
@@ -450,6 +463,37 @@ export class WebRTCService {
       }
     } catch (error) {
       console.error('Error handling signal:', error);
+    }
+  }
+
+  private async logIceCandidatePairs() {
+    if (!this.peerConnection) return;
+    
+    try {
+      const stats = await this.peerConnection.getStats();
+      const candidatePairs: RTCStatsReport[] = [];
+      const localCandidates: RTCStatsReport[] = [];
+      const remoteCandidates: RTCStatsReport[] = [];
+      
+      stats.forEach((report) => {
+        if (report.type === 'candidate-pair') {
+          candidatePairs.push(report);
+        } else if (report.type === 'local-candidate') {
+          localCandidates.push(report);
+        } else if (report.type === 'remote-candidate') {
+          remoteCandidates.push(report);
+        }
+      });
+      
+      console.log(`📊 ICE Stats: ${candidatePairs.length} pairs, ${localCandidates.length} local, ${remoteCandidates.length} remote`);
+      
+      candidatePairs.forEach((pair: any) => {
+        if (pair.state === 'succeeded' || pair.state === 'in-progress') {
+          console.log(`🔗 Candidate pair [${pair.state}]: ${pair.localCandidateId} -> ${pair.remoteCandidateId}`);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to get ICE stats:', error);
     }
   }
 
@@ -530,6 +574,14 @@ export class WebRTCService {
 
   getRemoteStream(): MediaStream | null {
     return this.remoteStream;
+  }
+
+  get pendingRemoteStream(): MediaStream | null {
+    return this.pendingRemoteStream;
+  }
+
+  set pendingRemoteStream(stream: MediaStream | null) {
+    this.pendingRemoteStream = stream;
   }
 
   getConnectionState(): string {
