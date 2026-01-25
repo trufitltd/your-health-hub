@@ -927,7 +927,7 @@ export function ConsultationRoom({
                               </Avatar>
                               <p className="text-white text-lg">{participantName}</p>
                               <p className="text-slate-400 text-sm">
-                                {connectionStatus === 'connecting' ? 'Connecting...' : 'Waiting to connect'}
+                                {connectionStatus === 'connected' ? 'Connected' : 'Connecting...'}
                               </p>
                             </div>
                           )}
