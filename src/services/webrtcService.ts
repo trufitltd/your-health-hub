@@ -48,19 +48,28 @@ export class WebRTCService {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
     this.localStream = localStream;
     
-    // Use public STUN/TURN servers with fallbacks
+    // Use public STUN/TURN servers with reliable fallbacks
     const iceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun3.l.google.com:19302' },
       { urls: 'stun:stun4.l.google.com:19302' },
-      { urls: 'stun:stun.stunprotocol.org:3478' },
-      { urls: 'stun:stun.l.google.com:19302' },
+      // More reliable TURN servers from Metered
       { 
-        urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'],
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
+        urls: 'turn:a.relay.metered.ca:80',
+        username: 'e8dd65c92c0d89a91c7a0a57',
+        credential: 'ZhvP5X6ydChSpQxl'
+      },
+      { 
+        urls: 'turn:a.relay.metered.ca:443',
+        username: 'e8dd65c92c0d89a91c7a0a57',
+        credential: 'ZhvP5X6ydChSpQxl'
+      },
+      { 
+        urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+        username: 'e8dd65c92c0d89a91c7a0a57',
+        credential: 'ZhvP5X6ydChSpQxl'
       }
     ];
 
@@ -156,7 +165,12 @@ export class WebRTCService {
             console.log('Attempting ICE restart...');
             this.iceRestartCount++;
             this.peerConnection?.restartIce();
+          } else if (this.onErrorCallback) {
+            this.onErrorCallback(new Error('ICE connection failed after retries'));
           }
+        } else if (state === 'checking') {
+          // Start a shorter timeout specifically for the checking phase
+          console.log('🔍 ICE checking candidates...');
         }
       };
 
@@ -184,16 +198,34 @@ export class WebRTCService {
 
       await this.sendSignal({ type: 'ready' });
       
-     this.connectionTimeoutId = setTimeout(() => {
-  if (this.peerConnection && 
-      this.peerConnection.connectionState === 'connecting' &&
-      (this.peerConnection.iceConnectionState === 'failed' || this.peerConnection.iceConnectionState === 'disconnected') &&
-      this.iceRestartCount < this.maxIceRestarts) {
-    console.warn('⚠️ Connection timeout - restarting ICE (attempt', this.iceRestartCount + 1, ')');
-    this.iceRestartCount++;
-    this.peerConnection.restartIce?.();
-  }
-}, 30000);
+      // Connection timeout with ICE restart for stuck connections
+      this.connectionTimeoutId = setTimeout(() => {
+        if (!this.peerConnection) return;
+        
+        const connState = this.peerConnection.connectionState;
+        const iceState = this.peerConnection.iceConnectionState;
+        
+        console.log('⏰ Connection timeout check - connection:', connState, 'ICE:', iceState);
+        
+        // Only restart if truly stuck (ICE is checking/failed but not connected)
+        if ((connState === 'connecting' || connState === 'new') && 
+            (iceState === 'checking' || iceState === 'failed' || iceState === 'disconnected') &&
+            this.iceRestartCount < this.maxIceRestarts) {
+          console.warn('⚠️ Connection timeout - restarting ICE (attempt', this.iceRestartCount + 1, ')');
+          this.iceRestartCount++;
+          this.peerConnection.restartIce?.();
+          
+          // Set another timeout for the restart attempt
+          this.connectionTimeoutId = setTimeout(() => {
+            if (this.peerConnection?.connectionState !== 'connected' && 
+                this.iceRestartCount < this.maxIceRestarts) {
+              console.warn('⚠️ ICE restart failed, trying again...');
+              this.iceRestartCount++;
+              this.peerConnection?.restartIce?.();
+            }
+          }, 10000);
+        }
+      }, 15000);
 
       if (this.isInitiator) {
         console.log('Initiator: waiting for peer ready');
