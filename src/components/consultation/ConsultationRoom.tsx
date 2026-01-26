@@ -314,6 +314,17 @@ export function ConsultationRoom({
                 remoteAudioRef.current.srcObject = remoteStream;
                 remoteAudioRef.current.play().then(() => {
                   console.log('[Audio Play] Remote audio started playing successfully');
+                  // Check if audio is actually playing
+                  setTimeout(() => {
+                    if (remoteAudioRef.current) {
+                      console.log('[Audio Debug] Audio state:', {
+                        paused: remoteAudioRef.current.paused,
+                        volume: remoteAudioRef.current.volume,
+                        muted: remoteAudioRef.current.muted,
+                        currentTime: remoteAudioRef.current.currentTime
+                      });
+                    }
+                  }, 2000);
                 }).catch(error => {
                   console.error('[Audio Play] Failed to play remote audio:', error);
                 });
@@ -352,8 +363,9 @@ export function ConsultationRoom({
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
           setIsCallStarted(true);
-          // Now initialize peer connection for patient
+          // Now initialize peer connection for patient with fresh local stream
           if (participantRole === 'patient' && localStreamRef.current) {
+            console.log('[Patient Admission] Initializing peer connection with local stream');
             webrtc.initializePeer(localStreamRef.current);
           }
           toast({
@@ -422,6 +434,29 @@ export function ConsultationRoom({
         remoteVideoRef.current.srcObject = remoteStream;
         remoteVideoRef.current.play().then(() => {
           console.log('[Video Play] Remote video started playing successfully');
+          // Check video element properties
+          const video = remoteVideoRef.current!;
+          console.log('[Video Debug] Video properties:', {
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            readyState: video.readyState,
+            paused: video.paused,
+            muted: video.muted,
+            volume: video.volume
+          });
+          // Check stream properties
+          const stream = video.srcObject as MediaStream;
+          if (stream) {
+            console.log('[Video Debug] Stream properties:', {
+              active: stream.active,
+              videoTracks: stream.getVideoTracks().map(t => ({
+                kind: t.kind,
+                enabled: t.enabled,
+                readyState: t.readyState,
+                muted: t.muted
+              }))
+            });
+          }
         }).catch(error => {
           console.error('[Video Play] Failed to play remote video:', error);
         });
@@ -905,8 +940,43 @@ export function ConsultationRoom({
                     className={`w-full h-full object-cover ${
                       hasRemoteStream && remoteVideoEnabled ? 'block' : 'hidden'
                     }`}
-                    onLoadedMetadata={() => console.log('[Remote Video] Video element loaded and ready')}
-                    onPlay={() => console.log('[Remote Video] Video started playing')}
+                    onLoadedMetadata={() => {
+                      console.log('[Remote Video] Video metadata loaded');
+                      if (remoteVideoRef.current) {
+                        const video = remoteVideoRef.current;
+                        console.log('[Remote Video] Metadata dimensions:', video.videoWidth, 'x', video.videoHeight);
+                        if (video.videoWidth > 0 && video.videoHeight > 0) {
+                          console.log('[Remote Video] ✅ Video has valid dimensions from metadata');
+                        }
+                      }
+                    }}
+                    onPlay={() => {
+                      console.log('[Remote Video] Video started playing');
+                      // Check dimensions after a delay to ensure video is fully loaded
+                      setTimeout(() => {
+                        if (remoteVideoRef.current) {
+                          const video = remoteVideoRef.current;
+                          console.log('[Video Check] Final dimensions:', video.videoWidth, 'x', video.videoHeight);
+                          if (video.videoWidth === 0 || video.videoHeight === 0) {
+                            console.warn('[Video Issue] Remote video has no dimensions - checking stream tracks');
+                            const stream = video.srcObject as MediaStream;
+                            if (stream) {
+                              const videoTracks = stream.getVideoTracks();
+                              videoTracks.forEach((track, index) => {
+                                const settings = track.getSettings();
+                                console.log(`[Video Track ${index}] Settings:`, {
+                                  width: settings.width,
+                                  height: settings.height,
+                                  enabled: track.enabled,
+                                  readyState: track.readyState,
+                                  muted: track.muted
+                                });
+                              });
+                            }
+                          }
+                        }
+                      }, 1000);
+                    }}
                     onError={(e) => console.error('[Remote Video] Video error:', e)}
                   />
                   
