@@ -856,7 +856,7 @@ export function ConsultationRoom({
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
       {/* Main content area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Video area */}
         <div className="flex-1 relative flex flex-col">
           {/* Top bar */}
@@ -1173,25 +1173,40 @@ export function ConsultationRoom({
           />
         </div>
 
+        {/* Mobile backdrop for panels */}
+        {(isChatOpen || isNotesOpen) && (
+          <div 
+            className="absolute inset-0 bg-black/50 z-35 sm:hidden" 
+            onClick={() => {
+              setIsChatOpen(false);
+              setIsNotesOpen(false);
+            }}
+          />
+        )}
+
         {/* Chat sidebar */}
-        <ChatSidebar
-          isOpen={isChatOpen}
-          onClose={() => setIsChatOpen(false)}
-          messages={messages}
-          newMessage={newMessage}
-          onMessageChange={setNewMessage}
-          onSendMessage={handleSendMessage}
-        />
+        <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto`}>
+          <ChatSidebar
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+            messages={messages}
+            newMessage={newMessage}
+            onMessageChange={setNewMessage}
+            onSendMessage={handleSendMessage}
+          />
+        </div>
 
         {/* Doctor notes panel */}
         {participantRole === 'doctor' && sessionData && (
-          <DoctorNotesPanel
-            isOpen={isNotesOpen}
-            onClose={() => setIsNotesOpen(false)}
-            sessionId={sessionData.id}
-            patientId={patientId!}
-            doctorId={user!.id}
-          />
+          <div className={`${isNotesOpen ? 'absolute sm:relative' : 'hidden'} top-0 left-0 bottom-0 z-40 sm:z-auto`}>
+            <DoctorNotesPanel
+              isOpen={isNotesOpen}
+              onClose={() => setIsNotesOpen(false)}
+              sessionId={sessionData.id}
+              patientId={patientId!}
+              doctorId={user!.id}
+            />
+          </div>
         )}
       </div>
     </div>
