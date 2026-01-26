@@ -128,7 +128,7 @@ export function DoctorNotesPanel({
           animate={{ width: 'auto', opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="w-80 sm:w-96 flex flex-col bg-[#252542] border-r border-white/10 overflow-hidden"
+          className="w-full sm:w-80 md:w-96 flex flex-col bg-[#252542] border-r border-white/10 overflow-hidden"
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-white/10">
