@@ -37,6 +37,7 @@ export class WebRTCService {
   private doctorJoinedAt: Date;
   private pendingRemoteStream: MediaStream | null = null;
   private fireStreamCallback?: () => void;
+  private isConnected = false;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -50,10 +51,12 @@ export class WebRTCService {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
     this.localStream = localStream;
     
-    // Simplified STUN/TURN configuration
+    // Enhanced STUN/TURN configuration for better connectivity
     const iceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
     ];
 
     try {
@@ -66,19 +69,10 @@ export class WebRTCService {
 
       console.log('Adding all tracks from stream:', localStream.getTracks().length);
       
-      // Wait for video tracks to have proper dimensions before adding them
+      // Add tracks directly without validation to avoid corruption
       const addTracksWithValidation = async () => {
         for (const track of localStream.getTracks()) {
           console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
-          
-          if (track.kind === 'video') {
-            const isValid = await this.validateVideoTrack(track);
-            if (!isValid) {
-              console.error('❌ Video track validation failed, skipping track');
-              continue;
-            }
-          }
-          
           this.peerConnection?.addTrack(track, localStream);
         }
       };
@@ -103,23 +97,10 @@ export class WebRTCService {
         this.remoteStream.addTrack(event.track);
         console.log('Added track to remote stream. Total tracks:', this.remoteStream.getTracks().length);
         
-        // For video tracks, wait for proper dimensions before considering ready
+        // For video tracks, fire callback immediately - don't wait for dimensions
         if (event.track.kind === 'video') {
-          const checkVideoDimensions = () => {
-            const settings = event.track.getSettings();
-            console.log('📹 Video track settings:', settings);
-            
-            if (settings.width && settings.height && settings.width > 0 && settings.height > 0) {
-              console.log('✅ Video track has valid dimensions:', settings.width, 'x', settings.height);
-              this.fireStreamCallback();
-            } else {
-              console.log('⏳ Waiting for video track dimensions...');
-              setTimeout(checkVideoDimensions, 100);
-            }
-          };
-          
-          // Start checking dimensions after a short delay
-          setTimeout(checkVideoDimensions, 50);
+          console.log('📹 Video track received, firing callback immediately');
+          this.fireStreamCallback();
         } else {
           // Audio track - fire callback immediately
           this.fireStreamCallback();
@@ -168,6 +149,7 @@ export class WebRTCService {
         
         if (state === 'connected') {
           console.log('✅ WebRTC connection established!');
+          this.isConnected = true;
           if (this.connectionTimeoutId) {
             clearTimeout(this.connectionTimeoutId);
             this.connectionTimeoutId = null;
@@ -177,7 +159,7 @@ export class WebRTCService {
           }
         } else if (state === 'failed') {
           console.error('❌ WebRTC connection failed');
-          if (this.onErrorCallback) {
+          if (!this.isConnected && this.onErrorCallback) {
             this.onErrorCallback(new Error('WebRTC connection failed'));
           }
         } else if (state === 'connecting') {
@@ -193,6 +175,7 @@ export class WebRTCService {
         
         if (state === 'connected' || state === 'completed') {
           console.log('✅ ICE connection established!');
+          this.isConnected = true;
           if (this.connectionTimeoutId) {
             clearTimeout(this.connectionTimeoutId);
             this.connectionTimeoutId = null;
@@ -202,11 +185,11 @@ export class WebRTCService {
           }
         } else if (state === 'failed') {
           console.error('❌ ICE connection failed');
-          if (this.iceRestartCount < this.maxIceRestarts) {
+          if (!this.isConnected && this.iceRestartCount < this.maxIceRestarts) {
             console.log('Attempting ICE restart...');
             this.iceRestartCount++;
             this.peerConnection?.restartIce();
-          } else if (this.onErrorCallback) {
+          } else if (!this.isConnected && this.onErrorCallback) {
             this.onErrorCallback(new Error('ICE connection failed after retries'));
           }
         } else if (state === 'checking') {
@@ -218,11 +201,12 @@ export class WebRTCService {
           setTimeout(() => {
             if (this.peerConnection?.iceConnectionState === 'checking' && this.remoteStream && this.remoteStream.getTracks().length > 0) {
               console.log('🔧 ICE stuck in checking but media is flowing, considering connected');
+              this.isConnected = true;
               if (this.onConnectedCallback) {
                 this.onConnectedCallback();
               }
             }
-          }, 15000);
+          }, 10000); // Reduced from 15s to 10s
         } else if (state === 'disconnected') {
           console.warn('⚠️ ICE disconnected');
         }
@@ -500,25 +484,21 @@ export class WebRTCService {
         const offer = signalData.offer as RTCSessionDescriptionInit;
         console.log('Received offer, signalingState:', pc.signalingState);
         
-        if (pc.signalingState === 'stable' || !pc.localDescription) {
-          if (!pc.remoteDescription) {
-            console.log('Setting remote description from offer');
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            
-            const answer = await pc.createAnswer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true
-            });
-            await pc.setLocalDescription(answer);
-            console.log('Answer created and set as local description');
-            
-            await this.sendSignal({ type: 'answer', answer });
-            await this.flushCandidateQueue();
-          } else {
-            console.log('Already have remote description, ignoring offer');
-          }
+        if (pc.signalingState === 'stable' && !pc.remoteDescription) {
+          console.log('Setting remote description from offer');
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          
+          const answer = await pc.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+          });
+          await pc.setLocalDescription(answer);
+          console.log('Answer created and set as local description');
+          
+          await this.sendSignal({ type: 'answer', answer });
+          await this.flushCandidateQueue();
         } else {
-          console.log('Offer collision - signalingState:', pc.signalingState, 'ignoring');
+          console.log('Ignoring offer - signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
         }
       } 
       else if (signalData.type === 'answer') {
@@ -527,9 +507,27 @@ export class WebRTCService {
         
         if (pc.signalingState === 'have-local-offer' && !pc.remoteDescription) {
           console.log('Setting remote description from answer');
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
-          console.log('Remote description set from answer');
-          await this.flushCandidateQueue();
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            console.log('Remote description set from answer');
+            await this.flushCandidateQueue();
+          } catch (error) {
+            console.warn('Failed to set remote description, trying with modified SDP:', error);
+            // Try to fix SDP compatibility issues
+            if (answer.sdp) {
+              const modifiedAnswer = {
+                ...answer,
+                sdp: this.removeProblematicExtensions(answer.sdp)
+              };
+              try {
+                await pc.setRemoteDescription(new RTCSessionDescription(modifiedAnswer));
+                console.log('Remote description set with modified SDP');
+                await this.flushCandidateQueue();
+              } catch (secondError) {
+                console.error('Failed to set remote description even with modified SDP:', secondError);
+              }
+            }
+          }
         } else {
           console.log('Ignoring answer - signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
         }
@@ -616,6 +614,20 @@ export class WebRTCService {
     }
   }
 
+  private removeProblematicExtensions(sdp: string): string {
+    // Remove all RTP header extensions to avoid compatibility issues
+    const lines = sdp.split('\n');
+    const filteredLines = lines.filter(line => {
+      // Remove all extmap lines to avoid any extension conflicts
+      if (line.startsWith('a=extmap:')) {
+        return false;
+      }
+      return true;
+    });
+    
+    return filteredLines.join('\n');
+  }
+
   private async createOffer() {
     if (!this.peerConnection || this.makingOffer) return;
 
@@ -625,8 +637,7 @@ export class WebRTCService {
       
       const offer = await this.peerConnection.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: true,
-        iceRestart: true
+        offerToReceiveVideo: true
       });
       
       console.log('Offer created, setting as local description');
