@@ -36,6 +36,7 @@ export class WebRTCService {
   private sessionStartedAt: Date;
   private doctorJoinedAt: Date;
   private pendingRemoteStream: MediaStream | null = null;
+  private fireStreamCallback?: () => void;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -64,10 +65,25 @@ export class WebRTCService {
       });
 
       console.log('Adding all tracks from stream:', localStream.getTracks().length);
-      localStream.getTracks().forEach(track => {
-        console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
-        this.peerConnection?.addTrack(track, localStream);
-      });
+      
+      // Wait for video tracks to have proper dimensions before adding them
+      const addTracksWithValidation = async () => {
+        for (const track of localStream.getTracks()) {
+          console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
+          
+          if (track.kind === 'video') {
+            const isValid = await this.validateVideoTrack(track);
+            if (!isValid) {
+              console.error('❌ Video track validation failed, skipping track');
+              continue;
+            }
+          }
+          
+          this.peerConnection?.addTrack(track, localStream);
+        }
+      };
+      
+      await addTracksWithValidation();
 
       this.peerConnection.ontrack = (event) => {
         console.log('ontrack event received:', event.track.kind, 'id:', event.track.id, 'streams:', event.streams.length);
@@ -83,20 +99,49 @@ export class WebRTCService {
           return;
         }
         
+        // Add track to our managed remote stream
         this.remoteStream.addTrack(event.track);
         console.log('Added track to remote stream. Total tracks:', this.remoteStream.getTracks().length);
         
+        // For video tracks, wait for proper dimensions before considering ready
+        if (event.track.kind === 'video') {
+          const checkVideoDimensions = () => {
+            const settings = event.track.getSettings();
+            console.log('📹 Video track settings:', settings);
+            
+            if (settings.width && settings.height && settings.width > 0 && settings.height > 0) {
+              console.log('✅ Video track has valid dimensions:', settings.width, 'x', settings.height);
+              this.fireStreamCallback();
+            } else {
+              console.log('⏳ Waiting for video track dimensions...');
+              setTimeout(checkVideoDimensions, 100);
+            }
+          };
+          
+          // Start checking dimensions after a short delay
+          setTimeout(checkVideoDimensions, 50);
+        } else {
+          // Audio track - fire callback immediately
+          this.fireStreamCallback();
+        }
+        
         // Check if we have both audio and video tracks and consider connection established
-        const audioTracks = this.remoteStream.getAudioTracks().length;
-        const videoTracks = this.remoteStream.getVideoTracks().length;
-        if (audioTracks > 0 && videoTracks > 0 && this.peerConnection?.iceConnectionState === 'checking') {
+        const audioTracks = this.remoteStream.getAudioTracks();
+        const videoTracks = this.remoteStream.getVideoTracks();
+        console.log('📊 Track status - Audio:', audioTracks.length, audioTracks.map(t => `${t.kind}:${t.readyState}:${t.enabled}`));
+        console.log('📊 Track status - Video:', videoTracks.length, videoTracks.map(t => `${t.kind}:${t.readyState}:${t.enabled}`));
+        
+        if (audioTracks.length > 0 && videoTracks.length > 0 && this.peerConnection?.iceConnectionState === 'checking') {
           console.log('✅ Both audio and video tracks received, considering connection established');
           if (this.onConnectedCallback) {
             this.onConnectedCallback();
           }
         }
-        
-        if (this.onStreamCallback && !this.streamCallbackFired && this.remoteStream.getTracks().length > 0) {
+      };
+      
+      // Helper method to fire stream callback only once
+      this.fireStreamCallback = () => {
+        if (this.onStreamCallback && !this.streamCallbackFired && this.remoteStream && this.remoteStream.getTracks().length > 0) {
           this.streamCallbackFired = true;
           console.log('Firing stream callback with remote stream');
           this.onStreamCallback(this.remoteStream);
@@ -246,8 +291,65 @@ export class WebRTCService {
     }
   }
 
+  private async validateVideoTrack(track: MediaStreamTrack): Promise<boolean> {
+    if (track.kind !== 'video') return true;
+    
+    // Create a temporary video element to test the track
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.style.position = 'absolute';
+    video.style.left = '-9999px';
+    video.style.width = '1px';
+    video.style.height = '1px';
+    
+    try {
+      const stream = new MediaStream([track]);
+      video.srcObject = stream;
+      document.body.appendChild(video);
+      
+      // Wait for video to load and get dimensions
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Video validation timeout'));
+        }, 5000);
+        
+        video.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        
+        video.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error('Video load error'));
+        };
+        
+        video.play().catch(reject);
+      });
+      
+      const hasValidDimensions = video.videoWidth > 0 && video.videoHeight > 0;
+      console.log('✅ Video track validation:', {
+        width: video.videoWidth,
+        height: video.videoHeight,
+        readyState: track.readyState,
+        enabled: track.enabled,
+        valid: hasValidDimensions
+      });
+      
+      return hasValidDimensions;
+      
+    } catch (error) {
+      console.warn('⚠️ Video track validation failed:', error);
+      return false;
+    } finally {
+      video.srcObject = null;
+      if (video.parentNode) {
+        document.body.removeChild(video);
+      }
+    }
+  }
+
   async checkExistingLobbySignals() {
-    // Only check for join_lobby signals from the last 5 minutes to avoid old signals
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     
     const { data, error } = await supabase
