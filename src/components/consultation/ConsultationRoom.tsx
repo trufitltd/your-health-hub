@@ -226,7 +226,15 @@ export function ConsultationRoom({
       };
 
       console.log('[Media] Requesting media with constraints:', constraints);
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Add timeout wrapper to prevent hanging
+      const mediaPromise = navigator.mediaDevices.getUserMedia(constraints);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Media request timeout')), 10000);
+      });
+      
+      const stream = await Promise.race([mediaPromise, timeoutPromise]);
+      
       console.log('[Media] Media stream obtained:', {
         video: stream.getVideoTracks().length > 0,
         audio: stream.getAudioTracks().length > 0
@@ -244,6 +252,13 @@ export function ConsultationRoom({
 
     } catch (err) {
       console.error('[Media] Error initializing media:', err);
+      
+      // For patients, still proceed without media to allow WebRTC initialization
+      if (participantRole === 'patient') {
+        console.log('[Media] Patient proceeding without media for WebRTC initialization');
+        setIsMediaReady(true);
+      }
+      
       toast({
         title: 'Media Error',
         description: 'Unable to access camera/microphone. Please check permissions.',
@@ -340,12 +355,15 @@ export function ConsultationRoom({
 
         webrtc.onError((error) => {
           console.error('[WebRTC] Error:', error);
-          setConnectionStatus('disconnected');
-          toast({
-            title: 'Connection Error',
-            description: 'Failed to establish WebRTC connection',
-            variant: 'destructive'
-          });
+          // Only show error if not already connected
+          if (connectionStatus !== 'connected') {
+            setConnectionStatus('disconnected');
+            toast({
+              title: 'Connection Error',
+              description: 'Failed to establish WebRTC connection',
+              variant: 'destructive'
+            });
+          }
         });
 
         webrtc.onPatientJoinedLobby(() => {
@@ -363,10 +381,11 @@ export function ConsultationRoom({
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
           setIsCallStarted(true);
-          // Now initialize peer connection for patient with fresh local stream
-          if (participantRole === 'patient' && localStreamRef.current) {
+          // Now initialize peer connection for patient with local stream (or empty stream)
+          if (participantRole === 'patient') {
             console.log('[Patient Admission] Initializing peer connection with local stream');
-            webrtc.initializePeer(localStreamRef.current);
+            const streamToUse = localStreamRef.current || new MediaStream();
+            webrtc.initializePeer(streamToUse);
           }
           toast({
             title: 'Admitted to Call',
@@ -377,7 +396,13 @@ export function ConsultationRoom({
 
         console.log('[WebRTC] Calling initializePeer with local stream');
         if (participantRole === 'doctor') {
-          webrtc.initializePeer(localStreamRef.current!);
+          if (localStreamRef.current) {
+            webrtc.initializePeer(localStreamRef.current!);
+          } else {
+            console.warn('[WebRTC] Doctor has no local stream, creating empty stream');
+            const emptyStream = new MediaStream();
+            webrtc.initializePeer(emptyStream);
+          }
         } else {
           // Patient only subscribes to signals initially
           webrtc.subscribeToSignalsOnly();
