@@ -47,7 +47,7 @@ export function ChatSidebar({
           animate={{ width: 'auto', opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="w-full sm:w-80 md:w-96 flex flex-col bg-[#252542] border-l border-white/10 overflow-hidden"
+          className="w-full sm:w-80 md:w-96 h-full max-h-screen flex flex-col bg-[#252542] border-l border-white/10 overflow-hidden"
         >
           {/* Chat header */}
           <div className="flex items-center justify-between p-4 border-b border-white/10">
@@ -99,19 +99,19 @@ export function ChatSidebar({
           </ScrollArea>
 
           {/* Chat input */}
-          <div className="p-4 border-t border-white/10">
+          <div className="p-4 border-t border-white/10 flex-shrink-0 bg-[#252542]">
             <form onSubmit={(e) => { e.preventDefault(); onSendMessage(); }} className="flex gap-2">
               <Input
                 placeholder="Type a message..."
                 value={newMessage}
                 onChange={(e) => onMessageChange(e.target.value)}
-                className="flex-1 bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary"
+                className="flex-1 bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary min-h-[48px] touch-manipulation"
               />
               <Button 
                 type="submit" 
                 disabled={!newMessage.trim()} 
                 size="icon"
-                className="bg-primary hover:bg-primary/90"
+                className="bg-primary hover:bg-primary/90 min-h-[48px] min-w-[48px] touch-manipulation"
               >
                 <Send className="w-4 h-4" />
               </Button>
