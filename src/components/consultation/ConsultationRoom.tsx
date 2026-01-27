@@ -1185,7 +1185,7 @@ export function ConsultationRoom({
         )}
 
         {/* Chat sidebar */}
-        <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto`}>
+        <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
           <ChatSidebar
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
