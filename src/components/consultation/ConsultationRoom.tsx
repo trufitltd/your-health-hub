@@ -1198,7 +1198,7 @@ export function ConsultationRoom({
 
         {/* Doctor notes panel */}
         {participantRole === 'doctor' && sessionData && (
-          <div className={`${isNotesOpen ? 'absolute sm:relative' : 'hidden'} top-0 left-0 bottom-0 z-40 sm:z-auto`}>
+          <div className={`${isNotesOpen ? 'absolute sm:relative' : 'hidden'} top-0 left-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
             <DoctorNotesPanel
               isOpen={isNotesOpen}
               onClose={() => setIsNotesOpen(false)}
