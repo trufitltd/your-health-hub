@@ -128,7 +128,7 @@ export function DoctorNotesPanel({
           animate={{ width: 'auto', opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="w-full sm:w-80 md:w-96 flex flex-col bg-[#252542] border-r border-white/10 overflow-hidden"
+          className="w-full sm:w-80 md:w-96 h-full max-h-screen flex flex-col bg-[#252542] border-r border-white/10 overflow-hidden"
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-white/10">
@@ -290,11 +290,11 @@ export function DoctorNotesPanel({
           </ScrollArea>
 
           {/* Footer */}
-          <div className="p-4 border-t border-white/10 space-y-2">
+          <div className="p-4 border-t border-white/10 space-y-2 flex-shrink-0 bg-[#252542]">
             <Button
               onClick={handleSaveNotes}
               disabled={isSaving}
-              className="w-full bg-green-600 hover:bg-green-700 text-white gap-2"
+              className="w-full bg-green-600 hover:bg-green-700 text-white gap-2 min-h-[48px] touch-manipulation"
             >
               <Save className="w-4 h-4" />
               {isSaving ? 'Saving...' : 'Save Notes'}
@@ -302,7 +302,7 @@ export function DoctorNotesPanel({
             <Button
               onClick={onClose}
               variant="outline"
-              className="w-full border-slate-600 text-slate-300 hover:bg-slate-800"
+              className="w-full border-slate-600 text-slate-300 hover:bg-slate-800 min-h-[48px] touch-manipulation"
             >
               Close
             </Button>
