@@ -56,10 +56,17 @@ const Consultation = () => {
         filter: `appointment_id=eq.${appointmentId}`
       }, (payload) => {
         console.log('Consultation session updated:', payload);
-        const newStatus = (payload.new as any)?.status;
-        console.log('New status:', newStatus, 'Current role:', role);
+        let newStatus: unknown;
+        if (typeof payload === 'object' && payload !== null && 'new' in payload) {
+          const maybeNew = (payload as { new?: unknown }).new;
+          if (maybeNew && typeof maybeNew === 'object' && 'status' in maybeNew) {
+            newStatus = (maybeNew as { status?: unknown }).status;
+          }
+        }
+        const newStatusStr = typeof newStatus === 'string' ? newStatus : undefined;
+        console.log('New status:', newStatusStr, 'Current role:', role);
         
-        if (newStatus === 'ended') {
+        if (newStatusStr === 'ended') {
           console.log('Consultation ended by other participant');
           setPhase('ended');
           toast({
@@ -68,14 +75,14 @@ const Consultation = () => {
           });
           // Navigate back after a brief delay
           setTimeout(() => navigate(-1), 2000);
-        } else if (role === 'patient' && newStatus === 'active') {
+        } else if (role === 'patient' && newStatusStr === 'active') {
           console.log('Patient being admitted to consultation');
           setIsAdmitted(true);
           toast({
             title: 'Admitted',
             description: 'The doctor has admitted you to the consultation.'
           });
-        } else if (role === 'doctor' && newStatus === 'waiting') {
+        } else if (role === 'doctor' && newStatusStr === 'waiting') {
           console.log('Doctor notified that patient is waiting');
           setPatientWaiting(true);
           toast({
@@ -92,7 +99,7 @@ const Consultation = () => {
       console.log('Unsubscribing from consultation updates');
       channel.unsubscribe();
     };
-  }, [appointmentId, navigate, role]);
+  }, [appointmentId, navigate, role, participantName]);
 
   // Auto-transition waiting phase to in-call
   useEffect(() => {
