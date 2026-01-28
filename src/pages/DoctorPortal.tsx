@@ -14,6 +14,14 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { useAuth } from '@/hooks/useAuth';
 import { useAppointments } from '@/hooks/useAppointments';
 import { supabase } from '@/integrations/supabase/client';
@@ -86,6 +94,8 @@ const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [viewNotesOpen, setViewNotesOpen] = useState(false);
+  const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
 
@@ -217,7 +227,7 @@ const DoctorPortal = () => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Badge className="bg-success/10 text-success border-success/20">Completed</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
       case 'in-progress':
         return <Badge className="bg-primary/10 text-primary border-primary/20">In Progress</Badge>;
       case 'upcoming':
@@ -628,7 +638,15 @@ const DoctorPortal = () => {
                                 />
                               )}
                               {apt.status === 'completed' && (
-                                <Button size="sm" variant="outline" className="w-full sm:w-auto">
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="w-full sm:w-auto"
+                                  onClick={() => {
+                                    setSelectedAppointmentForNotes(apt);
+                                    setViewNotesOpen(true);
+                                  }}
+                                >
                                   View Notes
                                 </Button>
                               )}
@@ -976,6 +994,41 @@ const DoctorPortal = () => {
               </main>
             </div>
         </div>
+        
+        {/* View Notes Modal */}
+        <Dialog open={viewNotesOpen} onOpenChange={setViewNotesOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Consultation Notes</DialogTitle>
+              <DialogDescription>
+                Notes from consultation with {selectedAppointmentForNotes?.patient_name}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/50">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div><span className="font-medium">Patient:</span> {selectedAppointmentForNotes?.patient_name}</div>
+                  <div><span className="font-medium">Date:</span> {selectedAppointmentForNotes?.date}</div>
+                  <div><span className="font-medium">Time:</span> {selectedAppointmentForNotes?.time}</div>
+                  <div><span className="font-medium">Type:</span> {selectedAppointmentForNotes?.type}</div>
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Consultation Notes:</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[100px]">
+                  <p className="text-sm">
+                    {selectedAppointmentForNotes?.notes || 'No notes available for this consultation.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setViewNotesOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     </div>
   );
 };
