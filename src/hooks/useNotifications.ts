@@ -23,7 +23,7 @@ export function useNotifications() {
       // Get upcoming appointments for reminders
       const { data: upcomingAppointments } = await supabase
         .from('appointments')
-        .select('id, specialist_name, date, time, status, doctors(name)')
+        .select('id, specialist_name, date, time, status')
         .eq('patient_id', user.id)
         .in('status', ['confirmed', 'pending'])
         .gte('date', new Date().toISOString().split('T')[0])
@@ -38,11 +38,20 @@ export function useNotifications() {
           const hoursDiff = timeDiff / (1000 * 60 * 60);
 
           if (hoursDiff <= 24 && hoursDiff > 0) {
-            const doctorName = apt.doctors?.name || apt.specialist_name;
+            const doctorName = apt.specialist_name;
+            let timeText = '';
+            if (hoursDiff < 1) {
+              timeText = 'Less than 1 hour';
+            } else if (hoursDiff < 24) {
+              timeText = `${Math.floor(hoursDiff)} hours`;
+            } else {
+              timeText = 'Tomorrow';
+            }
+            
             notifications.push({
               id: `apt-${apt.id}`,
-              message: `Reminder: Appointment with ${doctorName} ${hoursDiff < 1 ? 'in less than an hour' : 'tomorrow'}`,
-              time: hoursDiff < 1 ? 'Less than 1 hour' : '1 day ago',
+              message: `Reminder: Appointment with ${doctorName} ${hoursDiff < 1 ? 'in less than an hour' : hoursDiff < 24 ? 'today' : 'tomorrow'}`,
+              time: timeText,
               read: false,
               type: 'appointment'
             });
@@ -73,13 +82,23 @@ export function useNotifications() {
           const createdAt = new Date(msg.created_at);
           const now = new Date();
           const timeDiff = now.getTime() - createdAt.getTime();
+          const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
           const daysDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+          
+          let timeText = '';
+          if (hoursDiff < 1) {
+            timeText = 'Just now';
+          } else if (hoursDiff < 24) {
+            timeText = `${hoursDiff} hour${hoursDiff > 1 ? 's' : ''} ago`;
+          } else {
+            timeText = `${daysDiff} day${daysDiff > 1 ? 's' : ''} ago`;
+          }
           
           notifications.push({
             id: `msg-${msg.id}`,
             message: `${msg.sender_name} sent you a message`,
-            time: daysDiff === 0 ? 'Today' : `${daysDiff} day${daysDiff > 1 ? 's' : ''} ago`,
-            read: true, // Assume read for now
+            time: timeText,
+            read: daysDiff > 0, // Mark as read if older than today
             type: 'message'
           });
         });
