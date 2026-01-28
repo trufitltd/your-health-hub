@@ -627,15 +627,28 @@ const DoctorPortal = () => {
                           </div>
                           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                             <div className="text-left sm:text-right">
-                              {apt.type === 'Video' ? (
-                                <Badge variant="outline" className="gap-1 mb-2">
-                                  <Video className="w-3 h-3" /> Video
-                                </Badge>
-                              ) : (
-                                <Badge variant="outline" className="gap-1 mb-2">
-                                  <Phone className="w-3 h-3" /> Audio
-                                </Badge>
-                              )}
+                              {(() => {
+                                const t = (apt.type || '').toString().toLowerCase();
+                                if (t.includes('video')) {
+                                  return (
+                                    <Badge variant="outline" className="gap-1 mb-2">
+                                      <Video className="w-3 h-3" /> Video
+                                    </Badge>
+                                  );
+                                }
+                                if (t.includes('chat')) {
+                                  return (
+                                    <Badge variant="outline" className="gap-1 mb-2">
+                                      <MessageSquare className="w-3 h-3" /> Chat
+                                    </Badge>
+                                  );
+                                }
+                                return (
+                                  <Badge variant="outline" className="gap-1 mb-2">
+                                    <Phone className="w-3 h-3" /> Audio
+                                  </Badge>
+                                );
+                              })()}
                               <div>{getStatusBadge(apt.status)}</div>
                             </div>
                             <div className="flex flex-col sm:flex-row gap-2">

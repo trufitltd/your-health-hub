@@ -170,7 +170,7 @@ class ConsultationService {
     });
 
     try {
-      const messageData: any = {
+      const messageData: Record<string, unknown> = {
         session_id: sessionId,
         sender_id: senderId,
         sender_role: senderRole,
@@ -181,7 +181,7 @@ class ConsultationService {
       
       // Only add file_url if provided
       if (fileUrl) {
-        messageData.file_url = fileUrl;
+        (messageData as Record<string, unknown>)["file_url"] = fileUrl;
       }
 
       // First try: insert with select
@@ -330,8 +330,13 @@ class ConsultationService {
         (payload) => {
           try {
             console.log('[ConsultationService] New message received via realtime:', payload);
-            const message = payload.new as ConsultationMessage;
-            onMessageReceived(message);
+            if (typeof payload === 'object' && payload !== null && 'new' in payload) {
+              const maybeNew = (payload as { new?: unknown }).new;
+              if (maybeNew && typeof maybeNew === 'object') {
+                const message = maybeNew as ConsultationMessage;
+                onMessageReceived(message);
+              }
+            }
           } catch (error) {
             console.error('[ConsultationService] Error processing realtime message:', error);
             if (onError) {
@@ -350,12 +355,16 @@ class ConsultationService {
         },
         (payload) => {
           try {
-            const signal = payload.new as any;
-            // Handle mock messages from webrtc_signals
-            if (signal.signal_data?.type === 'mock_message') {
-              console.log('[ConsultationService] Received mock message via webrtc_signals');
-              const message = signal.signal_data.message as ConsultationMessage;
-              onMessageReceived(message);
+            if (typeof payload === 'object' && payload !== null && 'new' in payload) {
+              const signal = (payload as { new?: unknown }).new;
+              if (signal && typeof signal === 'object') {
+                const sd = (signal as { signal_data?: unknown }).signal_data as { type?: string; message?: unknown } | undefined;
+                if (sd?.type === 'mock_message' && sd.message && typeof sd.message === 'object') {
+                  console.log('[ConsultationService] Received mock message via webrtc_signals');
+                  const message = sd.message as ConsultationMessage;
+                  onMessageReceived(message);
+                }
+              }
             }
           } catch (error) {
             console.error('[ConsultationService] Error processing mock message:', error);

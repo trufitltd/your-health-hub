@@ -24,7 +24,10 @@ export function JoinConsultationButton({
 }: JoinConsultationButtonProps) {
   const navigate = useNavigate();
 
-  const normalizedType = consultationType.toLowerCase() as 'video' | 'audio' | 'chat';
+  const normalizedRaw = consultationType.toLowerCase();
+  const isVideo = normalizedRaw.includes('video');
+  const isChat = normalizedRaw.includes('chat');
+  const isAudio = normalizedRaw.includes('audio');
   const isJoinable = !status || status === 'confirmed' || status === 'pending' || status === 'in-progress' || status === 'upcoming';
 
   const handleJoin = () => {
@@ -37,7 +40,7 @@ export function JoinConsultationButton({
       return;
     }
 
-    navigate(`/consultation/${appointmentId}?type=${normalizedType}&participant=${encodeURIComponent(participantName)}`);
+    navigate(`/consultation/${appointmentId}?type=${normalizedRaw}&participant=${encodeURIComponent(participantName)}`);
   };
 
   return (
@@ -48,14 +51,14 @@ export function JoinConsultationButton({
       disabled={!isJoinable}
       className={`gap-2 ${className}`}
     >
-      {normalizedType === 'video' ? (
+      {isVideo ? (
         <Video className="w-4 h-4" />
-      ) : normalizedType === 'chat' ? (
+      ) : isChat ? (
         <MessageSquare className="w-4 h-4" />
       ) : (
         <Phone className="w-4 h-4" />
       )}
-      Join {normalizedType === 'video' ? 'Video' : normalizedType === 'chat' ? 'Chat' : 'Audio'} Call
+      {isVideo ? 'Join Video Call' : isChat ? 'Join Chat' : 'Join Audio Call'}
     </Button>
   );
 }
