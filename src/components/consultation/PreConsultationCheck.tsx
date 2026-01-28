@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Video, Mic, Speaker, CheckCircle, XCircle, RefreshCw, AlertTriangle, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -40,28 +40,23 @@ export function PreConsultationCheck({
   const allChecksComplete = Object.values(checks).every(status => status === 'success');
   const hasErrors = Object.values(checks).some(status => status === 'error');
 
-  useEffect(() => {
-    runDeviceChecks();
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
-
-  const runDeviceChecks = async () => {
+  const runDeviceChecks = useCallback(async () => {
     setPermissionError(null);
+
+    // For chat consultations, only check connection
+    if (consultationType === 'chat') {
+      setChecks(prev => ({ ...prev, connection: 'checking' }));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      setChecks(prev => ({ ...prev, connection: 'success' }));
+      return;
+    }
 
     // Check connection (for all types)
     setChecks(prev => ({ ...prev, connection: 'checking' }));
     await new Promise(resolve => setTimeout(resolve, 800));
     setChecks(prev => ({ ...prev, connection: 'success' }));
 
-    if (consultationType === 'chat') {
-      return;
-    }
-
-    // Check camera and microphone together
+    // Check camera and microphone together (video only)
     if (consultationType === 'video') {
       setChecks(prev => ({ ...prev, camera: 'checking', microphone: 'checking' }));
       
@@ -114,18 +109,19 @@ export function PreConsultationCheck({
           videoRef.current.srcObject = stream;
         }
         setChecks(prev => ({ ...prev, camera: 'success', microphone: 'success' }));
-      } catch (error: any) {
-        console.error('Media access failed:', error);
+      } catch (err) {
+        console.error('Media access failed:', err);
         setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
         
-        if (error.name === 'NotAllowedError') {
+        const error = (err as { name?: string; message?: string } | undefined) ?? undefined;
+        if (error && error.name === 'NotAllowedError') {
           setPermissionError('Camera and microphone access denied. Please allow access in your browser settings.');
-        } else if (error.name === 'NotFoundError') {
+        } else if (error && error.name === 'NotFoundError') {
           setPermissionError('Camera or microphone not found. Please connect your devices and refresh.');
-        } else if (error.name === 'NotReadableError') {
+        } else if (error && error.name === 'NotReadableError') {
           setPermissionError('Camera or microphone is being used by another application.');
         } else {
-          setPermissionError(`Media access failed: ${error.message}`);
+          setPermissionError(`Media access failed: ${error?.message ?? 'Unknown error'}`);
         }
       }
     } else if (consultationType === 'audio') {
@@ -148,12 +144,21 @@ export function PreConsultationCheck({
       await new Promise(resolve => setTimeout(resolve, 500));
       setChecks(prev => ({ ...prev, speaker: 'success' }));
     }
-  };
+  }, [consultationType]);
+
+  useEffect(() => {
+    runDeviceChecks();
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [runDeviceChecks]);
 
   const testSpeaker = () => {
     setIsTestingAudio(true);
     // Play a test tone
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)();
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 

@@ -4,8 +4,7 @@ export interface WebRTCSignal {
   id: string;
   session_id: string;
   sender_id: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  signal_data: any;
+  signal_data: Record<string, unknown>;
   created_at: string;
 }
 
@@ -23,6 +22,9 @@ export class WebRTCService {
   private unsubscribe?: () => void;
   private processedSignals = new Set<string>();
   private candidateQueue: RTCIceCandidate[] = [];
+  private pendingRemoteDescription: RTCSessionDescriptionInit | null = null;
+  private candidateRetryCount: Map<string, number> = new Map();
+  private maxCandidateRetries = 3;
   private peerReady = false;
   private remoteStream: MediaStream | null = null;
   private streamCallbackFired = false;
@@ -35,9 +37,10 @@ export class WebRTCService {
   private maxIceRestarts = 2;
   private sessionStartedAt: Date;
   private doctorJoinedAt: Date;
-  private pendingRemoteStream: MediaStream | null = null;
   private fireStreamCallback?: () => void;
   private isConnected = false;
+  private iceRestartInProgress = false;
+  private localDescriptionSet = false;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -49,6 +52,25 @@ export class WebRTCService {
 
   async initializePeer(localStream: MediaStream) {
     console.log('Initializing WebRTC peer, isInitiator:', this.isInitiator);
+    
+    // If peer connection already exists and has a remote description,
+    // just add tracks instead of recreating connection
+    if (this.peerConnection && this.peerConnection.remoteDescription) {
+      console.log('[WebRTC] Peer connection already exists with remote description, adding tracks only');
+      this.localStream = localStream;
+      
+      console.log('Adding all tracks from stream:', localStream.getTracks().length);
+      const addTracksWithValidation = async () => {
+        for (const track of localStream.getTracks()) {
+          console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
+          this.peerConnection?.addTrack(track, localStream);
+        }
+      };
+      
+      await addTracksWithValidation();
+      return;
+    }
+    
     this.localStream = localStream;
     
     // Enhanced STUN/TURN configuration for better connectivity
@@ -56,7 +78,12 @@ export class WebRTCService {
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' }
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: 'turn:turn.example.com:3478',
+        username: 'user',
+        credential: 'password'
+      }
     ];
 
     try {
@@ -99,7 +126,8 @@ export class WebRTCService {
         
         // For video tracks, fire callback immediately - don't wait for dimensions
         if (event.track.kind === 'video') {
-          console.log('📹 Video track received, firing callback immediately');
+          console.log('📹 Video track received');
+          // Don't create video element here - let the component handle it
           this.fireStreamCallback();
         } else {
           // Audio track - fire callback immediately
@@ -213,12 +241,33 @@ export class WebRTCService {
       };
 
       this.peerConnection.onsignalingstatechange = () => {
-        console.log('Signaling state:', this.peerConnection?.signalingState);
+        const state = this.peerConnection?.signalingState;
+        console.log('Signaling state:', state);
+
+        // If we have a pending remote description (likely an answer) try to apply it
+        // when we reach the expected signaling state.
+        if (this.peerConnection && state === 'have-local-offer' && this.pendingRemoteDescription) {
+          (async () => {
+            try {
+              console.log('Attempting to apply pending remote description after signaling state change');
+              const normalized = {
+                ...this.pendingRemoteDescription!,
+                sdp: this.removeProblematicExtensions(this.pendingRemoteDescription!.sdp || '')
+              };
+              await this.peerConnection!.setRemoteDescription(new RTCSessionDescription(normalized));
+              console.log('Pending remote description applied successfully');
+              this.pendingRemoteDescription = null;
+              await this.flushCandidateQueue();
+            } catch (err) {
+              console.warn('Failed to apply pending remote description on signaling change:', err);
+            }
+          })();
+        }
       };
 
       this.peerConnection.onnegotiationneeded = async () => {
         console.log('Negotiation needed, makingOffer:', this.makingOffer);
-        if (this.makingOffer || !this.isInitiator) return;
+        if (this.makingOffer || !this.isInitiator || this.iceRestartInProgress) return;
         
         try {
           this.makingOffer = true;
@@ -486,17 +535,32 @@ export class WebRTCService {
         
         if (pc.signalingState === 'stable' && !pc.remoteDescription) {
           console.log('Setting remote description from offer');
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          
-          const answer = await pc.createAnswer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true
-          });
-          await pc.setLocalDescription(answer);
-          console.log('Answer created and set as local description');
-          
-          await this.sendSignal({ type: 'answer', answer });
-          await this.flushCandidateQueue();
+          try {
+            // Normalize the offer SDP before setting it
+            const normalizedOffer = {
+              ...offer,
+              sdp: this.removeProblematicExtensions(offer.sdp || '')
+            };
+            await pc.setRemoteDescription(new RTCSessionDescription(normalizedOffer));
+            
+            const answer = await pc.createAnswer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
+            });
+            // Normalize the answer SDP as well
+            const normalizedAnswer = {
+              ...answer,
+              sdp: this.removeProblematicExtensions(answer.sdp || '')
+            };
+            await pc.setLocalDescription(normalizedAnswer);
+            console.log('Answer created and set as local description');
+            this.localDescriptionSet = true;
+            
+            await this.sendSignal({ type: 'answer', answer: normalizedAnswer });
+            await this.flushCandidateQueue();
+          } catch (err) {
+            console.error('Error handling offer:', err);
+          }
         } else {
           console.log('Ignoring offer - signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
         }
@@ -504,32 +568,28 @@ export class WebRTCService {
       else if (signalData.type === 'answer') {
         const answer = signalData.answer as RTCSessionDescriptionInit;
         console.log('Received answer, signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
-        
+
         if (pc.signalingState === 'have-local-offer' && !pc.remoteDescription) {
           console.log('Setting remote description from answer');
           try {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            // Clean the answer SDP BEFORE trying to set it (same as offer)
+            const normalizedAnswer = {
+              ...answer,
+              sdp: this.removeProblematicExtensions(answer.sdp || '')
+            };
+            await pc.setRemoteDescription(new RTCSessionDescription(normalizedAnswer));
             console.log('Remote description set from answer');
             await this.flushCandidateQueue();
           } catch (error) {
-            console.warn('Failed to set remote description, trying with modified SDP:', error);
-            // Try to fix SDP compatibility issues
-            if (answer.sdp) {
-              const modifiedAnswer = {
-                ...answer,
-                sdp: this.removeProblematicExtensions(answer.sdp)
-              };
-              try {
-                await pc.setRemoteDescription(new RTCSessionDescription(modifiedAnswer));
-                console.log('Remote description set with modified SDP');
-                await this.flushCandidateQueue();
-              } catch (secondError) {
-                console.error('Failed to set remote description even with modified SDP:', secondError);
-              }
-            }
+            console.error('Failed to set remote description:', error);
+            // If we can't set it now, queue it for later when signaling state changes
+            this.pendingRemoteDescription = answer;
+            console.log('Queued answer to apply later when signaling state changes');
           }
         } else {
-          console.log('Ignoring answer - signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
+          // Not ready to apply the answer now - queue and wait for signaling state change
+          this.pendingRemoteDescription = answer;
+          console.log('Queuing remote answer for later application - current signalingState:', pc.signalingState);
         }
       }
       else if (signalData.type === 'ice-candidate') {
@@ -540,14 +600,18 @@ export class WebRTCService {
                       candidate.includes('typ srflx') ? 'srflx' : 
                       candidate.includes('typ relay') ? 'relay' : 'unknown';
           
-          if (pc.remoteDescription) {
+          if (pc.remoteDescription && !this.iceRestartInProgress) {
             console.log(`📥 Adding ICE candidate [${type}]:`, candidate.substring(0, 80));
             try {
               await pc.addIceCandidate(new RTCIceCandidate(candidateData));
               console.log('✅ ICE candidate added successfully');
             } catch (error) {
-              console.warn('⚠️ Failed to add ICE candidate:', error);
+              // Improve ICE candidate handling for Unknown ufrag errors
+              this.handleIceCandidateError(new RTCIceCandidate(candidateData), error);
             }
+          } else if (this.iceRestartInProgress) {
+            console.log(`📋 Queueing ICE candidate during restart [${type}]:`, candidate.substring(0, 80));
+            this.candidateQueue.push(new RTCIceCandidate(candidateData));
           } else {
             console.log(`📋 Queueing ICE candidate [${type}]:`, candidate.substring(0, 80));
             this.candidateQueue.push(new RTCIceCandidate(candidateData));
@@ -571,7 +635,7 @@ export class WebRTCService {
     
     try {
       const stats = await this.peerConnection.getStats();
-      const candidatePairs: RTCStatsReport[] = [];
+      const candidatePairs: RTCIceCandidatePairStats[] = [];
       const localCandidates: RTCStatsReport[] = [];
       const remoteCandidates: RTCStatsReport[] = [];
       
@@ -587,40 +651,103 @@ export class WebRTCService {
       
       console.log(`📊 ICE Stats: ${candidatePairs.length} pairs, ${localCandidates.length} local, ${remoteCandidates.length} remote`);
       
-      candidatePairs.forEach((pair: any) => {
-        if (pair.state === 'succeeded' || pair.state === 'in-progress') {
-          console.log(`🔗 Candidate pair [${pair.state}]: ${pair.localCandidateId} -> ${pair.remoteCandidateId}`);
-        }
+      candidatePairs.forEach((pair) => {
+        console.log('Candidate pair:', pair);
       });
     } catch (error) {
       console.warn('Failed to get ICE stats:', error);
     }
   }
 
-  private async flushCandidateQueue() {
-    if (!this.peerConnection || this.candidateQueue.length === 0) return;
-
+  private async flushCandidateQueue(): Promise<void> {
     console.log(`Flushing ${this.candidateQueue.length} queued ICE candidates`);
+    const failedCandidates: RTCIceCandidate[] = [];
+    
     while (this.candidateQueue.length > 0) {
       const candidate = this.candidateQueue.shift();
-      if (candidate) {
-        try {
-          await this.peerConnection.addIceCandidate(candidate);
-          console.log('Queued ICE candidate added successfully');
-        } catch (error) {
-          console.warn('Failed to add queued ICE candidate:', error);
+      if (!candidate) continue;
+      
+      try {
+        await this.peerConnection?.addIceCandidate(candidate);
+        console.log('✅ Queued ICE candidate added successfully');
+      } catch (err) {
+        if (err instanceof DOMException && err.message.includes('Unknown ufrag')) {
+          // Track retry count for this candidate
+          const candidateKey = `${candidate.candidate}`;
+          const retryCount = this.candidateRetryCount.get(candidateKey) || 0;
+          
+          if (retryCount < this.maxCandidateRetries) {
+            console.warn(`Queueing candidate for retry (attempt ${retryCount + 1}/${this.maxCandidateRetries})`);
+            this.candidateRetryCount.set(candidateKey, retryCount + 1);
+            failedCandidates.push(candidate);
+          } else {
+            console.warn(`Dropping candidate after ${this.maxCandidateRetries} retries - Unknown ufrag error`);
+            this.candidateRetryCount.delete(candidateKey);
+          }
+        } else {
+          console.error('Failed to add ICE candidate (non-ufrag error):', err);
+          // Don't retry non-ufrag errors
         }
       }
     }
+    
+    // Re-queue failed candidates for next attempt
+    if (failedCandidates.length > 0) {
+      this.candidateQueue.push(...failedCandidates);
+    }
+  }
+
+  // Fix handleIceCandidateError method - prevent duplicate ICE restarts
+  private async handleIceCandidateError(candidate: RTCIceCandidate, error: Error) {
+    console.warn('Failed to add ICE candidate:', error);
+    if (error.message.includes('Unknown ufrag')) {
+      // Only restart ICE once and queue the candidate
+      if (!this.iceRestartInProgress && this.iceRestartCount < this.maxIceRestarts) {
+        console.log('Restarting ICE due to Unknown ufrag error (attempt', this.iceRestartCount + 1, ')');
+        this.iceRestartInProgress = true;
+        this.iceRestartCount++;
+        this.peerConnection?.restartIce();
+        // Queue the candidate for retry
+        this.candidateQueue.push(candidate);
+        // Wait for ICE restart to complete before flushing
+        setTimeout(() => {
+          this.iceRestartInProgress = false;
+          console.log('ICE restart timeout - clearing restart flag');
+          this.flushCandidateQueue();
+        }, 3000); // Wait 3 seconds for ICE restart
+      } else if (this.iceRestartInProgress) {
+        // ICE restart in progress - queue the candidate
+        console.log('ICE restart in progress - queueing candidate');
+        this.candidateQueue.push(candidate);
+      } else {
+        // Max restarts reached - don't keep restarting
+        console.warn('Max ICE restarts reached, dropping candidate with Unknown ufrag');
+      }
+    } else {
+      console.warn('Dropping ICE candidate due to non-ufrag error:', error.message);
+    }
+  }
+
+  // Enhance SDP normalization to handle additional cases
+  private normalizeSDP(sdp: string): string {
+    console.log('Normalizing SDP...');
+    return sdp
+      .replace(/a=extmap:\d+ http:\/\/www\.webrtc\.org\/experiments\/rtp-hdrext\/abs-send-time\r\n/g, '')
+      .replace(/a=extmap:\d+ http:\/\/example\.com\/unsupported-extension\r\n/g, '');
   }
 
   private removeProblematicExtensions(sdp: string): string {
-    // Remove all RTP header extensions to avoid compatibility issues
+    // Remove RTP header extensions that cause compatibility issues
     const lines = sdp.split('\n');
     const filteredLines = lines.filter(line => {
-      // Remove all extmap lines to avoid any extension conflicts
-      if (line.startsWith('a=extmap:')) {
-        return false;
+      // Remove problematic extensions that can cause SDP mismatch errors
+      if (line.includes('a=extmap:')) {
+        // Log which extensions we're removing
+        const match = line.match(/a=extmap:\d+\s+(.+?)\s/);
+        if (match) {
+          console.log('Removing extmap:', match[1]);
+        }
+        return false; // Remove this line
       }
       return true;
     });
@@ -628,28 +755,25 @@ export class WebRTCService {
     return filteredLines.join('\n');
   }
 
-  private async createOffer() {
-    if (!this.peerConnection || this.makingOffer) return;
+  private removeUnsupportedExtensions(sdp: string): string {
+    // Remove unsupported extensions like abs-send-time
+    return sdp.replace(/a=extmap:\d+ http:\/\/www\.webrtc\.org\/experiments\/rtp-hdrext\/abs-send-time\r\n/g, '');
+  }
 
+  private async createOffer(): Promise<void> {
     try {
-      console.log('Creating offer');
-      this.makingOffer = true;
-      
-      const offer = await this.peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
-      
-      console.log('Offer created, setting as local description');
-      await this.peerConnection.setLocalDescription(offer);
-      
-      console.log('Local description set, sending offer signal');
-      await this.sendSignal({ type: 'offer', offer });
-      
-    } catch (error) {
-      console.error('Error creating offer:', error);
-    } finally {
-      this.makingOffer = false;
+      const offer = await this.peerConnection!.createOffer();
+      // Normalize the offer SDP to remove problematic extensions
+      const normalizedOffer = {
+        ...offer,
+        sdp: this.removeProblematicExtensions(offer.sdp!)
+      };
+      await this.peerConnection!.setLocalDescription(normalizedOffer);
+      console.log('Offer created and set as local description');
+      this.localDescriptionSet = true;
+      await this.sendSignal({ type: 'offer', offer: normalizedOffer });
+    } catch (err) {
+      console.error('Error creating offer:', err);
     }
   }
 
@@ -687,14 +811,6 @@ export class WebRTCService {
 
   getRemoteStream(): MediaStream | null {
     return this.remoteStream;
-  }
-
-  get pendingRemoteStream(): MediaStream | null {
-    return this.pendingRemoteStream;
-  }
-
-  set pendingRemoteStream(stream: MediaStream | null) {
-    this.pendingRemoteStream = stream;
   }
 
   getConnectionState(): string {
