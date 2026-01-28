@@ -21,6 +21,8 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import { JoinConsultationButton } from '@/components/consultation';
 import { ScheduleEditor } from '@/components/ScheduleEditor';
+import { useDoctorStats } from '@/hooks/useDoctorStats';
+import { useRecentReviews } from '@/hooks/useRecentReviews';
 
 // Dummy Doctor Data
 const doctorData = {
@@ -80,94 +82,18 @@ const patientList = [
   },
 ];
 
-const recentReviews = [
-  {
-    id: 1,
-    patient: 'Sarah J.',
-    rating: 5,
-    comment: 'Dr. Chen is amazing! Very thorough and took time to explain everything.',
-    date: '2025-12-20',
-  },
-  {
-    id: 2,
-    patient: 'Michael B.',
-    rating: 5,
-    comment: 'Excellent doctor. Highly recommend for any heart-related concerns.',
-    date: '2025-12-18',
-  },
-  {
-    id: 3,
-    patient: 'Jennifer K.',
-    rating: 4,
-    comment: 'Very professional and knowledgeable. The wait was a bit long.',
-    date: '2025-12-15',
-  },
-];
-
-const todaySchedule = [
-  {
-    id: 1,
-    patient: 'Robert Taylor',
-    time: '09:00 AM',
-    status: 'completed',
-    type: 'Video',
-  },
-  {
-    id: 2,
-    patient: 'Sarah Johnson',
-    time: '10:00 AM',
-    status: 'in-progress',
-    type: 'Video',
-  },
-  {
-    id: 3,
-    patient: 'Michael Brown',
-    time: '11:00 AM',
-    status: 'upcoming',
-    type: 'Audio',
-  },
-  {
-    id: 4,
-    patient: 'Emma Wilson',
-    time: '02:00 PM',
-    status: 'upcoming',
-    type: 'Video',
-  },
-];
-
-const appointments = [
-  ...todaySchedule.map(apt => ({
-    ...apt,
-    date: new Date().toISOString().split('T')[0],
-    patient_name: apt.patient,
-    notes: 'Regular checkup',
-  })),
-  {
-    id: 5,
-    patient_name: 'James Lee',
-    date: '2025-12-28',
-    time: '03:00 PM',
-    status: 'completed',
-    type: 'Video',
-    notes: 'Follow-up regarding medication',
-  },
-  {
-    id: 6,
-    patient_name: 'Lisa Martinez',
-    date: '2025-12-25',
-    time: '10:00 AM',
-    status: 'rejected',
-    type: 'Audio',
-    notes: 'Doctor unavailable',
-  }
-];
-
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
+
+  // Fetch doctor statistics
+  const { data: doctorStats, isLoading: statsLoading } = useDoctorStats(user?.id);
+
+  // Fetch recent reviews
+  const { data: recentReviews = [], isLoading: reviewsLoading } = useRecentReviews(user?.id);
 
   // Fetch appointments for this doctor
   const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
@@ -213,8 +139,38 @@ const DoctorPortal = () => {
     }
   };
 
-  console.log('Fetched appointments:', fetchedAppointments);
-  console.log('Fetched appointments length:', fetchedAppointments?.length || 0);
+  // Calculate today's appointments and next appointment
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  
+  const todaysAppointments = (fetchedAppointments || []).filter(apt => 
+    apt.date === today && (apt.status === 'confirmed' || apt.status === 'pending')
+  );
+  
+  // Find next appointment
+  const upcomingAppointments = (fetchedAppointments || [])
+    .filter(apt => {
+      const aptDate = new Date(`${apt.date}T${apt.time}`);
+      return aptDate > now && (apt.status === 'confirmed' || apt.status === 'pending');
+    })
+    .sort((a, b) => {
+      const dateA = new Date(`${a.date}T${a.time}`);
+      const dateB = new Date(`${b.date}T${b.time}`);
+      return dateA.getTime() - dateB.getTime();
+    });
+  
+  const nextAppointment = upcomingAppointments[0];
+  const getTimeUntilNext = () => {
+    if (!nextAppointment) return null;
+    const aptTime = new Date(`${nextAppointment.date}T${nextAppointment.time}`);
+    const diffMs = aptTime.getTime() - now.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    
+    if (diffMins < 60) return `${diffMins} min`;
+    const hours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  };
 
   // Filter pending requests for the current doctor
   const pendingRequests = (fetchedAppointments || []).filter(apt => {
@@ -230,39 +186,15 @@ const DoctorPortal = () => {
     priority: 'normal',
   }));
   
-  // If no pending requests, create some test data
-  if (pendingRequests.length === 0) {
-    pendingRequests.push(
-      {
-        id: 'test-1',
-        patient: 'Test Patient 1',
-        age: '30',
-        requestedDate: '2026-01-10',
-        requestedTime: '10:00 AM',
-        reason: 'General consultation',
-        priority: 'normal',
-      },
-      {
-        id: 'test-2', 
-        patient: 'Test Patient 2',
-        age: '45',
-        requestedDate: '2026-01-11',
-        requestedTime: '2:00 PM',
-        reason: 'Follow-up appointment',
-        priority: 'high',
-      }
-    );
-  }
-  
   console.log('Final pending requests:', pendingRequests);
 
   // Move stats calculation after pendingRequests
   const stats = {
-    totalPatients: 156,
-    consultationsThisMonth: 48,
+    totalPatients: doctorStats?.totalPatients || 0,
+    consultationsThisMonth: doctorStats?.consultationsThisMonth || 0,
     pendingRequests: pendingRequests.length,
-    earnings: 12450,
-    rating: 4.9,
+    earnings: 12450, // Keep static for now as we don't have earnings data
+    rating: doctorStats?.rating || 0,
   };
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
@@ -335,7 +267,7 @@ const DoctorPortal = () => {
                 />
               </div>
 
-              <Button variant="ghost" size="icon" className="relative">
+              <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('requests')}>
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
                   {stats.pendingRequests}
@@ -436,13 +368,22 @@ const DoctorPortal = () => {
                     Welcome back, Dr {displayName.split(' ')[0]}! 👋
                   </h1>
                   <p className="text-xs sm:text-sm text-primary-foreground/80">
-                    You have {todaySchedule.filter(s => s.status === 'upcoming').length} consultations scheduled today.
+                    You have {todaysAppointments.length} consultations scheduled today.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="text-right">
-                    <p className="text-sm text-primary-foreground/80">Next appointment in</p>
-                    <p className="text-2xl font-bold">25 min</p>
+                    {nextAppointment ? (
+                      <>
+                        <p className="text-sm text-primary-foreground/80">Next appointment in</p>
+                        <p className="text-2xl font-bold">{getTimeUntilNext()}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-primary-foreground/80">No upcoming</p>
+                        <p className="text-2xl font-bold">appointments</p>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -451,10 +392,10 @@ const DoctorPortal = () => {
             {/* Quick Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               {[
-                { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: 'This Month', value: stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
+                { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
+                { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
                 { label: 'Pending', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
-                { label: 'Rating', value: stats.rating, icon: Star, color: 'bg-accent/10 text-accent' },
+                { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
               ].map((stat, index) => (
                 <motion.div
                   key={stat.label}
@@ -498,23 +439,30 @@ const DoctorPortal = () => {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
-                        {todaySchedule.slice(0, 4).map((apt) => (
-                          <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${apt.status === 'in-progress' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
-                            }`}>
-                            <div className="flex items-center gap-3">
-                              <Avatar className="w-10 h-10">
-                                <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                                  {apt.patient.split(' ').map(n => n[0]).join('')}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div>
-                                <p className="font-medium text-sm">{apt.patient}</p>
-                                <p className="text-xs text-muted-foreground">{apt.time}</p>
-                              </div>
-                            </div>
-                            {getStatusBadge(apt.status)}
+                        {todaysAppointments.length === 0 ? (
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">No appointments scheduled for today</p>
                           </div>
-                        ))}
+                        ) : (
+                          todaysAppointments.slice(0, 4).map((apt) => (
+                            <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${
+                              apt.status === 'confirmed' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
+                            }`}>
+                              <div className="flex items-center gap-3">
+                                <Avatar className="w-10 h-10">
+                                  <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                                    {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div>
+                                  <p className="font-medium text-sm">{apt.patient_name || 'Unknown Patient'}</p>
+                                  <p className="text-xs text-muted-foreground">{apt.time}</p>
+                                </div>
+                              </div>
+                              {getStatusBadge(apt.status)}
+                            </div>
+                          ))
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -529,25 +477,31 @@ const DoctorPortal = () => {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
-                        {pendingRequests.map((request) => (
-                          <div key={request.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="font-medium text-sm">{request.patient}</p>
-                                {getPriorityBadge(request.priority)}
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
-                            </div>
-                            <div className="flex gap-2">
-                              <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
-                                <XCircle className="w-4 h-4" />
-                              </Button>
-                              <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
-                                <CheckCircle className="w-4 h-4" />
-                              </Button>
-                            </div>
+                        {pendingRequests.length === 0 ? (
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">No pending requests</p>
                           </div>
-                        ))}
+                        ) : (
+                          pendingRequests.map((request) => (
+                            <div key={request.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium text-sm">{request.patient}</p>
+                                  {getPriorityBadge(request.priority)}
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
+                                  <XCircle className="w-4 h-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
+                                  <CheckCircle className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -562,33 +516,43 @@ const DoctorPortal = () => {
                     </div>
                     <div className="flex items-center gap-2">
                       <Star className="w-5 h-5 text-warning fill-warning" />
-                      <span className="font-bold">{doctorData.rating}</span>
-                      <span className="text-muted-foreground text-sm">({doctorData.totalReviews} reviews)</span>
+                      <span className="font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
+                      <span className="text-muted-foreground text-sm">({recentReviews.length} reviews)</span>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid md:grid-cols-3 gap-4">
-                      {recentReviews.map((review) => (
-                        <div key={review.id} className="p-4 rounded-xl bg-muted/50">
-                          <div className="flex items-center gap-1 mb-2">
-                            {[...Array(5)].map((_, i) => (
-                              <Star
-                                key={i}
-                                className={`w-4 h-4 ${i < review.rating
-                                  ? 'text-warning fill-warning'
-                                  : 'text-muted'
-                                  }`}
-                              />
-                            ))}
+                    {reviewsLoading ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">Loading reviews...</p>
+                      </div>
+                    ) : recentReviews.length === 0 ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">No reviews yet</p>
+                      </div>
+                    ) : (
+                      <div className="grid md:grid-cols-3 gap-4">
+                        {recentReviews.map((review) => (
+                          <div key={review.id} className="p-4 rounded-xl bg-muted/50">
+                            <div className="flex items-center gap-1 mb-2">
+                              {[...Array(5)].map((_, i) => (
+                                <Star
+                                  key={i}
+                                  className={`w-4 h-4 ${i < review.rating
+                                    ? 'text-warning fill-warning'
+                                    : 'text-muted'
+                                    }`}
+                                />
+                              ))}
+                            </div>
+                            <p className="text-sm mb-2">"{review.comment}"</p>
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>{review.patient}</span>
+                              <span>{new Date(review.date).toLocaleDateString()}</span>
+                            </div>
                           </div>
-                          <p className="text-sm mb-2">"{review.comment}"</p>
-                          <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>{review.patient}</span>
-                            <span>{new Date(review.date).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -668,6 +632,20 @@ const DoctorPortal = () => {
                                   View Notes
                                 </Button>
                               )}
+                              {apt.status === 'completed' && (apt as any).rating && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground mr-1">Rated:</span>
+                                  {[...Array(5)].map((_, i) => (
+                                    <Star
+                                      key={i}
+                                      className={`w-3 h-3 ${i < (apt as any).rating
+                                        ? 'text-warning fill-warning'
+                                        : 'text-muted'
+                                        }`}
+                                    />
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -685,43 +663,51 @@ const DoctorPortal = () => {
                     <CardDescription>Pending approval from patients</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      {pendingRequests.map((request) => (
-                        <div key={request.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border">
-                          <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                            <Avatar className="w-12 h-12">
-                              <AvatarFallback className="bg-primary/10 text-primary">
-                                {request.patient.split(' ').map(n => n[0]).join('')}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="font-semibold">{request.patient}</p>
-                                {getPriorityBadge(request.priority)}
+                    {pendingRequests.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                        <p className="text-muted-foreground">No pending appointment requests</p>
+                        <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {pendingRequests.map((request) => (
+                          <div key={request.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border">
+                            <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                              <Avatar className="w-12 h-12">
+                                <AvatarFallback className="bg-primary/10 text-primary">
+                                  {request.patient.split(' ').map(n => n[0]).join('')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-semibold">{request.patient}</p>
+                                  {getPriorityBadge(request.priority)}
+                                </div>
+                                <p className="text-sm text-muted-foreground">{request.age} years old</p>
+                                <p className="text-sm text-muted-foreground">{request.reason}</p>
                               </div>
-                              <p className="text-sm text-muted-foreground">{request.age} years old</p>
-                              <p className="text-sm text-muted-foreground">{request.reason}</p>
+                            </div>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                              <div className="text-left sm:text-right">
+                                <p className="text-sm font-medium">
+                                  {new Date(request.requestedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                                </p>
+                                <p className="text-sm text-muted-foreground">{request.requestedTime}</p>
+                              </div>
+                              <div className="flex flex-col gap-2 w-full sm:w-auto">
+                                <Button size="sm" className="bg-success hover:bg-success/90 w-full" onClick={() => handleAcceptRequest(request.id)}>
+                                  Accept
+                                </Button>
+                                <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 w-full" onClick={() => handleDeclineRequest(request.id)}>
+                                  Decline
+                                </Button>
+                              </div>
                             </div>
                           </div>
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                            <div className="text-left sm:text-right">
-                              <p className="text-sm font-medium">
-                                {new Date(request.requestedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                              </p>
-                              <p className="text-sm text-muted-foreground">{request.requestedTime}</p>
-                            </div>
-                            <div className="flex flex-col gap-2 w-full sm:w-auto">
-                              <Button size="sm" className="bg-success hover:bg-success/90 w-full" onClick={() => handleAcceptRequest(request.id)}>
-                                Accept
-                              </Button>
-                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 w-full" onClick={() => handleDeclineRequest(request.id)}>
-                                Decline
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
