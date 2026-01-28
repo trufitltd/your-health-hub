@@ -430,7 +430,9 @@ export function ConsultationRoom({
           }
           toast({
             title: 'Admitted to Call',
-            description: consultationType === 'chat' ? 'The patient is being admitted to the chat.' : 'The patient is being admitted to the call.',
+            description: consultationType === 'chat' 
+              ? 'The doctor has admitted you to the consultation.' 
+              : 'The doctor has admitted you to the consultation.',
             duration: 3000,
           });
         });
@@ -672,6 +674,18 @@ export function ConsultationRoom({
     console.log('[Cleanup] Ending call and cleaning up...');
     isCleaningUpRef.current = true;
     
+    // End the consultation session if we have session data
+    if (sessionData && callDuration > 0) {
+      try {
+        console.log('[Session] Ending consultation session:', sessionData.id);
+        await consultationService.endSession(sessionData.id, callDuration);
+        console.log('[Session] Consultation session ended successfully');
+      } catch (err) {
+        console.error('[Session] Error ending consultation session:', err);
+        // Don't block cleanup if session ending fails
+      }
+    }
+    
     if (webrtcService) {
       webrtcService.destroy();
     }
@@ -698,7 +712,7 @@ export function ConsultationRoom({
     }
 
     onEndCall();
-  }, [webrtcService, onEndCall]);
+  }, [webrtcService, onEndCall, sessionData, callDuration]);
 
   const handleAdmitPatient = async () => {
     try {
@@ -718,7 +732,9 @@ export function ConsultationRoom({
       
       toast({
         title: 'Patient Admitted',
-        description: 'Patient is being connected to the call.',
+        description: consultationType === 'chat' 
+          ? 'Patient is being connected to the chat.' 
+          : 'Patient is being connected to the call.',
         duration: 3000,
       });
       
