@@ -134,10 +134,10 @@ export function ControlBar({
                   className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
                   onClick={onEndCall}
                 >
-                  <PhoneOff className="w-5 h-5" />
+                  {consultationType === 'chat' ? <MessageSquare className="w-5 h-5" /> : <PhoneOff className="w-5 h-5" />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>End Call</TooltipContent>
+              <TooltipContent>{consultationType === 'chat' ? 'End Chat' : 'End Call'}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>

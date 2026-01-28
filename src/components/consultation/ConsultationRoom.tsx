@@ -87,6 +87,7 @@ export function ConsultationRoom({
   const sessionInitializedRef = useRef(false);
   const messageSubscriptionRef = useRef<(() => void) | null>(null);
   const isCleaningUpRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -103,114 +104,16 @@ export function ConsultationRoom({
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // Initialize consultation session
+  // Set up mount flag on component mount/unmount
   useEffect(() => {
-    let isMounted = true;
-    
-    const initializeSession = async () => {
-      if (!user || !appointmentId || sessionInitializedRef.current) {
-        return;
-      }
-
-      try {
-        console.log('[Init] Starting consultation room initialization');
-        
-        // Create or get session
-        let session = await consultationService.getSessionByAppointmentId(appointmentId);
-        
-        if (!session) {
-          console.log('[Session] No existing session, creating new one');
-          
-          const { data: appointmentData } = await supabase
-            .from('appointments')
-            .select('patient_id, doctor_id')
-            .eq('id', appointmentId)
-            .single();
-
-          if (!appointmentData) {
-            throw new Error('Appointment not found');
-          }
-
-          session = await consultationService.createSession(
-            appointmentId,
-            appointmentData.patient_id,
-            appointmentData.doctor_id,
-            consultationType
-          );
-          console.log('[Session] Created new consultation session:', session.id);
-        } else {
-          console.log('[Session] Using existing session:', session.id);
-        }
-
-        if (!isMounted) return;
-        
-        setSessionData({ id: session.id, created_at: session.created_at });
-        setSessionId(session.id);
-        setPatientId(session.patient_id);
-        sessionInitializedRef.current = true;
-
-        // Initialize media immediately for both roles
-        console.log('[Media] Initializing media for', participantRole);
-        await initializeMedia();
-
-        if (participantRole === 'doctor') {
-          setShouldInitializeWebRTC(true);
-          setIsCallStarted(true);
-          setWaitingForPatient(true);
-        } else {
-          // Patient initializes WebRTC to receive admit signals
-          setShouldInitializeWebRTC(true);
-        }
-
-        // Load existing messages
-        const existingMessages = await consultationService.getMessages(session.id);
-        console.log('[Init] Loaded', existingMessages.length, 'messages');
-        
-        setMessages(existingMessages.map(msg => ({
-          id: msg.id,
-          sender: msg.sender_id === user?.id ? 'user' : 'remote',
-          senderName: msg.sender_name,
-          content: msg.content,
-          timestamp: new Date(msg.created_at),
-          type: msg.message_type as 'text' | 'file'
-        })));
-
-        // Subscribe to new messages - keep subscription alive for entire session
-        const unsubscribe = consultationService.subscribeToMessages(
-          session.id,
-          (dbMessage) => {
-            if (isMounted && dbMessage.sender_id !== user?.id) {
-              setMessages(prev => [...prev, {
-                id: dbMessage.id,
-                sender: 'remote',
-                senderName: dbMessage.sender_name,
-                content: dbMessage.content,
-                timestamp: new Date(dbMessage.created_at),
-                type: dbMessage.message_type as 'text' | 'file'
-              }]);
-            }
-          }
-        );
-        
-        messageSubscriptionRef.current = unsubscribe;
-        setIsLoading(false);
-
-      } catch (err) {
-        console.error('Error initializing session:', err);
-        setError(err instanceof Error ? err.message : 'Failed to initialize consultation');
-        setIsLoading(false);
-      }
-    };
-
-    initializeSession();
-
+    isMountedRef.current = true;
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
     };
-  }, [user, appointmentId, participantRole, consultationType]);
+  }, []);
 
-  // Initialize media stream
-  const initializeMedia = async () => {
+  // Initialize media stream (must be defined before it's used in other effects)
+  const initializeMedia = useCallback(async () => {
     try {
       const constraints: MediaStreamConstraints = {
         video: consultationType === 'video' ? {
@@ -265,7 +168,142 @@ export function ConsultationRoom({
         variant: 'destructive'
       });
     }
-  };
+  }, [consultationType, participantRole, isAdmitted]);
+
+  // Initialize consultation session
+  useEffect(() => {
+    const initializeSession = async () => {
+      if (!user || !appointmentId || sessionInitializedRef.current) {
+        return;
+      }
+
+      try {
+        console.log('[Init] Starting consultation room initialization');
+        
+        // Create or get session
+        let session = await consultationService.getSessionByAppointmentId(appointmentId);
+        
+        if (!session) {
+          console.log('[Session] No existing session, creating new one');
+          
+          const { data: appointmentData } = await supabase
+            .from('appointments')
+            .select('patient_id, doctor_id')
+            .eq('id', appointmentId)
+            .single();
+
+          if (!appointmentData) {
+            throw new Error('Appointment not found');
+          }
+
+          session = await consultationService.createSession(
+            appointmentId,
+            appointmentData.patient_id,
+            appointmentData.doctor_id,
+            consultationType
+          );
+          console.log('[Session] Created new consultation session:', session.id);
+        } else {
+          console.log('[Session] Using existing session:', session.id);
+        }
+
+        if (!isMountedRef.current) return;
+        
+        setSessionData({ id: session.id, created_at: session.created_at });
+        setSessionId(session.id);
+        setPatientId(session.patient_id);
+        sessionInitializedRef.current = true;
+
+        // Initialize media only for video/audio consultations (skip for chat)
+        if (consultationType !== 'chat') {
+          console.log('[Media] Initializing media for', participantRole);
+          await initializeMedia();
+        } else {
+          console.log('[Media] Chat consultation - skipping media initialization');
+          setIsMediaReady(true);
+          // For chat, set connection status to connected immediately (no WebRTC peer needed)
+          setConnectionStatus('connected');
+        }
+
+        if (participantRole === 'doctor') {
+          setShouldInitializeWebRTC(true);
+          setIsCallStarted(true);
+          setWaitingForPatient(true);
+        } else {
+          // Patient initializes WebRTC to receive admit signals
+          setShouldInitializeWebRTC(true);
+        }
+
+        // Load existing messages
+        const existingMessages = await consultationService.getMessages(session.id);
+        console.log('[Init] Loaded', existingMessages.length, 'messages');
+        
+        if (isMountedRef.current) {
+          setMessages(existingMessages.map(msg => ({
+            id: msg.id,
+            sender: msg.sender_id === user?.id ? 'user' : 'remote',
+            senderName: msg.sender_name,
+            content: msg.content,
+            timestamp: new Date(msg.created_at),
+            type: msg.message_type as 'text' | 'file'
+          })));
+        }
+
+        // Subscribe to new messages - keep subscription alive for entire session
+        const unsubscribe = consultationService.subscribeToMessages(
+          session.id,
+          (dbMessage) => {
+            console.log('[Message Handler] Received message:', {
+              messageId: dbMessage.id,
+              senderId: dbMessage.sender_id,
+              currentUserId: user?.id,
+              isSelf: dbMessage.sender_id === user?.id,
+              sender: dbMessage.sender_name
+            });
+            if (isMountedRef.current && dbMessage.sender_id !== user?.id) {
+              console.log('[Message Handler] Adding message to UI from:', dbMessage.sender_name);
+              setMessages(prev => [...prev, {
+                id: dbMessage.id,
+                sender: 'remote',
+                senderName: dbMessage.sender_name,
+                content: dbMessage.content,
+                timestamp: new Date(dbMessage.created_at),
+                type: dbMessage.message_type as 'text' | 'file'
+              }]);
+            } else if (dbMessage.sender_id === user?.id) {
+              console.log('[Message Handler] Skipping own message (expected)');
+            } else {
+              console.log('[Message Handler] Skipped - not mounted');
+            }
+          }
+        );
+        
+        messageSubscriptionRef.current = unsubscribe;
+        setIsLoading(false);
+
+      } catch (err) {
+        console.error('Error initializing session:', err);
+        if (isMountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Failed to initialize consultation');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    initializeSession();
+  }, [user, appointmentId, participantRole, consultationType, initializeMedia]);
+
+  // Manage message subscription cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      // Only cleanup on actual component unmount, not on state changes
+      if (messageSubscriptionRef.current) {
+        console.log('[Cleanup] Unsubscribing from messages on component unmount');
+        messageSubscriptionRef.current();
+        messageSubscriptionRef.current = null;
+      }
+    };
+  }, []);
 
   // Attach local stream to video elements
   useEffect(() => {
@@ -294,7 +332,10 @@ export function ConsultationRoom({
 
   // Initialize WebRTC when conditions are met
   useEffect(() => {
-    if (!sessionData || !user || !localStreamRef.current || !shouldInitializeWebRTC) return;
+    // For chat consultations, initialize even without local stream
+    // For video/audio, require local stream
+    const hasMediaStreamOrIsChat = localStreamRef.current || consultationType === 'chat';
+    if (!sessionData || !user || !hasMediaStreamOrIsChat || !shouldInitializeWebRTC) return;
     if (webrtcInitializedRef.current) return;
 
     // Both initialize WebRTC but patient doesn't start peer connection until admitted
@@ -381,15 +422,15 @@ export function ConsultationRoom({
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
           setIsCallStarted(true);
-          // Now initialize peer connection for patient with local stream (or empty stream)
+          // For patient, add local stream tracks if peer connection exists
           if (participantRole === 'patient') {
-            console.log('[Patient Admission] Initializing peer connection with local stream');
+            console.log('[Patient Admission] Adding patient stream to peer connection');
             const streamToUse = localStreamRef.current || new MediaStream();
             webrtc.initializePeer(streamToUse);
           }
           toast({
             title: 'Admitted to Call',
-            description: 'The doctor has admitted you to the consultation.',
+            description: consultationType === 'chat' ? 'The patient is being admitted to the chat.' : 'The patient is being admitted to the call.',
             duration: 3000,
           });
         });
@@ -416,8 +457,14 @@ export function ConsultationRoom({
           await webrtc.sendJoinLobby();
         }
         
-        console.log('[WebRTC] Initialization complete, setting connecting status');
-        setConnectionStatus('connecting');
+        console.log('[WebRTC] Initialization complete');
+        // For chat consultations, set status to connected immediately (no peer connection needed)
+        // For video/audio, set to connecting and wait for peer connection
+        if (consultationType === 'chat') {
+          setConnectionStatus('connected');
+        } else {
+          setConnectionStatus('connecting');
+        }
 
       } catch (err) {
         console.error('[WebRTC] Initialization error:', err);
@@ -430,7 +477,7 @@ export function ConsultationRoom({
     };
 
     initializeWebRTC();
-  }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole]);
+  }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole, connectionStatus]);
 
   // Monitor remote stream for video track changes
   useEffect(() => {
@@ -454,37 +501,66 @@ export function ConsultationRoom({
   useEffect(() => {
     if (hasRemoteStream && webrtcService && remoteVideoRef.current) {
       const remoteStream = webrtcService.getRemoteStream();
-      if (remoteStream && remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
-        console.log('[Video Attachment] Attaching remote stream to video element');
-        remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play().then(() => {
-          console.log('[Video Play] Remote video started playing successfully');
-          // Check video element properties
-          const video = remoteVideoRef.current!;
-          console.log('[Video Debug] Video properties:', {
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            readyState: video.readyState,
-            paused: video.paused,
-            muted: video.muted,
-            volume: video.volume
-          });
-          // Check stream properties
-          const stream = video.srcObject as MediaStream;
-          if (stream) {
-            console.log('[Video Debug] Stream properties:', {
-              active: stream.active,
-              videoTracks: stream.getVideoTracks().map(t => ({
-                kind: t.kind,
-                enabled: t.enabled,
-                readyState: t.readyState,
-                muted: t.muted
-              }))
+      if (remoteStream && remoteStream.getTracks().length > 0 && remoteVideoRef.current) {
+        // Always ensure stream is attached
+        if (!remoteVideoRef.current.srcObject) {
+          console.log('[Video Attachment] Attaching remote stream to video element');
+          remoteVideoRef.current.srcObject = remoteStream;
+        }
+        
+        // Unmute remote video element to allow rendering
+        remoteVideoRef.current.muted = false;
+        
+        // Force play with proper error handling
+        const playPromise = remoteVideoRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.then(() => {
+            console.log('[Video Play] Remote video started playing successfully');
+            // Verify video and audio tracks are enabled and unmuted
+            const videoTracks = remoteStream.getVideoTracks();
+            const audioTracks = remoteStream.getAudioTracks();
+            
+            videoTracks.forEach(track => {
+              if (!track.enabled) {
+                console.warn('[Video Track] Video track disabled, enabling...');
+                track.enabled = true;
+              }
             });
-          }
-        }).catch(error => {
-          console.error('[Video Play] Failed to play remote video:', error);
-        });
+            
+            audioTracks.forEach(track => {
+              if (!track.enabled) {
+                console.warn('[Audio Track] Audio track disabled, enabling...');
+                track.enabled = true;
+              }
+            });
+            
+            // Check video element properties
+            const video = remoteVideoRef.current!;
+            console.log('[Video Debug] Video properties:', {
+              videoWidth: video.videoWidth,
+              videoHeight: video.videoHeight,
+              readyState: video.readyState,
+              paused: video.paused,
+              muted: video.muted,
+              volume: video.volume
+            });
+            // Check stream properties
+            const stream = video.srcObject as MediaStream;
+            if (stream) {
+              console.log('[Video Debug] Stream properties:', {
+                active: stream.active,
+                videoTracks: stream.getVideoTracks().map(t => ({
+                  kind: t.kind,
+                  enabled: t.enabled,
+                  readyState: t.readyState,
+                  muted: t.muted
+                }))
+              });
+            }
+          }).catch(error => {
+            console.error('[Video Play] Failed to play remote video:', error);
+          });
+        }
       }
     }
   }, [hasRemoteStream, webrtcService]);
@@ -935,7 +1011,7 @@ export function ConsultationRoom({
                     className="w-full bg-green-600 hover:bg-green-700 text-white gap-2"
                   >
                     <User className="w-4 h-4" />
-                    Admit to Call
+                    {consultationType === 'chat' ? 'Admit to Chat' : 'Admit to Call'}
                   </Button>
                   <Button
                     onClick={() => setIsPatientWaiting(false)}
@@ -960,16 +1036,24 @@ export function ConsultationRoom({
                     ref={remoteVideoRef}
                     autoPlay
                     playsInline
-                    muted={false}
                     controls={false}
-                    className={`w-full h-full object-cover ${
-                      hasRemoteStream && remoteVideoEnabled ? 'block' : 'hidden'
-                    }`}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      backgroundColor: '#252542'
+                    }}
+                    className={hasRemoteStream ? 'block' : 'hidden'}
                     onLoadedMetadata={() => {
                       console.log('[Remote Video] Video metadata loaded');
                       if (remoteVideoRef.current) {
                         const video = remoteVideoRef.current;
                         console.log('[Remote Video] Metadata dimensions:', video.videoWidth, 'x', video.videoHeight);
+                        // Force play if not playing
+                        if (video.paused) {
+                          console.log('[Remote Video] Video is paused, attempting to play');
+                          video.play().catch(e => console.warn('[Remote Video] Play failed:', e));
+                        }
                         if (video.videoWidth > 0 && video.videoHeight > 0) {
                           console.log('[Remote Video] ✅ Video has valid dimensions from metadata');
                         }
@@ -982,22 +1066,45 @@ export function ConsultationRoom({
                         if (remoteVideoRef.current) {
                           const video = remoteVideoRef.current;
                           console.log('[Video Check] Final dimensions:', video.videoWidth, 'x', video.videoHeight);
-                          if (video.videoWidth === 0 || video.videoHeight === 0) {
-                            console.warn('[Video Issue] Remote video has no dimensions - checking stream tracks');
-                            const stream = video.srcObject as MediaStream;
-                            if (stream) {
-                              const videoTracks = stream.getVideoTracks();
-                              videoTracks.forEach((track, index) => {
-                                const settings = track.getSettings();
-                                console.log(`[Video Track ${index}] Settings:`, {
-                                  width: settings.width,
-                                  height: settings.height,
-                                  enabled: track.enabled,
-                                  readyState: track.readyState,
-                                  muted: track.muted
-                                });
+                          console.log('[Video Debug] Video element:', {
+                            paused: video.paused,
+                            ended: video.ended,
+                            readyState: video.readyState,
+                            networkState: video.networkState
+                          });
+                          
+                          const stream = video.srcObject as MediaStream;
+                          if (stream) {
+                            const videoTracks = stream.getVideoTracks();
+                            console.log('[Video Issue] Video track count:', videoTracks.length);
+                            
+                            // Ensure all video tracks are enabled
+                            videoTracks.forEach((track, index) => {
+                              const settings = track.getSettings();
+                              console.log(`[Video Track ${index}] Settings:`, {
+                                width: settings.width,
+                                height: settings.height,
+                                enabled: track.enabled,
+                                readyState: track.readyState,
+                                muted: track.muted
                               });
+                              
+                              // Force enable track if disabled
+                              if (!track.enabled) {
+                                console.warn(`[Video Track ${index}] Track disabled, enabling...`);
+                                track.enabled = true;
+                              }
+                            });
+                            
+                            // If dimensions still 0x0 after delay, it might be a rendering issue
+                            if (video.videoWidth === 0 && video.videoHeight === 0 && videoTracks.length > 0) {
+                              console.warn('[Video Issue] Video tracks present but no dimensions, forcing display');
+                              // Force ensure element is visible and properly displayed
+                              video.style.opacity = '1';
+                              video.style.visibility = 'visible';
                             }
+                          } else {
+                            console.warn('[Video Issue] No stream attached to video element');
                           }
                         }
                       }, 1000);
@@ -1007,7 +1114,6 @@ export function ConsultationRoom({
                   
                   {/* Show fallback content when no remote video */}
                   {!(hasRemoteStream && remoteVideoEnabled) && (
-                    /* Show local video when waiting or no remote video */
                     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
                       {connectionStatus === 'connected' && !remoteVideoEnabled ? (
                         // Connected but remote video is off - show avatar
