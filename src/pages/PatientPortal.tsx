@@ -31,7 +31,10 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ReviewModal } from '@/components/ReviewModal';
 import { MessagesTab } from '@/components/patient-portal/MessagesTab';
+import { useRecentConsultations } from '@/hooks/useRecentConsultations';
+import { useNotifications } from '@/hooks/useNotifications';
 
 // Dummy Patient Data
 const patientData = {
@@ -77,36 +80,6 @@ const upcomingAppointments = [
   },
 ];
 
-const pastConsultations = [
-  {
-    id: 1,
-    doctor: 'Dr. James Wilson',
-    specialty: 'General Medicine',
-    date: '2025-12-20',
-    diagnosis: 'Seasonal Flu',
-    prescription: true,
-    rating: 5,
-  },
-  {
-    id: 2,
-    doctor: 'Dr. Emily Chen',
-    specialty: 'Cardiologist',
-    date: '2025-12-05',
-    diagnosis: 'Routine Checkup',
-    prescription: false,
-    rating: 4,
-  },
-  {
-    id: 3,
-    doctor: 'Dr. Sarah Martinez',
-    specialty: 'Nutritionist',
-    date: '2025-11-28',
-    diagnosis: 'Diet Plan Review',
-    prescription: false,
-    rating: 5,
-  },
-];
-
 const prescriptions = [
   {
     id: 1,
@@ -137,23 +110,13 @@ const prescriptions = [
   },
 ];
 
-const healthMetrics = [
-  { label: 'Blood Pressure', value: '120/80', unit: 'mmHg', trend: 'stable', icon: Heart },
-  { label: 'Heart Rate', value: '72', unit: 'bpm', trend: 'stable', icon: Activity },
-  { label: 'Weight', value: '65', unit: 'kg', trend: 'down', icon: User },
-];
-
-const notifications = [
-  { id: 1, message: 'Reminder: Appointment with Dr. Emily Chen tomorrow', time: '2 hours ago', read: false },
-  { id: 2, message: 'Your prescription for Vitamin D3 is ready for pickup', time: '1 day ago', read: false },
-  { id: 3, message: 'Dr. James Wilson sent you a message', time: '2 days ago', read: true },
-];
-
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, signOut } = useAuth();
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
+  const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
+  const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -211,6 +174,8 @@ const PatientPortal = () => {
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
 
   // Handle external booking requests
   useEffect(() => {
@@ -401,7 +366,7 @@ const PatientPortal = () => {
       case 'pending':
         return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
       case 'completed':
-        return <Badge variant="secondary">Completed</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
       case 'cancelled':
         return <Badge variant="destructive">Cancelled</Badge>;
       case 'rejected':
@@ -435,11 +400,13 @@ const PatientPortal = () => {
                 />
               </div>
 
-              <Button variant="ghost" size="icon" className="relative">
+              <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                  2
-                </span>
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
+                    {notifications.filter(n => !n.read).length}
+                  </span>
+                )}
               </Button>
 
               <button 
@@ -616,34 +583,6 @@ const PatientPortal = () => {
               </DialogContent>
             </Dialog>
 
-            {/* Quick Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {healthMetrics.map((metric, index) => (
-                <motion.div
-                  key={metric.label}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                >
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">{metric.label}</p>
-                          <p className="text-2xl font-bold mt-1">
-                            {metric.value} <span className="text-sm font-normal text-muted-foreground">{metric.unit}</span>
-                          </p>
-                        </div>
-                        <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                          <metric.icon className="w-6 h-6 text-primary" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
-            </div>
-
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
@@ -746,30 +685,44 @@ const PatientPortal = () => {
                       <CardTitle className="text-lg">Recent Consultations</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="space-y-4">
-                        {pastConsultations.slice(0, 2).map((consultation) => (
-                          <div key={consultation.id} className="flex items-start justify-between">
-                            <div>
-                              <p className="font-medium text-sm">{consultation.doctor}</p>
-                              <p className="text-xs text-muted-foreground">{consultation.diagnosis}</p>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {new Date(consultation.date).toLocaleDateString()}
-                              </p>
+                      {consultationsLoading ? (
+                        <div className="text-center py-4">
+                          <p className="text-muted-foreground text-sm">Loading consultations...</p>
+                        </div>
+                      ) : recentConsultations.length === 0 ? (
+                        <div className="text-center py-4">
+                          <p className="text-muted-foreground text-sm">No recent consultations</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {recentConsultations.slice(0, 2).map((consultation) => (
+                            <div key={consultation.id} className="flex items-start justify-between">
+                              <div>
+                                <p className="font-medium text-sm">{consultation.doctor_name}</p>
+                                <p className="text-xs text-muted-foreground">{consultation.diagnosis}</p>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {new Date(consultation.date).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {consultation.rating ? (
+                                  [...Array(5)].map((_, i) => (
+                                    <Star
+                                      key={i}
+                                      className={`w-3 h-3 ${i < consultation.rating!
+                                        ? 'text-warning fill-warning'
+                                        : 'text-muted'
+                                        }`}
+                                    />
+                                  ))
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">No rating</span>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1">
-                              {[...Array(5)].map((_, i) => (
-                                <Star
-                                  key={i}
-                                  className={`w-3 h-3 ${i < consultation.rating
-                                    ? 'text-warning fill-warning'
-                                    : 'text-muted'
-                                    }`}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 
@@ -779,17 +732,27 @@ const PatientPortal = () => {
                       <CardTitle className="text-lg">Notifications</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="space-y-4">
-                        {notifications.slice(0, 3).map((notification) => (
-                          <div key={notification.id} className="flex items-start gap-3">
-                            <div className={`w-2 h-2 rounded-full mt-2 ${notification.read ? 'bg-muted' : 'bg-primary'}`} />
-                            <div>
-                              <p className="text-sm">{notification.message}</p>
-                              <p className="text-xs text-muted-foreground mt-1">{notification.time}</p>
+                      {notificationsLoading ? (
+                        <div className="text-center py-4">
+                          <p className="text-muted-foreground text-sm">Loading notifications...</p>
+                        </div>
+                      ) : notifications.length === 0 ? (
+                        <div className="text-center py-4">
+                          <p className="text-muted-foreground text-sm">No new notifications</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {notifications.slice(0, 3).map((notification) => (
+                            <div key={notification.id} className="flex items-start gap-3">
+                              <div className={`w-2 h-2 rounded-full mt-2 ${notification.read ? 'bg-muted' : 'bg-primary'}`} />
+                              <div>
+                                <p className="text-sm">{notification.message}</p>
+                                <p className="text-xs text-muted-foreground mt-1">{notification.time}</p>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -872,9 +835,11 @@ const PatientPortal = () => {
                                 {getStatusBadge(apt.status)}
                               </div>
                               <div className="flex flex-col gap-2 w-full sm:w-auto">
-                                <Button size="sm" variant="outline" onClick={() => initReschedule(apt)} className="w-full">
-                                  Reschedule
-                                </Button>
+                                {apt.status !== 'completed' && apt.status !== 'confirmed' && (
+                                  <Button size="sm" variant="outline" onClick={() => initReschedule(apt)} className="w-full">
+                                    Reschedule
+                                  </Button>
+                                )}
                                 {apt.status === 'pending' && (
                                   <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)} className="w-full">
                                     Cancel
@@ -890,6 +855,31 @@ const PatientPortal = () => {
                                     size="sm"
                                     className="w-full"
                                   />
+                                )}
+                                {apt.status === 'completed' && !(apt as any).rating && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setSelectedAppointment(apt);
+                                      setReviewModalOpen(true);
+                                    }}
+                                    className="w-full"
+                                  >
+                                    Leave Review
+                                  </Button>
+                                )}
+                                {apt.status === 'completed' && (apt as any).rating && (
+                                  <div className="flex items-center gap-1 justify-center">
+                                    {[...Array(5)].map((_, i) => (
+                                      <Star
+                                        key={i}
+                                        className={`w-3 h-3 ${i < (apt as any).rating
+                                          ? 'text-warning fill-warning'
+                                          : 'text-muted'
+                                          }`}
+                                      />
+                                    ))}
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -909,47 +899,66 @@ const PatientPortal = () => {
                     <CardDescription>View your past consultations and diagnoses</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      {pastConsultations.map((consultation) => (
-                        <div key={consultation.id} className="p-4 rounded-xl border border-border">
-                          <div className="flex items-start justify-between mb-3">
-                            <div>
-                              <p className="font-semibold">{consultation.doctor}</p>
-                              <p className="text-sm text-muted-foreground">{consultation.specialty}</p>
+                    {consultationsLoading ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">Loading consultation history...</p>
+                      </div>
+                    ) : recentConsultations.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Video className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                        <p className="text-muted-foreground">No consultation history yet</p>
+                        <Button onClick={openBooking} className="mt-4 gap-2">
+                          <Plus className="w-4 h-4" />
+                          Book Your First Consultation
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {recentConsultations.map((consultation) => (
+                          <div key={consultation.id} className="p-4 rounded-xl border border-border">
+                            <div className="flex items-start justify-between mb-3">
+                              <div>
+                                <p className="font-semibold">{consultation.doctor_name}</p>
+                                <p className="text-sm text-muted-foreground">{consultation.specialty}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm text-muted-foreground">{new Date(consultation.date).toLocaleDateString()}</p>
+                                <div className="flex items-center gap-1 mt-1">
+                                  {consultation.rating ? (
+                                    [...Array(5)].map((_, i) => (
+                                      <Star
+                                        key={i}
+                                        className={`w-4 h-4 ${i < consultation.rating!
+                                          ? 'text-warning fill-warning'
+                                          : 'text-muted'
+                                          }`}
+                                      />
+                                    ))
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">No rating</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-sm text-muted-foreground">{new Date(consultation.date).toLocaleDateString()}</p>
-                              <div className="flex items-center gap-1 mt-1">
-                                {[...Array(5)].map((_, i) => (
-                                  <Star
-                                    key={i}
-                                    className={`w-4 h-4 ${i < consultation.rating
-                                      ? 'text-warning fill-warning'
-                                      : 'text-muted'
-                                      }`}
-                                  />
-                                ))}
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm"><span className="text-muted-foreground">Notes:</span> {consultation.diagnosis}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {consultation.prescription && (
+                                  <Badge variant="outline" className="gap-1">
+                                    <Pill className="w-3 h-3" /> Prescription
+                                  </Badge>
+                                )}
+                                <Button size="sm" variant="ghost">
+                                  View Details
+                                </Button>
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-sm"><span className="text-muted-foreground">Diagnosis:</span> {consultation.diagnosis}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {consultation.prescription && (
-                                <Badge variant="outline" className="gap-1">
-                                  <Pill className="w-3 h-3" /> Prescription
-                                </Badge>
-                              )}
-                              <Button size="sm" variant="ghost">
-                                View Details
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -1081,6 +1090,14 @@ const PatientPortal = () => {
           </main>
         </div>
       </div>
+      
+      {/* Review Modal */}
+      <ReviewModal
+        isOpen={reviewModalOpen}
+        onClose={() => setReviewModalOpen(false)}
+        appointmentId={selectedAppointment?.id || ''}
+        doctorName={selectedAppointment ? getDoctorNameById(selectedAppointment.doctor_id, selectedAppointment.specialist_name) : ''}
+      />
     </div>
   );
 };
