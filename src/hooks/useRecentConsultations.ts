@@ -20,35 +20,42 @@ export function useRecentConsultations() {
     queryFn: async (): Promise<RecentConsultation[]> => {
       if (!user?.id) return [];
 
+      console.log('[Recent Consultations] Fetching for user:', user.id);
+
       const { data, error } = await supabase
-        .from('consultation_sessions')
+        .from('appointments')
         .select(`
           id,
-          started_at,
+          date,
+          specialist_name,
+          rating,
           notes,
-          appointments!inner(
-            id,
-            specialist_name,
-            rating,
-            doctors(name)
-          )
+          status
         `)
         .eq('patient_id', user.id)
-        .eq('status', 'ended')
-        .order('started_at', { ascending: false })
-        .limit(5);
+        .eq('status', 'completed')
+        .order('date', { ascending: false })
+        .limit(10);
 
-      if (error) throw error;
+      console.log('[Recent Consultations] Query result:', { data, error });
 
-      return data.map((session: any) => ({
-        id: session.id,
-        doctor_name: session.appointments.doctors?.name || session.appointments.specialist_name,
-        specialty: 'General Medicine', // Default specialty
-        date: session.started_at,
-        diagnosis: session.notes || 'Consultation completed',
-        prescription: false, // Could be enhanced to check for prescriptions
-        rating: session.appointments.rating || null,
+      if (error) {
+        console.error('[Recent Consultations] Error:', error);
+        throw error;
+      }
+
+      const result = data.map((appointment: any) => ({
+        id: appointment.id,
+        doctor_name: appointment.specialist_name,
+        specialty: 'General Medicine',
+        date: appointment.date,
+        diagnosis: appointment.notes || 'Consultation completed',
+        prescription: false,
+        rating: appointment.rating || null,
       }));
+
+      console.log('[Recent Consultations] Mapped result:', result);
+      return result;
     },
     enabled: !!user?.id,
   });
