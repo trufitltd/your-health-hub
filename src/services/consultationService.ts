@@ -144,7 +144,19 @@ class ConsultationService {
       throw new Error(`Failed to end consultation session: ${error.message}`);
     }
 
-    return data as ConsultationSession;
+    // Update the appointment status to completed
+    const session = data as ConsultationSession;
+    const { error: appointmentError } = await supabase
+      .from('appointments')
+      .update({ status: 'completed' })
+      .eq('id', session.appointment_id);
+
+    if (appointmentError) {
+      console.error('[ConsultationService] Error updating appointment status:', appointmentError);
+      // Don't throw error here as the session was successfully ended
+    }
+
+    return session;
   }
 
   /**
