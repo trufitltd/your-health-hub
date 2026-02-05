@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -31,6 +31,8 @@ import { JoinConsultationButton } from '@/components/consultation';
 import { ScheduleEditor } from '@/components/ScheduleEditor';
 import { useDoctorStats } from '@/hooks/useDoctorStats';
 import { useRecentReviews } from '@/hooks/useRecentReviews';
+import { useDoctorRegistration } from '@/hooks/useDoctorRegistration';
+import { useQueryClient } from '@tanstack/react-query';
 
 // Dummy Doctor Data
 const doctorData = {
@@ -98,6 +100,12 @@ const DoctorPortal = () => {
   const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
+  const adminEmails = useMemo(() => {
+    const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
+    return raw ? raw.split(',').map((value) => value.trim().toLowerCase()) : [];
+  }, []);
+  const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
+  const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
 
   // Fetch doctor statistics
   const { data: doctorStats, isLoading: statsLoading } = useDoctorStats(user?.id);
@@ -105,18 +113,48 @@ const DoctorPortal = () => {
   // Fetch recent reviews
   const { data: recentReviews = [], isLoading: reviewsLoading } = useRecentReviews(user?.id);
 
+  // Fetch doctor registration data
+  const { data: doctorRegistration } = useDoctorRegistration();
+  const queryClient = useQueryClient();
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
   // Fetch appointments for this doctor
   const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
     queryKey: ['doctor-appointments', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const { data, error } = await supabase
+      
+      // First fetch appointments
+      const { data: appointments, error: aptError } = await supabase
         .from('appointments')
         .select('*')
         .eq('doctor_id', user.id)
         .order('date', { ascending: true });
-      if (error) throw error;
-      return data || [];
+      
+      if (aptError) throw aptError;
+      if (!appointments || appointments.length === 0) return [];
+      
+      console.log('Fetched appointments:', appointments);
+      
+      // Then fetch patient ages for these appointments
+      const patientIds = appointments.map(apt => apt.patient_id).filter(Boolean);
+      console.log('Patient IDs:', patientIds);
+      
+      if (patientIds.length === 0) return appointments.map(apt => ({ ...apt, patient_age: null }));
+      
+      const { data: patientData, error: patientError } = await supabase
+        .from('patient_registrations')
+        .select('user_id, age')
+        .in('user_id', patientIds);
+      
+      console.log('Patient data:', patientData, 'Error:', patientError);
+      
+      // Merge the data
+      const patientAgeMap = new Map(patientData?.map(p => [p.user_id, p.age]) || []);
+      return appointments.map(apt => ({
+        ...apt,
+        patient_age: patientAgeMap.get(apt.patient_id) || null
+      }));
     },
     enabled: !!user?.id,
   });
@@ -189,9 +227,10 @@ const DoctorPortal = () => {
   }).map(apt => ({
     id: apt.id,
     patient: apt.patient_name || 'Unknown Patient',
-    age: 'N/A',
+    age: apt.patient_age || 'N/A',
     requestedDate: apt.date,
     requestedTime: apt.time,
+    consultationType: apt.type,
     reason: apt.notes || 'No reason provided',
     priority: 'normal',
   }));
@@ -208,12 +247,48 @@ const DoctorPortal = () => {
   };
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
+  const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
   const displayInitials = displayName
     .split(' ')
     .map((n) => n[0])
     .slice(0, 2)
     .join('')
     .toUpperCase();
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!user) return;
+    setIsUploadingPhoto(true);
+    
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}.${fileExt}`;
+      const filePath = `${user.id}/profile-pictures/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('doctor-files')
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('doctor-files')
+        .getPublicUrl(filePath);
+
+      const { error: updateError } = await supabase
+        .from('doctor_registrations')
+        .update({ profile_picture_url: urlData.publicUrl })
+        .eq('user_id', user.id);
+
+      if (updateError) throw updateError;
+
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
+      toast({ title: 'Success', description: 'Profile picture updated successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update profile picture.' });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
 
   const requireAuth = () => {
     if (!user) {
@@ -286,15 +361,15 @@ const DoctorPortal = () => {
 
               <button 
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
               >
-                <Avatar className="w-9 h-9">
-                  <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
+                <Avatar className="w-9 h-9 flex-shrink-0">
+                  <AvatarImage src={profilePicture} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
                 </Avatar>
-                <div className="hidden sm:block">
-                  <p className="text-sm font-medium">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                  <p className="text-xs text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
+                <div className="flex-1 min-w-0 hidden sm:block">
+                  <p className="text-sm font-medium truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                  <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
                 </div>
               </button>
             </div>
@@ -346,6 +421,22 @@ const DoctorPortal = () => {
                     </button>
                   ))}
                 </nav>
+
+                {isAdmin && (
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <Link
+                      to="/admin/test-patient"
+                      onClick={() => setSidebarOpen(false)}
+                      className="w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <div className="flex items-center gap-3">
+                        <User className="w-5 h-5" />
+                        Admin: Test Patient
+                      </div>
+                      <ChevronRight className="w-4 h-4" />
+                    </Link>
+                  </div>
+                )}
 
                 <div className="mt-6 pt-6 border-t border-border">
                   <Button 
@@ -596,6 +687,7 @@ const DoctorPortal = () => {
                             </Avatar>
                             <div>
                               <p className="font-semibold">{apt.patient_name}</p>
+                              <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} Year Old` : 'Age N/A'}</p>
                               <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
                             </div>
                           </div>
@@ -702,7 +794,22 @@ const DoctorPortal = () => {
                                   <p className="font-semibold">{request.patient}</p>
                                   {getPriorityBadge(request.priority)}
                                 </div>
-                                <p className="text-sm text-muted-foreground">{request.age} years old</p>
+                                <p className="text-sm text-muted-foreground">{request.age} Year Old</p>
+                                <div className="flex items-center gap-2 mt-1">
+                                  {request.consultationType === 'Video' ? (
+                                    <Badge variant="outline" className="gap-1">
+                                      <Video className="w-3 h-3" /> Video
+                                    </Badge>
+                                  ) : request.consultationType === 'Chat' ? (
+                                    <Badge variant="outline" className="gap-1">
+                                      <MessageSquare className="w-3 h-3" /> Chat
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="gap-1">
+                                      <Phone className="w-3 h-3" /> Audio
+                                    </Badge>
+                                  )}
+                                </div>
                                 <p className="text-sm text-muted-foreground">{request.reason}</p>
                               </div>
                             </div>
@@ -950,15 +1057,32 @@ const DoctorPortal = () => {
                         <div className="space-y-6">
                           <div className="flex items-center gap-4">
                             <Avatar className="w-20 h-20">
-                              <AvatarImage src={user?.user_metadata?.avatar ?? doctorData.avatar} />
+                              <AvatarImage src={profilePicture} />
                               <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{displayInitials}</AvatarFallback>
                             </Avatar>
                             <div>
                               <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
                               <p className="text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
-                              <Button size="sm" variant="outline" className="mt-2">
-                                Change Photo
-                              </Button>
+                              <div className="mt-2">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) handlePhotoUpload(file);
+                                  }}
+                                  className="hidden"
+                                  id="doctor-photo-upload"
+                                />
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  disabled={isUploadingPhoto}
+                                  onClick={() => document.getElementById('doctor-photo-upload')?.click()}
+                                >
+                                  {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                                </Button>
+                              </div>
                             </div>
                           </div>
 

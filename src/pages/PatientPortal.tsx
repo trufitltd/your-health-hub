@@ -32,9 +32,12 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ReviewModal } from '@/components/ReviewModal';
+import { PatientRegistration } from '@/components/PatientRegistration';
 import { MessagesTab } from '@/components/patient-portal/MessagesTab';
 import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
+import { usePatientRegistration } from '@/hooks/usePatientRegistration';
+import { useQueryClient } from '@tanstack/react-query';
 
 // Dummy Patient Data
 const patientData = {
@@ -117,6 +120,9 @@ const PatientPortal = () => {
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
+  const { data: patientRegistration } = usePatientRegistration();
+  const queryClient = useQueryClient();
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -125,12 +131,16 @@ const PatientPortal = () => {
   };
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
+  const profilePicture = patientRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? patientData.avatar;
   const initials = displayName
     .split(' ')
     .map((n) => n[0])
     .slice(0, 2)
     .join('')
     .toUpperCase();
+
+  // Force re-render when profile picture changes
+  const profilePictureKey = `${profilePicture}-${Date.now()}`;
 
   // Helper to resolve doctor name from doctor_id (falls back to specialist_name)
   const getDoctorNameById = (doctorId?: string | null, fallback?: string) => {
@@ -176,6 +186,19 @@ const PatientPortal = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
+
+  // Pricing logic
+  const getPricing = (specialty: string, consultationType: string) => {
+    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
+    const prices = {
+      Chat: isSpecialist ? 2500 : 1500,
+      Audio: isSpecialist ? 8000 : 4000, 
+      Video: isSpecialist ? 20000 : 8000
+    };
+    return prices[consultationType as keyof typeof prices] || 0;
+  };
+
+  const formatPrice = (price: number) => `₦${price.toLocaleString()}`;
 
   // Handle external booking requests
   useEffect(() => {
@@ -359,6 +382,47 @@ const PatientPortal = () => {
     }
   };
 
+  const handlePhotoUpload = async (file: File) => {
+    if (!user) return;
+    setIsUploadingPhoto(true);
+    
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}.${fileExt}`;
+      const filePath = `${user.id}/profile-pictures/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('patient-files')
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('patient-files')
+        .getPublicUrl(filePath);
+
+      // Add cache-busting parameter to force image refresh
+      const cacheBustUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+      const { error: updateError } = await supabase
+        .from('patient_registrations')
+        .update({ profile_picture_url: cacheBustUrl })
+        .eq('user_id', user.id);
+
+      if (updateError) throw updateError;
+
+      // Invalidate queries and force refetch
+      await queryClient.invalidateQueries({ queryKey: ['patient-registration'] });
+      await queryClient.refetchQueries({ queryKey: ['patient-registration'] });
+      
+      toast({ title: 'Success', description: 'Profile picture updated successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update profile picture.' });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'confirmed':
@@ -414,7 +478,7 @@ const PatientPortal = () => {
                 className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
               >
                 <Avatar className="w-9 h-9">
-                  <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
+                  <AvatarImage key={profilePictureKey} src={profilePicture} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="hidden sm:block">
@@ -534,9 +598,9 @@ const PatientPortal = () => {
                   <div>
                     <Label>Type</Label>
                     <select className="w-full p-2 border rounded" value={bookingType} onChange={(e) => setBookingType(e.target.value as 'Video' | 'Audio' | 'Chat')}>
-                      <option value="Video">Video Call</option>
-                      <option value="Audio">Audio Call</option>
-                      <option value="Chat">Chat Consultation</option>
+                      <option value="Video">Video Call - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Video'))}</option>
+                      <option value="Audio">Audio Call - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Audio'))}</option>
+                      <option value="Chat">Chat Consultation - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Chat'))}</option>
                     </select>
                   </div>
                   <div>
@@ -658,7 +722,7 @@ const PatientPortal = () => {
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
                               </div>
-                              {(apt.status === 'confirmed' || apt.status === 'pending') && (
+                              {apt.status === 'confirmed' && (
                                 <JoinConsultationButton
                                   appointmentId={apt.id}
                                   consultationType={apt.type}
@@ -845,7 +909,7 @@ const PatientPortal = () => {
                                     Cancel
                                   </Button>
                                 )}
-                                {(apt.status === 'confirmed' || apt.status === 'pending') && (
+                                {apt.status === 'confirmed' && (
                                   <JoinConsultationButton
                                     appointmentId={apt.id}
                                     consultationType={apt.type}
@@ -1046,15 +1110,32 @@ const PatientPortal = () => {
                     <div className="space-y-6">
                       <div className="flex items-center gap-4">
                         <Avatar className="w-20 h-20">
-                          <AvatarImage src={user?.user_metadata?.avatar ?? patientData.avatar} />
+                          <AvatarImage key={profilePictureKey} src={profilePicture} />
                           <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{initials}</AvatarFallback>
                         </Avatar>
                         <div>
                           <p className="font-semibold text-lg">{displayName}</p>
                           <p className="text-muted-foreground">{user?.email ?? patientData.email}</p>
-                          <Button size="sm" variant="outline" className="mt-2">
-                            Change Photo
-                          </Button>
+                          <div className="mt-2">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handlePhotoUpload(file);
+                              }}
+                              className="hidden"
+                              id="photo-upload"
+                            />
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              disabled={isUploadingPhoto}
+                              onClick={() => document.getElementById('photo-upload')?.click()}
+                            >
+                              {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                            </Button>
+                          </div>
                         </div>
                       </div>
 
@@ -1085,6 +1166,9 @@ const PatientPortal = () => {
                     </div>
                   </CardContent>
                 </Card>
+                
+                {/* Patient Registration Details */}
+                <PatientRegistration />
               </TabsContent>
             </Tabs>
           </main>

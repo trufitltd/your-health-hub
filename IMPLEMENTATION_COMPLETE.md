@@ -1,1 +1,0 @@
-The video consultation "waiting" issue has been addressed by disabling Row Level Security on the `webrtc_signals` table. The user has been instructed to run the updated SQL script in `db/07_create_webrtc_signals.sql` and has been warned about the security implications.

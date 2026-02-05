@@ -392,6 +392,8 @@ export function ConsultationRoom({
         webrtc.onConnected(() => {
           console.log('[WebRTC] 🎉 Connection established via callback');
           setConnectionStatus('connected');
+          // Start call timer when media actually flows
+          setCallDuration(0);
         });
 
         webrtc.onError((error) => {
@@ -1082,11 +1084,13 @@ export function ConsultationRoom({
                         if (remoteVideoRef.current) {
                           const video = remoteVideoRef.current;
                           console.log('[Video Check] Final dimensions:', video.videoWidth, 'x', video.videoHeight);
-                          console.log('[Video Debug] Video element:', {
+                          console.log('[Video Debug] Video element state:', {
                             paused: video.paused,
                             ended: video.ended,
                             readyState: video.readyState,
-                            networkState: video.networkState
+                            readyStateText: ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'][video.readyState],
+                            networkState: video.networkState,
+                            networkStateText: ['NETWORK_EMPTY', 'NETWORK_IDLE', 'NETWORK_LOADING', 'NETWORK_NO_SOURCE'][video.networkState]
                           });
                           
                           const stream = video.srcObject as MediaStream;
@@ -1102,7 +1106,8 @@ export function ConsultationRoom({
                                 height: settings.height,
                                 enabled: track.enabled,
                                 readyState: track.readyState,
-                                muted: track.muted
+                                muted: track.muted,
+                                kind: track.kind
                               });
                               
                               // Force enable track if disabled
@@ -1112,9 +1117,16 @@ export function ConsultationRoom({
                               }
                             });
                             
-                            // If dimensions still 0x0 after delay, it might be a rendering issue
+                            // If dimensions still 0x0 after delay, check if media is actually flowing
                             if (video.videoWidth === 0 && video.videoHeight === 0 && videoTracks.length > 0) {
-                              console.warn('[Video Issue] Video tracks present but no dimensions, forcing display');
+                              console.warn('[Video Issue] Video tracks present but no dimensions');
+                              
+                              // Check if it's a readyState issue (no data received)
+                              if (video.readyState === 0) {
+                                console.error('[Video Issue] readyState is HAVE_NOTHING - no video data received from WebRTC');
+                                console.log('[Video Debug] Possible causes: ICE connection failed, codec mismatch, or video not being sent from remote');
+                              }
+                              
                               // Force ensure element is visible and properly displayed
                               video.style.opacity = '1';
                               video.style.visibility = 'visible';
