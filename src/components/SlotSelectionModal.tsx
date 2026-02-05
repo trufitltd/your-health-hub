@@ -38,6 +38,16 @@ export function SlotSelectionModal({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
 
+  // Pricing logic
+  const getPricing = (specialty: string) => {
+    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
+    return {
+      Chat: isSpecialist ? '₦2,500' : '₦1,500',
+      Audio: isSpecialist ? '₦8,000' : '₦4,000', 
+      Video: isSpecialist ? '₦20,000' : '₦8,000'
+    };
+  };
+
   useEffect(() => {
     if (doctorId) {
       setSelectedDoctor(doctorId);
@@ -170,7 +180,9 @@ export function SlotSelectionModal({
                     }`}
                   >
                     <p className="font-medium text-sm">{doctor.name}</p>
-                    <p className="text-xs text-muted-foreground">{doctor.specialty}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Specialty: {doctor.specialty}
+                    </p>
                   </button>
                 ))}
               </div>
@@ -254,6 +266,10 @@ export function SlotSelectionModal({
                 <div className="flex items-center gap-2">
                   <span className="font-medium">Doctor:</span>
                   {doctors.find((d) => d.id === selectedDoctor)?.name}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Specialty:</span>
+                  {doctors.find((d) => d.id === selectedDoctor)?.specialty}
                 </div>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-3 h-3" />
