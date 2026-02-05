@@ -235,20 +235,33 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
       { day_of_week: 5, start_time: '09:00', end_time: '17:00' }, // Friday
     ];
 
-    const createdSchedules = await Promise.all(
-      defaultSchedules.map((schedule) =>
-        upsertSchedule(doctorId, {
-          day_of_week: schedule.day_of_week,
-          start_time: schedule.start_time,
-          end_time: schedule.end_time,
-        })
-      )
-    );
+    // Direct insert without checking for existing schedules
+    const scheduleData = defaultSchedules.map(schedule => ({
+      doctor_id: doctorId,
+      day_of_week: schedule.day_of_week,
+      start_time: schedule.start_time,
+      end_time: schedule.end_time,
+      slot_duration_minutes: 30,
+      max_patients_per_slot: 1,
+      is_available: true,
+    }));
 
-    return createdSchedules;
+    const { data, error } = await supabase
+      .from('doctor_schedules')
+      .insert(scheduleData)
+      .select();
+
+    if (error) {
+      console.error('Error creating default schedule:', error);
+      // Don't throw error, just log it - schedule can be created later
+      return [];
+    }
+
+    return (data || []) as DoctorSchedule[];
   } catch (err) {
     console.error('Error creating default schedule:', err);
-    throw err;
+    // Don't throw error, just return empty array
+    return [];
   }
 };
 

@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check } from 'lucide-react';
+import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check, Phone, MapPin, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { createDefaultSchedule } from '@/services/scheduleService';
+import { smsService } from '@/services/smsService';
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'login' | 'register' | 'verify';
 type UserRole = 'patient' | 'doctor';
 
 const benefits = [
@@ -31,7 +33,31 @@ export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('+234');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [pendingUserData, setPendingUserData] = useState<any>(null);
   const navigate = useNavigate();
+
+  // Patient registration fields
+  const [gender, setGender] = useState('');
+  const [age, setAge] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [country, setCountry] = useState('');
+  const [maritalStatus, setMaritalStatus] = useState('');
+  const [emergencyContactName, setEmergencyContactName] = useState('');
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+  const [identificationType, setIdentificationType] = useState('');
+  const [identificationNumber, setIdentificationNumber] = useState('');
+
+  // Doctor registration fields
+  const [hospitalAffiliation, setHospitalAffiliation] = useState('');
+  const [specialty, setSpecialty] = useState('');
+  const [otherSpecialty, setOtherSpecialty] = useState('');
+  const [profilePicture, setProfilePicture] = useState<File | null>(null);
+  const [medicalLicense, setMedicalLicense] = useState<File | null>(null);
+  const [doctorIdType, setDoctorIdType] = useState('');
+  const [doctorIdNumber, setDoctorIdNumber] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,61 +65,288 @@ export default function AuthPage() {
 
     try {
       if (mode === 'register') {
-        // Sign up with Supabase
+        // Validate phone number for all users
+        if (!phoneNumber) {
+          toast({ title: 'Phone number required', description: 'Please enter your phone number.' });
+          setIsLoading(false);
+          return;
+        }
+
+        // Validate patient registration fields if role is patient
+        if (role === 'patient') {
+          if (!gender || !age || !city || !state || !country || !maritalStatus || 
+              !emergencyContactName || !emergencyContactPhone || !identificationType || !identificationNumber) {
+            toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
+            setIsLoading(false);
+            return;
+          }
+        }
+        // Validate doctor registration fields if role is doctor
+        if (role === 'doctor') {
+          if (!gender || !age || !city || !state || !country || !maritalStatus || 
+              !hospitalAffiliation || !specialty || !medicalLicense || !doctorIdType || !doctorIdNumber) {
+            toast({ title: 'Missing information', description: 'Please fill in all required fields and upload medical license.' });
+            setIsLoading(false);
+            return;
+          }
+          if (specialty === 'others' && !otherSpecialty) {
+            toast({ title: 'Specialty required', description: 'Please specify your specialty.' });
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // Sign up with Supabase using phone number
         const { data, error } = await supabase.auth.signUp({
-          email,
+          phone: phoneNumber,
           password,
           options: {
             data: {
               full_name: name,
               role,
+              email: email || null,
             },
           },
         });
 
         if (error) {
-          toast({ title: 'Registration failed', description: error.message });
+          // Check if user already exists
+          if (error.message.includes('already registered') || error.message.includes('already been registered')) {
+            toast({ 
+              title: 'Phone number in use', 
+              description: 'This phone number is already registered. Please use a different number or try logging in.' 
+            });
+            setMode('login');
+          } else {
+            toast({ title: 'Registration failed', description: error.message });
+          }
           setIsLoading(false);
           return;
         }
 
-        // If doctor, create default schedule
-        if (role === 'doctor' && data.user?.id) {
-          try {
-            await createDefaultSchedule(data.user.id);
-            toast({
-              title: 'Account created',
-              description: 'Default schedule created. Check your email to confirm your account.',
-            });
-          } catch (scheduleErr) {
-            console.error('Error creating default schedule:', scheduleErr);
-            // Don't fail signup if schedule creation fails
-            toast({
-              title: 'Account created',
-              description: 'Please check your email to confirm your account.',
-            });
-          }
-        } else {
-          toast({
-            title: 'Account created',
-            description: 'Please check your email to confirm your account.',
-          });
-        }
+        // Store registration data for after verification
+        const registrationData = {
+          role,
+          name,
+          email,
+          phoneNumber,
+          gender,
+          age,
+          city,
+          state,
+          country,
+          maritalStatus,
+          emergencyContactName,
+          emergencyContactPhone,
+          identificationType,
+          identificationNumber,
+          hospitalAffiliation,
+          specialty,
+          otherSpecialty,
+          profilePicture,
+          medicalLicense,
+          doctorIdType,
+          doctorIdNumber,
+          userId: data.user?.id
+        };
+        setPendingUserData(registrationData);
+
+        toast({
+          title: 'Verification code sent',
+          description: 'Check your phone for the verification code.',
+        });
 
         setIsLoading(false);
-        setMode('login');
+        setMode('verify');
+      } else if (mode === 'verify') {
+        // Verify phone number with code
+        if (!verificationCode) {
+          toast({ title: 'Verification code required', description: 'Please enter the verification code.' });
+          setIsLoading(false);
+          return;
+        }
+
+        const { data, error } = await supabase.auth.verifyOtp({
+          phone: phoneNumber,
+          token: verificationCode,
+          type: 'sms'
+        });
+
+        if (error) {
+          toast({ title: 'Verification failed', description: error.message });
+          setIsLoading(false);
+          return;
+        }
+
+        // Now complete the registration process
+        if (pendingUserData && data.user?.id) {
+          try {
+            console.log('Completing registration for user:', data.user.id, 'Role:', pendingUserData.role);
+            
+            if (pendingUserData.role === 'patient') {
+              const registrationPayload = {
+                user_id: data.user.id,
+                full_name: pendingUserData.name,
+                gender: pendingUserData.gender,
+                age: parseInt(pendingUserData.age),
+                phone_number: pendingUserData.phoneNumber,
+                email: pendingUserData.email || null,
+                city: pendingUserData.city,
+                state: pendingUserData.state,
+                country: pendingUserData.country,
+                marital_status: pendingUserData.maritalStatus,
+                emergency_contact_name: pendingUserData.emergencyContactName,
+                emergency_contact_phone: pendingUserData.emergencyContactPhone,
+                identification_type: pendingUserData.identificationType,
+                identification_number: pendingUserData.identificationNumber
+              };
+
+              const { error: patientError } = await supabase.from('patient_registrations').insert([registrationPayload]);
+              if (patientError) {
+                console.error('Patient registration error:', patientError);
+                throw patientError;
+              }
+              
+              // Send welcome SMS
+              try {
+                await smsService.sendWelcomeSMS(pendingUserData.phoneNumber, pendingUserData.name);
+              } catch (smsError) {
+                console.error('SMS sending failed:', smsError);
+              }
+            } else if (pendingUserData.role === 'doctor') {
+              // Upload files
+              let profilePictureUrl = null;
+              let medicalLicenseUrl = null;
+
+              if (pendingUserData.profilePicture) {
+                const profileExt = pendingUserData.profilePicture.name.split('.').pop();
+                const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+                const { error: profileError } = await supabase.storage
+                  .from('doctor-files')
+                  .upload(profilePath, pendingUserData.profilePicture, { upsert: true });
+                if (profileError) {
+                  console.error('Profile picture upload error:', profileError);
+                } else {
+                  profilePictureUrl = supabase.storage.from('doctor-files').getPublicUrl(profilePath).data.publicUrl;
+                }
+              }
+
+              if (pendingUserData.medicalLicense) {
+                const licenseExt = pendingUserData.medicalLicense.name.split('.').pop();
+                const licensePath = `${data.user.id}/credentials/medical-license.${licenseExt}`;
+                const { error: licenseError } = await supabase.storage
+                  .from('doctor-files')
+                  .upload(licensePath, pendingUserData.medicalLicense, { upsert: true });
+                if (licenseError) {
+                  console.error('Medical license upload error:', licenseError);
+                } else {
+                  medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
+                }
+              }
+
+              const doctorPayload = {
+                user_id: data.user.id,
+                full_name: pendingUserData.name,
+                gender: pendingUserData.gender,
+                age: parseInt(pendingUserData.age),
+                phone_number: pendingUserData.phoneNumber,
+                email: pendingUserData.email || null,
+                city: pendingUserData.city,
+                state: pendingUserData.state,
+                country: pendingUserData.country,
+                marital_status: pendingUserData.maritalStatus,
+                hospital_affiliation: pendingUserData.hospitalAffiliation,
+                specialty: pendingUserData.specialty === 'others' ? pendingUserData.otherSpecialty : pendingUserData.specialty,
+                profile_picture_url: profilePictureUrl,
+                medical_license_url: medicalLicenseUrl,
+                identification_type: pendingUserData.doctorIdType,
+                identification_number: pendingUserData.doctorIdNumber
+              };
+
+              console.log('Inserting doctor registration:', doctorPayload);
+              const { error: doctorError } = await supabase.from('doctor_registrations').insert([doctorPayload]);
+              if (doctorError) {
+                console.error('Doctor registration error:', doctorError);
+                throw doctorError;
+              }
+
+              // Keep public.doctors in sync for discovery/booking
+              const { error: doctorProfileError } = await supabase
+                .from('doctors')
+                .update({
+                  name: doctorPayload.full_name,
+                  specialty: doctorPayload.specialty,
+                  phone: pendingUserData.phoneNumber,
+                })
+                .eq('id', data.user.id);
+
+              if (doctorProfileError) {
+                console.error('Doctor profile sync error:', doctorProfileError);
+              }
+              
+              // Update verification status to verified
+              const { error: updateError } = await supabase
+                .from('doctor_registrations')
+                .update({ verification_status: 'verified' })
+                .eq('user_id', data.user.id);
+              
+              if (updateError) {
+                console.error('Failed to update verification status:', updateError);
+              }
+              
+              console.log('Creating default schedule for doctor:', data.user.id);
+              await createDefaultSchedule(data.user.id);
+              console.log('Doctor registration completed successfully');
+            }
+          } catch (regError) {
+            console.error('Registration completion error:', regError);
+            toast({ title: 'Registration incomplete', description: 'Account verified but registration data failed to save. Please contact support.' });
+          }
+        } else {
+          console.error('Missing pending user data or user ID');
+        }
+
+        // Get user role from metadata
+        const userRole = data?.user?.user_metadata?.role || 'patient';
+        localStorage.setItem('userRole', userRole);
+
+        // Check if user session is valid
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData.session) {
+          toast({ title: 'Session error', description: 'Please try logging in again.' });
+          setIsLoading(false);
+          return;
+        }
+
+        toast({ title: 'Phone verified', description: 'Welcome to MyEdoctor!' });
+        setIsLoading(false);
+
+        // Redirect based on role
+        navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
       } else {
-        // Sign in with Supabase
+        // Validate phone number for login
+        if (!phoneNumber) {
+          toast({ title: 'Phone number required', description: 'Please enter your phone number.' });
+          setIsLoading(false);
+          return;
+        }
+
+        console.log('Attempting login with phone:', phoneNumber);
+
+        // Sign in with Supabase using phone number
         const { data, error } = await supabase.auth.signInWithPassword({
-          email,
+          phone: phoneNumber,
           password,
         });
 
         if (error) {
+          console.error('Login error:', error);
           toast({ title: 'Sign in failed', description: error.message });
           setIsLoading(false);
           return;
         }
+
+        console.log('Login successful, user:', data.user?.id);
 
         // Get user role from metadata
         const userRole = data?.user?.user_metadata?.role || 'patient';
@@ -115,12 +368,12 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen flex">
       {/* Left Panel - Form */}
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex items-center justify-center p-4 sm:p-8 overflow-y-auto">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-md"
+          className="w-full max-w-md max-h-screen overflow-y-auto py-4"
         >
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 mb-8">
@@ -134,11 +387,13 @@ export default function AuthPage() {
 
           {/* Title */}
           <h1 className="text-2xl md:text-3xl font-bold mb-2">
-            {mode === 'login' ? 'Welcome back' : 'Create your account'}
+            {mode === 'login' ? 'Welcome back' : mode === 'verify' ? 'Verify your phone' : 'Create your account'}
           </h1>
           <p className="text-muted-foreground mb-8">
             {mode === 'login'
-              ? 'Sign in to access your health dashboard'
+              ? 'Sign in with your phone number to access your health dashboard'
+              : mode === 'verify'
+              ? `Enter the verification code sent to ${phoneNumber}`
               : 'Join thousands of patients getting quality healthcare'}
           </p>
 
@@ -170,63 +425,490 @@ export default function AuthPage() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'register' && (
+          <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+            {mode === 'verify' ? (
               <div>
-                <Label htmlFor="name">Full Name</Label>
-                <div className="relative mt-1.5">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                  <Input
-                    id="name"
-                    type="text"
-                    placeholder="Enter your full name"
-                    className="pl-10 h-12"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
+                <Label htmlFor="verificationCode">Verification Code</Label>
+                <Input
+                  id="verificationCode"
+                  type="text"
+                  placeholder="Enter 6-digit code"
+                  className="h-12 text-center text-2xl tracking-widest"
+                  maxLength={6}
+                  required
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                />
+                <div className="flex flex-col gap-2 mt-2">
+                  <p className="text-sm text-muted-foreground">
+                    Didn't receive the code?{' '}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await supabase.auth.resend({ type: 'sms', phone: phoneNumber });
+                          toast({ title: 'Code resent', description: 'A new verification code has been sent.' });
+                        } catch (error) {
+                          toast({ title: 'Resend failed', description: 'Please try again.' });
+                        }
+                      }}
+                      className="text-primary hover:underline"
+                    >
+                      Resend code
+                    </button>
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Having issues?{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('register');
+                        setVerificationCode('');
+                        setPendingUserData(null);
+                        toast({ title: 'Registration reset', description: 'Please register again with a different phone number or contact support.' });
+                      }}
+                      className="text-destructive hover:underline"
+                    >
+                      Start over
+                    </button>
+                  </p>
                 </div>
               </div>
+            ) : (
+              <>
+                {mode === 'register' && (
+                  <div>
+                    <Label htmlFor="name">Full Name</Label>
+                    <div className="relative mt-1.5">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                      <Input
+                        id="name"
+                        type="text"
+                        placeholder="Enter your full name"
+                        className="pl-10 h-12"
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <Label htmlFor="phoneNumber">Phone Number</Label>
+                  <div className="relative mt-1.5">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                    <Input
+                      id="phoneNumber"
+                      type="tel"
+                      placeholder="+234 Enter your phone number"
+                      className="pl-10 h-12"
+                      required
+                      value={phoneNumber}
+                      onChange={(e) => {
+                        let value = e.target.value;
+                        if (!value.startsWith('+234')) {
+                          value = '+234' + value.replace(/^\+?234?/, '');
+                        }
+                        setPhoneNumber(value);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {mode === 'register' && (
+                  <div>
+                    <Label htmlFor="email">Email Address (Optional)</Label>
+                    <div className="relative mt-1.5">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="Enter your email (optional)"
+                        className="pl-10 h-12"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <div className="relative mt-1.5">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                    <Input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder={mode === 'register' ? 'Create a password' : 'Enter your password'}
+                      className="pl-10 pr-10 h-12"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Patient Registration Fields */}
+                {mode === 'register' && role === 'patient' && (
+                  <div className="space-y-4 pt-4 border-t border-border">
+                    <h3 className="text-lg font-semibold">Patient Information</h3>
+                    
+                    {/* Gender & Age */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <Label>Gender *</Label>
+                        <Select value={gender} onValueChange={setGender}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue placeholder="Select gender" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="male">Male</SelectItem>
+                            <SelectItem value="female">Female</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="age">Age *</Label>
+                        <Input
+                          id="age"
+                          type="number"
+                          placeholder="Age"
+                          className="h-12"
+                          required
+                          value={age}
+                          onChange={(e) => setAge(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Location */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <Label htmlFor="city">City *</Label>
+                        <Input
+                          id="city"
+                          placeholder="City"
+                          className="h-12"
+                          required
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="state">State *</Label>
+                        <Input
+                          id="state"
+                          placeholder="State"
+                          className="h-12"
+                          required
+                          value={state}
+                          onChange={(e) => setState(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="country">Country *</Label>
+                        <Input
+                          id="country"
+                          placeholder="Country"
+                          className="h-12"
+                          required
+                          value={country}
+                          onChange={(e) => setCountry(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Marital Status */}
+                    <div>
+                      <Label>Marital Status *</Label>
+                      <Select value={maritalStatus} onValueChange={setMaritalStatus}>
+                        <SelectTrigger className="h-12">
+                          <SelectValue placeholder="Select marital status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="single">Single</SelectItem>
+                          <SelectItem value="married">Married</SelectItem>
+                          <SelectItem value="divorced">Divorced</SelectItem>
+                          <SelectItem value="widowed">Widowed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Emergency Contact */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <Label htmlFor="emergencyContactName">Emergency Contact Name *</Label>
+                        <Input
+                          id="emergencyContactName"
+                          placeholder="Contact name"
+                          className="h-12"
+                          required
+                          value={emergencyContactName}
+                          onChange={(e) => setEmergencyContactName(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="emergencyContactPhone">Emergency Contact Phone *</Label>
+                        <Input
+                          id="emergencyContactPhone"
+                          type="tel"
+                          placeholder="Contact phone"
+                          className="h-12"
+                          required
+                          value={emergencyContactPhone}
+                          onChange={(e) => setEmergencyContactPhone(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Identification */}
+                    <div className="space-y-4">
+                      <div>
+                        <Label>Identification Type *</Label>
+                        <Select value={identificationType} onValueChange={setIdentificationType}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue placeholder="Select ID type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="nin">National Identification Number (NIN)</SelectItem>
+                            <SelectItem value="student_id">Student ID Card</SelectItem>
+                            <SelectItem value="passport">International Passport</SelectItem>
+                            <SelectItem value="drivers_license">National Driver's License</SelectItem>
+                            <SelectItem value="voters_card">Voter's Card</SelectItem>
+                            <SelectItem value="hospital_id">Hospital / HMO ID Card</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="identificationNumber">Identification Number *</Label>
+                        <Input
+                          id="identificationNumber"
+                          placeholder="Enter ID number"
+                          className="h-12"
+                          required
+                          value={identificationNumber}
+                          onChange={(e) => setIdentificationNumber(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Doctor Registration Fields */}
+                {mode === 'register' && role === 'doctor' && (
+                  <div className="space-y-4 pt-4 border-t border-border">
+                    <h3 className="text-lg font-semibold">Doctor Information</h3>
+                    
+                    {/* Profile Picture */}
+                    <div>
+                      <Label htmlFor="profilePicture">Profile Picture (Optional)</Label>
+                      <div className="relative mt-1.5">
+                        <Upload className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                        <Input
+                          id="profilePicture"
+                          type="file"
+                          accept="image/*"
+                          className="pl-10 h-12"
+                          onChange={(e) => setProfilePicture(e.target.files?.[0] || null)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Gender & Age */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <Label>Gender *</Label>
+                        <Select value={gender} onValueChange={setGender}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue placeholder="Select gender" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="male">Male</SelectItem>
+                            <SelectItem value="female">Female</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="age">Age *</Label>
+                        <Input
+                          id="age"
+                          type="number"
+                          placeholder="Age"
+                          className="h-12"
+                          required
+                          value={age}
+                          onChange={(e) => setAge(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Location */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <Label htmlFor="city">City *</Label>
+                        <Input
+                          id="city"
+                          placeholder="City"
+                          className="h-12"
+                          required
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="state">State *</Label>
+                        <Input
+                          id="state"
+                          placeholder="State"
+                          className="h-12"
+                          required
+                          value={state}
+                          onChange={(e) => setState(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="country">Country *</Label>
+                        <Input
+                          id="country"
+                          placeholder="Country"
+                          className="h-12"
+                          required
+                          value={country}
+                          onChange={(e) => setCountry(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Marital Status */}
+                    <div>
+                      <Label>Marital Status *</Label>
+                      <Select value={maritalStatus} onValueChange={setMaritalStatus}>
+                        <SelectTrigger className="h-12">
+                          <SelectValue placeholder="Select marital status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="single">Single</SelectItem>
+                          <SelectItem value="married">Married</SelectItem>
+                          <SelectItem value="divorced">Divorced</SelectItem>
+                          <SelectItem value="widowed">Widowed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Hospital Affiliation */}
+                    <div>
+                      <Label htmlFor="hospitalAffiliation">Hospital Affiliation(s) *</Label>
+                      <Input
+                        id="hospitalAffiliation"
+                        placeholder="Enter hospital affiliations"
+                        className="h-12"
+                        required
+                        value={hospitalAffiliation}
+                        onChange={(e) => setHospitalAffiliation(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Specialty */}
+                    <div>
+                      <Label>Specialty *</Label>
+                      <Select value={specialty} onValueChange={setSpecialty}>
+                        <SelectTrigger className="h-12">
+                          <SelectValue placeholder="Select your specialty" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="general_practitioner">General Practitioner</SelectItem>
+                          <SelectItem value="pediatrics">Pediatrics</SelectItem>
+                          <SelectItem value="obstetrics_gynecology">Obstetrics & Gynecology</SelectItem>
+                          <SelectItem value="psychiatry">Psychiatry / Mental Health</SelectItem>
+                          <SelectItem value="dermatology">Dermatology</SelectItem>
+                          <SelectItem value="endocrinology">Endocrinology</SelectItem>
+                          <SelectItem value="rheumatology">Rheumatology</SelectItem>
+                          <SelectItem value="cardiology">Cardiology</SelectItem>
+                          <SelectItem value="oncology">Oncology</SelectItem>
+                          <SelectItem value="infectious_diseases">Infectious Diseases</SelectItem>
+                          <SelectItem value="family_medicine">Family Medicine</SelectItem>
+                          <SelectItem value="urology">Urology</SelectItem>
+                          <SelectItem value="orthopedics">Orthopedics</SelectItem>
+                          <SelectItem value="ent">ENT (Ear, Nose & Throat)</SelectItem>
+                          <SelectItem value="ophthalmology">Ophthalmology</SelectItem>
+                          <SelectItem value="neurology">Neurology</SelectItem>
+                          <SelectItem value="radiology">Radiology</SelectItem>
+                          <SelectItem value="others">Others (Please specify)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Other Specialty */}
+                    {specialty === 'others' && (
+                      <div>
+                        <Label htmlFor="otherSpecialty">Please specify your specialty *</Label>
+                        <Input
+                          id="otherSpecialty"
+                          placeholder="Enter your specialty"
+                          className="h-12"
+                          required
+                          value={otherSpecialty}
+                          onChange={(e) => setOtherSpecialty(e.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    {/* Medical License */}
+                    <div>
+                      <Label htmlFor="medicalLicense">Medical License / Registration Certificate *</Label>
+                      <div className="relative mt-1.5">
+                        <Upload className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                        <Input
+                          id="medicalLicense"
+                          type="file"
+                          accept=".pdf,.jpg,.jpeg,.png"
+                          className="pl-10 h-12"
+                          required
+                          onChange={(e) => setMedicalLicense(e.target.files?.[0] || null)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Identification */}
+                    <div className="space-y-4">
+                      <div>
+                        <Label>Means of Identification *</Label>
+                        <Select value={doctorIdType} onValueChange={setDoctorIdType}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue placeholder="Select ID type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="nin">National Identification Number (NIN)</SelectItem>
+                            <SelectItem value="passport">International Passport</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="doctorIdNumber">Identification Number *</Label>
+                        <Input
+                          id="doctorIdNumber"
+                          placeholder="Enter ID number"
+                          className="h-12"
+                          required
+                          value={doctorIdNumber}
+                          onChange={(e) => setDoctorIdNumber(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
-
-            <div>
-              <Label htmlFor="email">Email Address</Label>
-              <div className="relative mt-1.5">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="Enter your email"
-                  className="pl-10 h-12"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="password">Password</Label>
-              <div className="relative mt-1.5">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                <Input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder={mode === 'register' ? 'Create a password' : 'Enter your password'}
-                  className="pl-10 pr-10 h-12"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-            </div>
 
             {mode === 'login' && (
               <div className="flex items-center justify-between text-sm">
@@ -250,11 +932,11 @@ export default function AuthPage() {
               {isLoading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                  {mode === 'login' ? 'Signing in...' : 'Creating account...'}
+                  {mode === 'login' ? 'Signing in...' : mode === 'verify' ? 'Verifying...' : 'Creating account...'}
                 </span>
               ) : (
                 <>
-                  {mode === 'login' ? 'Sign In' : 'Create Account'}
+                  {mode === 'login' ? 'Sign In' : mode === 'verify' ? 'Verify Code' : 'Create Account'}
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -262,16 +944,18 @@ export default function AuthPage() {
           </form>
 
           {/* Toggle Mode */}
-          <p className="text-center text-sm text-muted-foreground mt-6">
-            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-            <button
-              type="button"
-              onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-              className="text-primary font-medium hover:underline"
-            >
-              {mode === 'login' ? 'Sign up' : 'Sign in'}
-            </button>
-          </p>
+          {mode !== 'verify' && (
+            <p className="text-center text-sm text-muted-foreground mt-6">
+              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+              <button
+                type="button"
+                onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+                className="text-primary font-medium hover:underline"
+              >
+                {mode === 'login' ? 'Sign up' : 'Sign in'}
+              </button>
+            </p>
+          )}
         </motion.div>
       </div>
 
@@ -289,10 +973,12 @@ export default function AuthPage() {
           className="relative z-10 max-w-md"
         >
           <h2 className="text-3xl font-bold text-primary-foreground mb-6">
-            Your Health, Our Priority
+            {mode === 'register' && role === 'patient' ? 'Complete Your Registration' : 'Your Health, Our Priority'}
           </h2>
           <p className="text-primary-foreground/80 mb-8">
-            Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.
+            {mode === 'register' && role === 'patient' 
+              ? 'Fill in your details to create your patient profile and start accessing quality healthcare services.'
+              : 'Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.'}
           </p>
 
           <ul className="space-y-4">
