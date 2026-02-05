@@ -119,6 +119,8 @@ export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
         throw error;
       }
       
+      console.log('Raw slots data:', data); // Debug log
+      
       // Filter to only show slots for dates within daysAhead
       const today = new Date();
       const slots: AvailableSlot[] = data || [];
