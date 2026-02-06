@@ -153,6 +153,7 @@ export function ConsultationRoom({
         localVideoRef.current.play().catch(console.error);
       }
 
+      return stream;
     } catch (err) {
       console.error('[Media] Error initializing media:', err);
       
@@ -167,6 +168,7 @@ export function ConsultationRoom({
         description: 'Unable to access camera/microphone. Please check permissions.',
         variant: 'destructive'
       });
+      return null;
     }
   }, [consultationType, participantRole, isAdmitted]);
 
@@ -420,15 +422,21 @@ export function ConsultationRoom({
           });
         });
 
-        webrtc.onAdmitted(() => {
+        webrtc.onAdmitted(async () => {
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
           setIsCallStarted(true);
           // For patient, add local stream tracks if peer connection exists
           if (participantRole === 'patient') {
             console.log('[Patient Admission] Adding patient stream to peer connection');
-            const streamToUse = localStreamRef.current || new MediaStream();
-            webrtc.initializePeer(streamToUse);
+            let streamToUse = localStreamRef.current;
+            if (!streamToUse || streamToUse.getTracks().length === 0) {
+              console.log('[Patient Admission] No local media stream yet, initializing media before WebRTC');
+              const initialized = await initializeMedia();
+              streamToUse = initialized ?? localStreamRef.current ?? null;
+            }
+            const finalStream = streamToUse ?? new MediaStream();
+            webrtc.initializePeer(finalStream);
           }
           toast({
             title: 'Admitted to Call',

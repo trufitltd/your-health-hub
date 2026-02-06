@@ -69,8 +69,8 @@ const Index = () => {
                 Trusted by 10,000+ patients
               </span>
               <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6">
-                Your Health,{' '}
-                <span className="text-gradient">Our Priority</span>
+                -Your Doctor,{' '}
+                <span className="text-gradient">Anytime, Anywhere</span>
               </h1>
               <p className="text-lg text-muted-foreground mb-8 max-w-xl mx-auto lg:mx-0">
                 Connect with certified doctors and specialists instantly. Get expert medical consultations through secure video calls, chat, and more — all from the comfort of your home.

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '@/components/ui/use-toast';
+import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 const navLinks = [
   { href: '/', label: 'Home' },
@@ -59,13 +60,9 @@ export function Header() {
         <nav className="flex items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 group">
-            <div className="relative">
-              <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center shadow-md group-hover:shadow-glow transition-shadow">
-                <Stethoscope className="w-5 h-5 text-primary-foreground" />
-              </div>
-            </div>
+            <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
             <span className="text-xl font-bold text-foreground">
-              MyE<span className="text-primary">Doctor</span>
+              MyE-<span className="text-primary">Doctor</span>
             </span>
           </Link>
 
