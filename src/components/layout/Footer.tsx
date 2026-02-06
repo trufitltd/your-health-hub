@@ -41,7 +41,7 @@ export function Footer() {
                 <Stethoscope className="w-5 h-5 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold">
-                MyE<span className="text-primary">Doctor</span>
+                MyE-<span className="text-primary">Doctor</span>
               </span>
             </Link>
             <p className="text-primary-foreground/70 text-sm mb-6 max-w-xs">

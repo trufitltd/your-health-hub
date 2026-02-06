@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { createDefaultSchedule } from '@/services/scheduleService';
 import { smsService } from '@/services/smsService';
+import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 type AuthMode = 'login' | 'register' | 'verify';
 type UserRole = 'patient' | 'doctor';
@@ -377,11 +378,9 @@ export default function AuthPage() {
         >
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 mb-8">
-            <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
-              <Stethoscope className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
             <span className="text-xl font-bold">
-              MyE<span className="text-primary">Doctor</span>
+              MyE-<span className="text-primary">Doctor</span>
             </span>
           </Link>
 
