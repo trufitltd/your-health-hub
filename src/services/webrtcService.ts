@@ -41,6 +41,9 @@ export class WebRTCService {
   private isConnected = false;
   private iceRestartInProgress = false;
   private localDescriptionSet = false;
+  private currentOfferId: string | null = null;
+  private localTracksAdded = false;
+  private transceiversInitialized = false;
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -59,15 +62,7 @@ export class WebRTCService {
       console.log('[WebRTC] Peer connection already exists with remote description, adding tracks only');
       this.localStream = localStream;
       
-      console.log('Adding all tracks from stream:', localStream.getTracks().length);
-      const addTracksWithValidation = async () => {
-        for (const track of localStream.getTracks()) {
-          console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
-          this.peerConnection?.addTrack(track, localStream);
-        }
-      };
-      
-      await addTracksWithValidation();
+      await this.addLocalTracks(localStream);
       return;
     }
     
@@ -94,17 +89,13 @@ export class WebRTCService {
         rtcpMuxPolicy: 'require'
       });
 
-      console.log('Adding all tracks from stream:', localStream.getTracks().length);
-      
-      // Add tracks directly without validation to avoid corruption
-      const addTracksWithValidation = async () => {
-        for (const track of localStream.getTracks()) {
-          console.log('Adding track:', track.kind, track.enabled ? 'enabled' : 'disabled', 'id:', track.id);
-          this.peerConnection?.addTrack(track, localStream);
-        }
-      };
-      
-      await addTracksWithValidation();
+      if (this.isInitiator) {
+        console.log('Initiator initializing transceivers and tracks before offer');
+        this.ensureOrderedTransceivers(this.getLocalTrackKinds(localStream));
+        await this.addLocalTracks(localStream);
+      } else {
+        console.log('Answerer deferring local tracks until remote offer is set');
+      }
 
       this.peerConnection.ontrack = (event) => {
         console.log('ontrack event received:', event.track.kind, 'id:', event.track.id, 'streams:', event.streams.length);
@@ -268,6 +259,11 @@ export class WebRTCService {
       this.peerConnection.onnegotiationneeded = async () => {
         console.log('Negotiation needed, makingOffer:', this.makingOffer);
         if (this.makingOffer || !this.isInitiator || this.iceRestartInProgress) return;
+        // Avoid creating offers before the peer is ready (pre-admission)
+        if (!this.peerReady) {
+          console.log('Negotiation needed but peer not ready yet, skipping offer');
+          return;
+        }
         
         try {
           this.makingOffer = true;
@@ -279,6 +275,10 @@ export class WebRTCService {
           this.makingOffer = false;
         }
       };
+
+      if (this.isInitiator) {
+        await this.cleanupStaleSignals();
+      }
 
       this.unsubscribe = this.subscribeToSignals();
       this.startPolling();
@@ -322,6 +322,63 @@ export class WebRTCService {
       console.error('Error initializing WebRTC peer:', error);
       throw error;
     }
+  }
+
+  private async addLocalTracks(stream?: MediaStream | null) {
+    if (!this.peerConnection || this.localTracksAdded) return;
+    const streamToUse = stream ?? this.localStream;
+    if (!streamToUse) return;
+
+    const orderedTracks = this.getOrderedTracks(streamToUse);
+    const transceivers = this.peerConnection.getTransceivers();
+
+    console.log('Adding local tracks to peer connection:', orderedTracks.length);
+    for (const track of orderedTracks) {
+      const matching = transceivers.find(t => t.receiver.track?.kind === track.kind);
+      if (matching) {
+        console.log('Replacing track on transceiver:', track.kind, 'id:', track.id);
+        await matching.sender.replaceTrack(track);
+      } else {
+        if (this.isInitiator) {
+          // Initiator can create transceivers before the offer is made
+          this.ensureOrderedTransceivers(this.getLocalTrackKinds(streamToUse));
+          const fallback = this.peerConnection.getTransceivers().find(t => t.receiver.track?.kind === track.kind);
+          if (fallback) {
+            console.log('Replacing track on newly created transceiver:', track.kind, 'id:', track.id);
+            await fallback.sender.replaceTrack(track);
+          } else {
+            console.warn('No matching transceiver found for track kind on initiator:', track.kind);
+          }
+        } else {
+          // Answerer must not create new transceivers; that can change m-line ordering
+          console.warn('No matching transceiver found for track kind on answerer:', track.kind, '- skipping to avoid m-line mismatch');
+        }
+      }
+    }
+    this.localTracksAdded = true;
+  }
+
+  private getOrderedTracks(stream: MediaStream): MediaStreamTrack[] {
+    return [...stream.getTracks()].sort((a, b) => {
+      const rank = (kind: string) => (kind === 'audio' ? 0 : kind === 'video' ? 1 : 2);
+      return rank(a.kind) - rank(b.kind);
+    });
+  }
+
+  private getLocalTrackKinds(stream: MediaStream): Array<'audio' | 'video'> {
+    const kinds = this.getOrderedTracks(stream)
+      .map(track => track.kind)
+      .filter((kind): kind is 'audio' | 'video' => kind === 'audio' || kind === 'video');
+    return kinds;
+  }
+
+  private ensureOrderedTransceivers(kinds: Array<'audio' | 'video'>) {
+    if (!this.peerConnection || kinds.length === 0 || this.transceiversInitialized) return;
+    console.log('Creating ordered transceivers:', kinds.join(', '));
+    for (const kind of kinds) {
+      this.peerConnection.addTransceiver(kind, { direction: 'sendrecv' });
+    }
+    this.transceiversInitialized = true;
   }
 
   private async validateVideoTrack(track: MediaStreamTrack): Promise<boolean> {
@@ -423,6 +480,25 @@ export class WebRTCService {
     }
   }
 
+  private async cleanupStaleSignals() {
+    try {
+      console.log('Cleaning up stale WebRTC signals for session:', this.sessionId);
+      const { error } = await supabase
+        .from('webrtc_signals')
+        .delete()
+        .eq('session_id', this.sessionId)
+        .lt('created_at', this.doctorJoinedAt.toISOString());
+
+      if (error) {
+        console.warn('Failed to cleanup stale WebRTC signals:', error);
+      } else {
+        console.log('Stale WebRTC signals cleaned');
+      }
+    } catch (err) {
+      console.warn('Error during stale signal cleanup:', err);
+    }
+  }
+
   private subscribeToSignals() {
     console.log('Subscribing to WebRTC signals for session:', this.sessionId);
     const channel = supabase.channel(`webrtc_signals_${this.sessionId}`);
@@ -434,6 +510,14 @@ export class WebRTCService {
       filter: `session_id=eq.${this.sessionId}`
     }, async (payload) => {
       const signal = payload.new as WebRTCSignal;
+      // Skip signals created before this peer joined (stale from prior attempts)
+      if (signal.created_at) {
+        const createdAt = new Date(signal.created_at);
+        if (createdAt < this.doctorJoinedAt) {
+          console.log('Skipping stale realtime signal from before join:', signal.signal_data?.type);
+          return;
+        }
+      }
       console.log('Received signal:', signal.signal_data?.type, 'from:', signal.sender_id);
       if (signal.sender_id !== this.userId) {
         console.log('Processing signal from other participant');
@@ -470,9 +554,18 @@ export class WebRTCService {
               continue;
             }
 
+            const signalTime = new Date(signal.created_at);
+            if (signalTime < this.doctorJoinedAt) {
+              console.log('Skipping stale polled signal from before join:', signal.signal_data.type);
+              this.processedSignals.add(signal.id);
+              setTimeout(async () => {
+                await supabase.from('webrtc_signals').delete().eq('id', signal.id);
+              }, 2000);
+              continue;
+            }
+
             // Skip old join_lobby signals in polling but allow real-time ones
             if (this.isInitiator && signal.signal_data.type === 'join_lobby') {
-              const signalTime = new Date(signal.created_at);
               if (signalTime < this.doctorJoinedAt) {
                 console.log('Skipping old join_lobby signal from before doctor joined');
                 this.processedSignals.add(signal.id);
@@ -536,12 +629,19 @@ export class WebRTCService {
         if (pc.signalingState === 'stable' && !pc.remoteDescription) {
           console.log('Setting remote description from offer');
           try {
+            const offerId = (signalData.offer_id as string | undefined) ?? null;
             // Normalize the offer SDP before setting it
             const normalizedOffer = {
               ...offer,
               sdp: this.removeProblematicExtensions(offer.sdp || '')
             };
             await pc.setRemoteDescription(new RTCSessionDescription(normalizedOffer));
+
+            // Ensure local tracks are added after setting remote description
+            // so transceiver order matches the offer and avoids m-line mismatch.
+            await this.addLocalTracks();
+            this.forceSendRecvForLocalTracks();
+            this.logSdpMediaLines('offer', normalizedOffer.sdp || '');
             
             const answer = await pc.createAnswer({
               offerToReceiveAudio: true,
@@ -552,11 +652,12 @@ export class WebRTCService {
               ...answer,
               sdp: this.removeProblematicExtensions(answer.sdp || '')
             };
+            this.logSdpMediaLines('answer', normalizedAnswer.sdp || '');
             await pc.setLocalDescription(normalizedAnswer);
             console.log('Answer created and set as local description');
             this.localDescriptionSet = true;
             
-            await this.sendSignal({ type: 'answer', answer: normalizedAnswer });
+            await this.sendSignal({ type: 'answer', answer: normalizedAnswer, offer_id: offerId });
             await this.flushCandidateQueue();
           } catch (err) {
             console.error('Error handling offer:', err);
@@ -568,6 +669,11 @@ export class WebRTCService {
       else if (signalData.type === 'answer') {
         const answer = signalData.answer as RTCSessionDescriptionInit;
         console.log('Received answer, signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
+        const answerOfferId = (signalData.offer_id as string | undefined) ?? null;
+        if (this.currentOfferId && (!answerOfferId || answerOfferId !== this.currentOfferId)) {
+          console.warn('Ignoring answer without matching offer_id:', answerOfferId);
+          return;
+        }
 
         if (pc.signalingState === 'have-local-offer' && !pc.remoteDescription) {
           console.log('Setting remote description from answer');
@@ -577,6 +683,7 @@ export class WebRTCService {
               ...answer,
               sdp: this.removeProblematicExtensions(answer.sdp || '')
             };
+            this.logSdpMediaLines('answer (received)', normalizedAnswer.sdp || '');
             await pc.setRemoteDescription(new RTCSessionDescription(normalizedAnswer));
             console.log('Remote description set from answer');
             await this.flushCandidateQueue();
@@ -620,9 +727,13 @@ export class WebRTCService {
       }
       else if (signalData.type === 'ready') {
         this.peerReady = true;
-        if (this.isInitiator && !this.peerConnection.localDescription && !this.makingOffer) {
-          console.log('Peer ready, creating offer');
-          await this.createOffer();
+        if (this.isInitiator && !this.makingOffer) {
+          const hasRemoteDescription = Boolean(this.peerConnection.remoteDescription);
+          const hasLocalDescription = Boolean(this.peerConnection.localDescription);
+          if (!hasLocalDescription && !hasRemoteDescription) {
+            console.log('Peer ready, creating offer');
+            await this.createOffer();
+          }
         }
       }
     } catch (error) {
@@ -760,9 +871,34 @@ export class WebRTCService {
     return sdp.replace(/a=extmap:\d+ http:\/\/www\.webrtc\.org\/experiments\/rtp-hdrext\/abs-send-time\r\n/g, '');
   }
 
+  private logSdpMediaLines(label: string, sdp: string) {
+    try {
+      const lines = sdp.split('\n').filter(l => l.startsWith('m='));
+      console.log(`[SDP] ${label} media lines:`, lines.join(' | '));
+    } catch (err) {
+      console.warn('[SDP] Failed to parse SDP media lines:', err);
+    }
+  }
+
+  private forceSendRecvForLocalTracks() {
+    if (!this.peerConnection || !this.localStream) return;
+    const kinds = new Set(this.localStream.getTracks().map(t => t.kind));
+    const transceivers = this.peerConnection.getTransceivers();
+    for (const transceiver of transceivers) {
+      const kind = transceiver.receiver.track?.kind;
+      if (kind && kinds.has(kind)) {
+        if (transceiver.direction !== 'sendrecv') {
+          console.log('Forcing transceiver direction to sendrecv for', kind);
+          transceiver.direction = 'sendrecv';
+        }
+      }
+    }
+  }
+
   private async createOffer(): Promise<void> {
     try {
       const offer = await this.peerConnection!.createOffer();
+      this.currentOfferId = crypto.randomUUID();
       // Normalize the offer SDP to remove problematic extensions
       const normalizedOffer = {
         ...offer,
@@ -771,7 +907,7 @@ export class WebRTCService {
       await this.peerConnection!.setLocalDescription(normalizedOffer);
       console.log('Offer created and set as local description');
       this.localDescriptionSet = true;
-      await this.sendSignal({ type: 'offer', offer: normalizedOffer });
+      await this.sendSignal({ type: 'offer', offer: normalizedOffer, offer_id: this.currentOfferId });
     } catch (err) {
       console.error('Error creating offer:', err);
     }
