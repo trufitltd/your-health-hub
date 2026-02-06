@@ -38,6 +38,7 @@ import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
 import { useQueryClient } from '@tanstack/react-query';
+import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 // Dummy Patient Data
 const patientData = {
@@ -447,11 +448,9 @@ const PatientPortal = () => {
         <div className="container mx-auto px-2 sm:px-4">
           <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
-                <Heart className="w-5 h-5 text-primary-foreground" />
-              </div>
+              <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
               <span className="text-xl font-bold">
-                MyE<span className="text-primary">Doctor</span>
+                MyE-<span className="text-primary">Doctor</span>
               </span>
             </Link>
 
