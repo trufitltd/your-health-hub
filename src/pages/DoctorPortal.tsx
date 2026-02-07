@@ -190,13 +190,19 @@ const DoctorPortal = () => {
     }
   };
 
-  // Calculate today's appointments and next appointment
+  // Calculate upcoming appointments (next 24 hours) and next appointment
   const today = new Date().toISOString().split('T')[0];
   const now = new Date();
+  const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   
-  const todaysAppointments = (fetchedAppointments || []).filter(apt => 
-    apt.date === today && (apt.status === 'confirmed' || apt.status === 'pending')
-  );
+  const upcomingSchedule = (fetchedAppointments || []).filter(apt => {
+    const aptDateTime = new Date(`${apt.date}T${apt.time}`);
+    return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'pending');
+  }).sort((a, b) => {
+    const dateA = new Date(`${a.date}T${a.time}`);
+    const dateB = new Date(`${b.date}T${b.time}`);
+    return dateA.getTime() - dateB.getTime();
+  });
   
   // Find next appointment
   const upcomingAppointments = (fetchedAppointments || [])
@@ -508,7 +514,7 @@ const DoctorPortal = () => {
                     Welcome back, Dr {displayName.split(' ')[0]}! 👋
                   </h1>
                   <p className="text-xs sm:text-sm text-primary-foreground/80">
-                    You have {todaysAppointments.length} consultations scheduled today.
+                    You have {upcomingSchedule.length} consultations scheduled in the next 24 hours.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -569,22 +575,22 @@ const DoctorPortal = () => {
               {/* Overview Tab */}
               <TabsContent value="overview" className="space-y-6">
                 <div className="grid lg:grid-cols-2 gap-6">
-                  {/* Today's Schedule Preview */}
+                  {/* Upcoming Schedule Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">Today's Schedule</CardTitle>
+                      <CardTitle className="text-lg">Upcoming Schedule</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('schedule')}>
                         View All <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
-                        {todaysAppointments.length === 0 ? (
+                        {upcomingSchedule.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">No appointments scheduled for today</p>
+                            <p className="text-muted-foreground">No appointments scheduled for the next 24 hours</p>
                           </div>
                         ) : (
-                          todaysAppointments.slice(0, 4).map((apt) => (
+                          upcomingSchedule.slice(0, 4).map((apt) => (
                             <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${
                               apt.status === 'confirmed' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
                             }`}>
