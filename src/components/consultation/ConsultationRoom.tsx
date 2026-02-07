@@ -67,6 +67,8 @@ export function ConsultationRoom({
   const [remoteAudioPublished, setRemoteAudioPublished] = useState(true);
   const [myAvatarUrl, setMyAvatarUrl] = useState<string | null>(null);
   const [participantAvatarUrl, setParticipantAvatarUrl] = useState<string | null>(null);
+  const [myAvatarLoaded, setMyAvatarLoaded] = useState<boolean | null>(null);
+  const [participantAvatarLoaded, setParticipantAvatarLoaded] = useState<boolean | null>(null);
   const [webrtcService, setWebrtcService] = useState<WebRTCService | null>(null);
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [isPatientWaiting, setIsPatientWaiting] = useState(false);
@@ -104,10 +106,78 @@ export function ConsultationRoom({
     fallbackClassName: string
   ) => (
     <Avatar className={className}>
-      {imageUrl ? <AvatarImage src={imageUrl} /> : null}
+      {imageUrl && console.debug('[Avatar Render] imageUrl:', imageUrl, 'initials:', initials)}
+      {imageUrl ? (
+        <AvatarImage key={imageUrl} src={imageUrl} onError={() => console.warn('[Avatar Image] failed to load:', imageUrl)} />
+      ) : null}
       <AvatarFallback className={fallbackClassName}>{initials}</AvatarFallback>
     </Avatar>
   );
+
+  // Prefetch avatars and log load success/failure (helps diagnose patient-side broken images)
+  useEffect(() => {
+    if (!myAvatarUrl) {
+      setMyAvatarLoaded(null);
+      return;
+    }
+    console.debug('[Prefetch Avatar] loading myAvatarUrl:', myAvatarUrl);
+    const img = new Image();
+    img.onload = () => {
+      console.debug('[Prefetch Avatar] myAvatarUrl loaded successfully');
+      setMyAvatarLoaded(true);
+    };
+    img.onerror = (e) => {
+      console.warn('[Prefetch Avatar] myAvatarUrl failed to load:', myAvatarUrl, e);
+      setMyAvatarLoaded(false);
+    };
+    // cache-bust to avoid stale 304 issues during debugging
+    img.src = myAvatarUrl + (myAvatarUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [myAvatarUrl]);
+
+  useEffect(() => {
+    if (!participantAvatarUrl) {
+      setParticipantAvatarLoaded(null);
+      return;
+    }
+    console.debug('[Prefetch Avatar] loading participantAvatarUrl:', participantAvatarUrl);
+    const img = new Image();
+    img.onload = () => {
+      console.debug('[Prefetch Avatar] participantAvatarUrl loaded successfully');
+      setParticipantAvatarLoaded(true);
+    };
+    img.onerror = (e) => {
+      console.warn('[Prefetch Avatar] participantAvatarUrl failed to load:', participantAvatarUrl, e);
+      setParticipantAvatarLoaded(false);
+    };
+    img.src = participantAvatarUrl + (participantAvatarUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [participantAvatarUrl]);
+
+  // Remote video active computed flag and avatar fallback diagnostics
+  const remoteVideoActive = hasRemoteStream && remoteVideoEnabled && remoteVideoPublished;
+
+  // Helpful flag for debugging/display: when true, we should show the avatar fallback
+  const showAvatarFallback = connectionStatus === 'connected' && (!remoteVideoActive || !remoteVideoPublished || !remoteVideoEnabled);
+
+  useEffect(() => {
+    console.log('[Avatar Fallback] Evaluated showAvatarFallback:', showAvatarFallback, {
+      connectionStatus,
+      hasRemoteStream,
+      remoteVideoEnabled,
+      remoteVideoPublished,
+      remoteVideoActive,
+      participantAvatarLoaded,
+      participantAvatarUrl
+    });
+  }, [showAvatarFallback, connectionStatus, hasRemoteStream, remoteVideoEnabled, remoteVideoPublished, remoteVideoActive, participantAvatarLoaded, participantAvatarUrl]);
+  
 
   // Format duration
   const formatDuration = (seconds: number) => {
@@ -198,55 +268,89 @@ export function ConsultationRoom({
       try {
         console.log('[Init] Starting consultation room initialization');
 
-        const loadAvatars = async (patientIdValue: string, doctorIdValue: string) => {
-          const [{ data: patientReg }, { data: doctorRowById }, { data: doctorRowByUser }] = await Promise.all([
-            supabase
-              .from('patient_registrations')
-              .select('profile_picture_url')
-              .eq('user_id', patientIdValue)
-              .maybeSingle(),
-            supabase
-              .from('doctors')
-              .select('avatar_url, user_id')
-              .eq('id', doctorIdValue)
-              .maybeSingle(),
-            supabase
-              .from('doctors')
-              .select('avatar_url, user_id')
-              .eq('user_id', doctorIdValue)
-              .maybeSingle()
-          ]);
+        const loadAvatars = async (patientIdValue: string | null, doctorIdValue: string | null) => {
+          try {
+            console.log('[loadAvatars] ENTERED with patientIdValue:', patientIdValue, 'doctorIdValue:', doctorIdValue);
 
-          const doctorRow = doctorRowById ?? doctorRowByUser ?? null;
-          const doctorUserId = (doctorRow?.user_id as string | null | undefined) ?? null;
-
-          const [{ data: doctorRegByUser }, { data: doctorRegById }] = await Promise.all([
-            doctorUserId
-              ? supabase
-                  .from('doctor_registrations')
+            let patientReg = null;
+            if (patientIdValue) {
+              try {
+                console.log('[Avatar Fetch] Fetching patient_registrations for user_id:', patientIdValue);
+                const resp = await supabase
+                  .from('patient_registrations')
                   .select('profile_picture_url')
-                  .eq('user_id', doctorUserId)
-                  .maybeSingle()
-              : Promise.resolve({ data: null }),
-            supabase
-              .from('doctor_registrations')
-              .select('profile_picture_url')
-              .eq('id', doctorIdValue)
-              .maybeSingle()
-          ]);
+                  .eq('user_id', patientIdValue)
+                  .maybeSingle();
+                console.log('[Avatar Fetch] patient_registrations response:', resp);
+                if (resp.error) console.warn('[Supabase] patient_registrations error:', resp.error, resp.status);
+                patientReg = resp.data ?? null;
+              } catch (err) {
+                console.error('[Supabase] patient_registrations exception:', err);
+              }
+            }
 
-          const patientAvatar = patientReg?.profile_picture_url ?? null;
-          const doctorAvatar =
-            doctorRegByUser?.profile_picture_url ??
-            doctorRegById?.profile_picture_url ??
-            doctorRow?.avatar_url ??
-            null;
-          if (participantRole === 'doctor') {
-            setMyAvatarUrl(doctorAvatar);
-            setParticipantAvatarUrl(patientAvatar);
-          } else {
-            setMyAvatarUrl(patientAvatar);
-            setParticipantAvatarUrl(doctorAvatar);
+            console.log('[loadAvatars] After patient fetch, about to check doctorIdValue:', doctorIdValue);
+
+            let doctorReg = null;
+            if (doctorIdValue) {
+              try {
+                console.log('[Avatar Fetch] Fetching doctors table for id:', doctorIdValue);
+                const resp = await supabase
+                  .from('doctors')
+                  .select('avatar_url')
+                  .eq('id', doctorIdValue)
+                  .maybeSingle();
+                console.log('[Avatar Fetch] doctors response:', resp);
+                if (resp.error) console.warn('[Supabase] doctors error:', resp.error, resp.status);
+                doctorReg = resp.data ?? null;
+                console.log('[Avatar Fetch] doctorReg from doctors table:', doctorReg);
+                
+                // If avatar_url is null in doctors table, try doctor_registrations as fallback
+                if (!doctorReg?.avatar_url) {
+                  console.log('[Avatar Fetch] No avatar_url in doctors table, trying doctor_registrations fallback');
+                  try {
+                    const registrationResp = await supabase
+                      .from('doctor_registrations')
+                      .select('profile_picture_url')
+                      .eq('user_id', doctorIdValue)
+                      .maybeSingle();
+                    console.log('[Avatar Fetch] doctor_registrations fallback response:', registrationResp);
+                    if (registrationResp.data?.profile_picture_url) {
+                      doctorReg = { avatar_url: registrationResp.data.profile_picture_url };
+                      console.log('[Avatar Fetch] Using avatar from doctor_registrations:', doctorReg);
+                    }
+                  } catch (fallbackErr) {
+                    console.log('[Avatar Fetch] doctor_registrations fallback blocked by RLS (expected for patients)');
+                  }
+                }
+              } catch (err) {
+                console.error('[Supabase] doctors fetch exception:', err);
+              }
+            } else {
+              console.log('[Avatar Fetch] doctorIdValue is null/undefined, skipping doctor fetch');
+            }
+
+            console.log('[loadAvatars] About to normalize, patientReg:', patientReg, 'doctorReg:', doctorReg);
+            const normalize = (v: any) => (typeof v === 'string' && v.trim().length > 0) ? v : null;
+            const patientAvatar = normalize(patientReg?.profile_picture_url ?? null);
+            const doctorAvatar = normalize(doctorReg?.avatar_url ?? null);
+
+            console.log('[Avatars] Raw - patientAvatarRaw:', patientReg?.profile_picture_url, 'doctorAvatarRaw:', doctorReg?.avatar_url);
+            console.log('[Avatars] Normalized - patientAvatar:', patientAvatar, 'doctorAvatar:', doctorAvatar);
+
+            console.log('[loadAvatars] participantRole:', participantRole);
+            if (participantRole === 'doctor') {
+              console.log('[Avatars] Doctor role: setting myAvatarUrl to doctorAvatar');
+              setMyAvatarUrl(doctorAvatar);
+              setParticipantAvatarUrl(patientAvatar);
+            } else {
+              console.log('[Avatars] Patient role: setting myAvatarUrl to patientAvatar, participantAvatarUrl to doctorAvatar');
+              setMyAvatarUrl(patientAvatar);
+              setParticipantAvatarUrl(doctorAvatar);
+            }
+            console.log('[loadAvatars] Avatar state updates complete');
+          } catch (err) {
+            console.error('[loadAvatars] Unexpected error in loadAvatars:', err, err instanceof Error ? err.stack : '');
           }
         };
         
@@ -276,13 +380,19 @@ export function ConsultationRoom({
           await loadAvatars(appointmentData.patient_id, appointmentData.doctor_id);
         } else {
           console.log('[Session] Using existing session:', session.id);
-          const { data: appointmentData } = await supabase
+          console.log('[Session] About to fetch appointment data for id:', appointmentId);
+          const { data: appointmentData, error: aptError } = await supabase
             .from('appointments')
             .select('patient_id, doctor_id')
             .eq('id', appointmentId)
             .single();
+          console.log('[Session] Appointment fetch result - data:', appointmentData, 'error:', aptError);
           if (appointmentData) {
+            console.log('[Session] Calling loadAvatars with patient_id:', appointmentData.patient_id, 'doctor_id:', appointmentData.doctor_id);
             await loadAvatars(appointmentData.patient_id, appointmentData.doctor_id);
+            console.log('[Session] loadAvatars completed');
+          } else {
+            console.warn('[Session] No appointmentData returned for existing session');
           }
         }
 
@@ -944,7 +1054,7 @@ export function ConsultationRoom({
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-800">
                   {renderAvatar(
-                    myAvatarUrl,
+                    myAvatarLoaded ? myAvatarUrl : null,
                     myInitials,
                     'w-20 h-20',
                     'bg-primary text-primary-foreground text-2xl'
@@ -974,7 +1084,7 @@ export function ConsultationRoom({
 
           {(!isVideoEnabled || consultationType !== 'video') && (
             renderAvatar(
-              myAvatarUrl,
+              myAvatarLoaded ? myAvatarUrl : null,
               myInitials,
               'w-24 h-24 mx-auto',
               'bg-primary text-primary-foreground text-3xl'
@@ -997,7 +1107,7 @@ export function ConsultationRoom({
             </div>
             <div className="flex justify-center">
               {renderAvatar(
-                participantAvatarUrl,
+                participantAvatarLoaded ? participantAvatarUrl : null,
                 participantInitials,
                 'w-16 h-16',
                 'bg-slate-700 text-slate-300 text-xl'
@@ -1048,7 +1158,7 @@ export function ConsultationRoom({
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-800">
                   {renderAvatar(
-                    myAvatarUrl,
+                    myAvatarLoaded ? myAvatarUrl : null,
                     myInitials,
                     'w-20 h-20',
                     'bg-primary text-primary-foreground text-2xl'
@@ -1090,7 +1200,7 @@ export function ConsultationRoom({
             </div>
             <div className="flex justify-center">
               {renderAvatar(
-                participantAvatarUrl,
+                participantAvatarLoaded ? participantAvatarUrl : null,
                 participantInitials,
                 'w-16 h-16',
                 'bg-slate-700 text-slate-300 text-xl'
@@ -1139,8 +1249,6 @@ export function ConsultationRoom({
       </div>
     );
   }
-
-  const remoteVideoActive = hasRemoteStream && remoteVideoEnabled && remoteVideoPublished;
 
   return (
     <div 
@@ -1215,7 +1323,7 @@ export function ConsultationRoom({
                 className="text-center space-y-6 p-8 bg-[#252542] rounded-2xl shadow-2xl max-w-sm mx-4"
               >
                 {renderAvatar(
-                  participantAvatarUrl,
+                  participantAvatarLoaded ? participantAvatarUrl : null,
                   participantInitials,
                   'w-20 h-20 mx-auto',
                   'bg-primary text-primary-foreground text-2xl'
@@ -1348,7 +1456,7 @@ export function ConsultationRoom({
                         // Connected but remote video is off - show avatar
                         <div className="text-center">
                           {renderAvatar(
-                            participantAvatarUrl,
+                            participantAvatarLoaded ? participantAvatarUrl : null,
                             participantInitials,
                             'w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4',
                             'bg-slate-700 text-slate-300 text-3xl sm:text-4xl'
@@ -1371,7 +1479,7 @@ export function ConsultationRoom({
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
                               {renderAvatar(
-                                myAvatarUrl,
+                                myAvatarLoaded ? myAvatarUrl : null,
                                 myInitials,
                                 'w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4',
                                 'bg-primary text-primary-foreground text-3xl sm:text-4xl'
@@ -1395,7 +1503,7 @@ export function ConsultationRoom({
                             ) : (
                               <div className="w-full h-full flex items-center justify-center">
                                 {renderAvatar(
-                                  myAvatarUrl,
+                                  myAvatarLoaded ? myAvatarUrl : null,
                                   myInitials,
                                   'w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4',
                                   'bg-primary text-primary-foreground text-3xl sm:text-4xl'
@@ -1405,7 +1513,7 @@ export function ConsultationRoom({
                           ) : (
                             <div className="text-center">
                               {renderAvatar(
-                                participantAvatarUrl,
+                                participantAvatarLoaded ? participantAvatarUrl : null,
                                 participantInitials,
                                 'w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-4',
                                 'bg-slate-700 text-slate-300 text-3xl sm:text-4xl'
