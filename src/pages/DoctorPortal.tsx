@@ -282,6 +282,15 @@ const DoctorPortal = () => {
 
       if (updateError) throw updateError;
 
+      const { error: doctorAvatarError } = await supabase
+        .from('doctors')
+        .update({ avatar_url: urlData.publicUrl })
+        .eq('id', user.id);
+
+      if (doctorAvatarError) {
+        console.warn('Failed to sync doctor avatar to public profile:', doctorAvatarError);
+      }
+
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
       toast({ title: 'Success', description: 'Profile picture updated successfully!' });
     } catch (error) {
