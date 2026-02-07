@@ -5,7 +5,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, BarChart3
+  TrendingUp, CheckCircle, XCircle, BarChart3
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -100,6 +100,7 @@ const DoctorPortal = () => {
   const [viewNotesOpen, setViewNotesOpen] = useState(false);
   const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
   const [appointmentFilter, setAppointmentFilter] = useState<'all' | 'accepted' | 'rejected'>('accepted');
+  const [requestFilter, setRequestFilter] = useState<'pending' | 'accepted' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
   const adminEmails = useMemo(() => {
@@ -260,6 +261,32 @@ const DoctorPortal = () => {
         return fetchedAppointments;
     }
   }, [fetchedAppointments, appointmentFilter]);
+
+  const filteredRequests = useMemo(() => {
+    const allRequests = (fetchedAppointments || []).map(apt => ({
+      id: apt.id,
+      patient: apt.patient_name || 'Unknown Patient',
+      age: apt.patient_age || 'N/A',
+      requestedDate: apt.date,
+      requestedTime: apt.time,
+      consultationType: apt.type,
+      reason: apt.notes || 'No reason provided',
+      priority: 'normal',
+      status: apt.status,
+    }));
+
+    switch (requestFilter) {
+      case 'pending':
+        return allRequests.filter(req => req.status === 'pending');
+      case 'accepted':
+        return allRequests.filter(req => req.status === 'confirmed');
+      case 'rejected':
+        return allRequests.filter(req => req.status === 'rejected');
+      case 'all':
+      default:
+        return allRequests;
+    }
+  }, [requestFilter, fetchedAppointments]);
 
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
@@ -795,19 +822,34 @@ const DoctorPortal = () => {
               <TabsContent value="requests" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Appointment Requests</CardTitle>
-                    <CardDescription>Pending approval from patients</CardDescription>
+                    <div>
+                      <CardTitle>Appointment Requests</CardTitle>
+                      <CardDescription>Manage all appointment requests and approvals</CardDescription>
+                    </div>
+                    <div className="flex justify-end items-center gap-2 mt-4">
+                      <label className="text-sm text-muted-foreground hidden sm:block">Filter</label>
+                      <select
+                        value={requestFilter}
+                        onChange={(e) => setRequestFilter(e.target.value as any)}
+                        className="border border-border rounded px-2 py-1 text-sm bg-background"
+                      >
+                        <option value="pending">Pending Approvals</option>
+                        <option value="accepted">Accepted Requests</option>
+                        <option value="rejected">Rejected Requests</option>
+                        <option value="all">All Requests</option>
+                      </select>
+                    </div>
                   </CardHeader>
                   <CardContent>
-                    {pendingRequests.length === 0 ? (
+                    {filteredRequests.length === 0 ? (
                       <div className="text-center py-12">
                         <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground">No pending appointment requests</p>
+                        <p className="text-muted-foreground">No appointment requests found</p>
                         <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {pendingRequests.map((request) => (
+                        {filteredRequests.map((request) => (
                           <div key={request.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <Avatar className="w-12 h-12">
@@ -846,14 +888,30 @@ const DoctorPortal = () => {
                                 </p>
                                 <p className="text-sm text-muted-foreground">{request.requestedTime}</p>
                               </div>
-                              <div className="flex flex-col gap-2 w-full sm:w-auto">
-                                <Button size="sm" className="bg-success hover:bg-success/90 w-full" onClick={() => handleAcceptRequest(request.id)}>
-                                  Accept
-                                </Button>
-                                <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 w-full" onClick={() => handleDeclineRequest(request.id)}>
-                                  Decline
-                                </Button>
-                              </div>
+                              {request.status === 'pending' ? (
+                                <div className="flex flex-col gap-2 w-full sm:w-auto">
+                                  <Button size="sm" className="bg-success hover:bg-success/90 w-full" onClick={() => handleAcceptRequest(request.id)}>
+                                    Accept
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 w-full" onClick={() => handleDeclineRequest(request.id)}>
+                                    Decline
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="w-full sm:w-auto">
+                                  {request.status === 'confirmed' ? (
+                                    <Badge className="bg-success/10 text-success border-success/20 w-full sm:w-auto justify-center">
+                                      <CheckCircle className="w-3 h-3 mr-2" />
+                                      Accepted
+                                    </Badge>
+                                  ) : request.status === 'rejected' ? (
+                                    <Badge className="bg-destructive/10 text-destructive border-destructive/20 w-full sm:w-auto justify-center">
+                                      <XCircle className="w-3 h-3 mr-2" />
+                                      Rejected
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}
