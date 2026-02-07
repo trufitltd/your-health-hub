@@ -278,6 +278,7 @@ export default function AuthPage() {
                   name: doctorPayload.full_name,
                   specialty: doctorPayload.specialty,
                   phone: pendingUserData.phoneNumber,
+                  avatar_url: profilePictureUrl || null,
                 })
                 .eq('id', data.user.id);
 
