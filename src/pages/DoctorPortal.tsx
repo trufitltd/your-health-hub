@@ -5,7 +5,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3
+  TrendingUp, CheckCircle, BarChart3
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -99,6 +99,7 @@ const DoctorPortal = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewNotesOpen, setViewNotesOpen] = useState(false);
   const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
+  const [appointmentFilter, setAppointmentFilter] = useState<'all' | 'accepted' | 'rejected'>('accepted');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
   const adminEmails = useMemo(() => {
@@ -247,6 +248,19 @@ const DoctorPortal = () => {
     rating: doctorStats?.rating || 0,
   };
 
+  const filteredAppointments = useMemo(() => {
+    if (!fetchedAppointments) return [];
+    switch (appointmentFilter) {
+      case 'accepted':
+        return fetchedAppointments.filter(apt => apt.status === 'confirmed' || apt.status === 'completed');
+      case 'rejected':
+        return fetchedAppointments.filter(apt => apt.status === 'rejected');
+      case 'all':
+      default:
+        return fetchedAppointments;
+    }
+  }, [fetchedAppointments, appointmentFilter]);
+
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
   const displayInitials = displayName
@@ -387,7 +401,6 @@ const DoctorPortal = () => {
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
                     { id: 'schedule', label: 'My Appointments', icon: Calendar },
                     { id: 'requests', label: 'Requests', icon: Bell, badge: stats.pendingRequests },
-                    { id: 'declined', label: 'Declined Appointments', icon: XCircle },
                     { id: 'patients', label: 'My Patients', icon: Users },
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
@@ -661,12 +674,26 @@ const DoctorPortal = () => {
               <TabsContent value="schedule" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>My Appointments</CardTitle>
-                    <CardDescription>All your confirmed and completed appointments</CardDescription>
+                    <div>
+                      <CardTitle>My Appointments</CardTitle>
+                      <CardDescription>All your confirmed and completed appointments</CardDescription>
+                    </div>
+                    <div className="flex justify-end items-center gap-2 mt-4">
+                      <label className="text-sm text-muted-foreground hidden sm:block">Filter</label>
+                      <select
+                        value={appointmentFilter}
+                        onChange={(e) => setAppointmentFilter(e.target.value as any)}
+                        className="border border-border rounded px-2 py-1 text-sm bg-background"
+                      >
+                        <option value="accepted">Accepted Appointments</option>
+                        <option value="rejected">Rejected Appointments</option>
+                        <option value="all">All Appointments</option>
+                      </select>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {fetchedAppointments.filter(apt => apt.status === 'confirmed' || apt.status === 'completed').map((apt) => (
+                      {filteredAppointments.map((apt) => (
                         <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${apt.status === 'in-progress'
                           ? 'border-primary bg-primary/5'
                           : apt.status === 'completed'
@@ -837,37 +864,6 @@ const DoctorPortal = () => {
               </TabsContent>
 
               {/* Patients Tab */}
-              <TabsContent value="declined" className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Declined Appointments</CardTitle>
-                    <CardDescription>A list of all appointments you have declined.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {fetchedAppointments.filter(apt => apt.status === 'rejected').map((apt) => (
-                        <div key={apt.id} className="flex items-center justify-between p-4 rounded-xl border border-destructive/20 bg-destructive/5">
-                          <div className="flex items-center gap-4">
-                            <Avatar className="w-12 h-12">
-                              <AvatarFallback className="bg-destructive/10 text-destructive">
-                                {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-semibold">{apt.patient_name}</p>
-                              <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
-                            </div>
-                          </div>
-                          <div className="text-right text-sm">
-                            <p className="font-medium text-destructive">Declined</p>
-                            <p className="text-muted-foreground">{new Date(apt.date).toLocaleDateString()}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
 
               <TabsContent value="patients" className="space-y-6">
                 <Card>
