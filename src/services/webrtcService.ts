@@ -19,6 +19,7 @@ export class WebRTCService {
   private onConnectedCallback?: () => void;
   private onAdmittedCallback?: () => void;
   private onPatientJoinedLobbyCallback?: () => void;
+  private onRemoteMediaStateCallback?: (state: { audioEnabled: boolean; videoEnabled: boolean }) => void;
   private unsubscribe?: () => void;
   private processedSignals = new Set<string>();
   private candidateQueue: RTCIceCandidate[] = [];
@@ -616,6 +617,15 @@ export class WebRTCService {
         }
         return;
       }
+
+      if (signalData.type === 'media-state') {
+        const audioEnabled = Boolean(signalData.audioEnabled);
+        const videoEnabled = Boolean(signalData.videoEnabled);
+        if (this.onRemoteMediaStateCallback) {
+          this.onRemoteMediaStateCallback({ audioEnabled, videoEnabled });
+        }
+        return;
+      }
       
       // All other signals require peer connection
       if (!this.peerConnection || this.isDestroyed) return;
@@ -925,6 +935,14 @@ export class WebRTCService {
     await this.sendSignal({ type: 'admit_patient' });
   }
 
+  async sendMediaState(state: { audioEnabled: boolean; videoEnabled: boolean }) {
+    await this.sendSignal({
+      type: 'media-state',
+      audioEnabled: state.audioEnabled,
+      videoEnabled: state.videoEnabled
+    });
+  }
+
   onStream(callback: (stream: MediaStream) => void) {
     this.onStreamCallback = callback;
   }
@@ -943,6 +961,46 @@ export class WebRTCService {
 
   onPatientJoinedLobby(callback: () => void) {
     this.onPatientJoinedLobbyCallback = callback;
+  }
+
+  onRemoteMediaState(callback: (state: { audioEnabled: boolean; videoEnabled: boolean }) => void) {
+    this.onRemoteMediaStateCallback = callback;
+  }
+
+  setLocalMediaEnabled(kind: 'audio' | 'video', enabled: boolean) {
+    if (!this.peerConnection) return;
+    const track = this.localStream?.getTracks().find(t => t.kind === kind) || null;
+    if (track) {
+      track.enabled = enabled;
+    }
+
+    const sender =
+      this.peerConnection.getSenders().find(s => s.track?.kind === kind) ??
+      this.peerConnection.getTransceivers().find(t => t.receiver.track?.kind === kind)?.sender ??
+      null;
+
+    if (!sender) {
+      console.warn('No sender found for local', kind, 'track');
+      return;
+    }
+
+    if (enabled) {
+      if (track) {
+        sender.replaceTrack(track).catch(err => {
+          console.warn('Failed to reattach local', kind, 'track:', err);
+        });
+      } else {
+        console.warn('No local', kind, 'track available to reattach');
+      }
+    } else {
+      sender.replaceTrack(null).catch(err => {
+        console.warn('Failed to detach local', kind, 'track:', err);
+      });
+    }
+  }
+
+  setLocalStream(stream: MediaStream | null) {
+    this.localStream = stream;
   }
 
   getRemoteStream(): MediaStream | null {
