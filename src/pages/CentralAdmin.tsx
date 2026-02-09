@@ -27,6 +27,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
+import { PatientsTable } from '@/components/admin/PatientsTable';
 
 interface Doctor {
   id: string;
@@ -113,6 +114,24 @@ const CentralAdmin = () => {
     refetchInterval: 10000, // Refetch every 10 seconds
   });
 
+  // Fetch all patients
+  const { data: patients = [] } = useQuery({
+    queryKey: ['admin-patients-count'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('patient_registrations')
+        .select('user_id');
+      
+      if (error) {
+        console.error('Error fetching patients:', error);
+        return [];
+      }
+      
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+  });
+
   // Check admin access - now after hooks
   if (!user) {
     navigate('/admin/login');
@@ -127,6 +146,7 @@ const CentralAdmin = () => {
   // Calculate statistics
   const stats = {
     totalDoctors: doctors.length,
+    totalPatients: patients.length,
     approvedDoctors: doctors.filter(d => d.verification_status === 'approved').length,
     pendingVerification: doctors.filter(d => d.verification_status === 'pending').length,
     rejectedDoctors: doctors.filter(d => d.verification_status === 'rejected').length,
@@ -322,6 +342,7 @@ const CentralAdmin = () => {
                   {[
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
                     { id: 'doctors', label: 'Doctors', icon: Users },
+                    { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
@@ -398,9 +419,9 @@ const CentralAdmin = () => {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               {[
                 { label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
+                { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
                 { label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
                 { label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
-                { label: 'Avg Rating', value: stats.averageRating, icon: Star, color: 'bg-accent/10 text-accent' },
               ].map((stat, index) => (
                 <motion.div
                   key={stat.label}
@@ -587,6 +608,21 @@ const CentralAdmin = () => {
                         ))
                       )}
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Patients Tab */}
+              <TabsContent value="patients" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <div>
+                      <CardTitle>Patient Directory</CardTitle>
+                      <CardDescription>All registered patients and their appointment history</CardDescription>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <PatientsTable />
                   </CardContent>
                 </Card>
               </TabsContent>
