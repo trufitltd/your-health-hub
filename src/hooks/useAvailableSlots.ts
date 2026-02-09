@@ -54,17 +54,33 @@ export const useDoctors = () => {
   return useQuery({
     queryKey: ['doctors'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // Fetch doctors that are both active and approved
+      const { data: doctors, error: doctorsError } = await supabase
         .from('doctors')
         .select('id, name, specialty, email, phone, bio, avatar_url')
         .eq('is_active', true)
         .order('name');
       
-      if (error) {
-        console.error('Error fetching doctors:', error);
-        throw error;
+      if (doctorsError) {
+        console.error('Error fetching doctors:', doctorsError);
+        throw doctorsError;
       }
-      return (data || []) as Doctor[];
+
+      // Filter to only approved doctors by joining with doctor_registrations
+      const { data: registrations, error: regsError } = await supabase
+        .from('doctor_registrations')
+        .select('user_id')
+        .eq('verification_status', 'approved');
+
+      if (regsError) {
+        console.error('Error fetching doctor registrations:', regsError);
+        // Still return doctors if registration fetch fails (graceful degradation)
+        return (doctors || []) as Doctor[];
+      }
+
+      const approvedUserIds = new Set((registrations || []).map(r => r.user_id));
+      
+      return (doctors || []).filter(doc => approvedUserIds.has(doc.id)) as Doctor[];
     },
   });
 };

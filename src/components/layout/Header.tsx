@@ -61,9 +61,12 @@ export function Header() {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 group">
             <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-            <span className="text-xl font-bold text-foreground">
-              MyE-<span className="text-primary">Doctor</span>
-            </span>
+            <div className="flex flex-col">
+              <span className="text-xl font-bold text-foreground leading-tight">
+                MyE-<span className="text-primary">Doctor</span>
+              </span>
+              <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+            </div>
           </Link>
 
           {/* Desktop Navigation */}

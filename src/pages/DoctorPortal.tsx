@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -103,12 +104,6 @@ const DoctorPortal = () => {
   const [requestFilter, setRequestFilter] = useState<'pending' | 'accepted' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
-  const adminEmails = useMemo(() => {
-    const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
-    return raw ? raw.split(',').map((value) => value.trim().toLowerCase()) : [];
-  }, []);
-  const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
-  const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
 
   // Fetch doctor statistics
   const { data: doctorStats, isLoading: statsLoading } = useDoctorStats(user?.id);
@@ -120,6 +115,29 @@ const DoctorPortal = () => {
   const { data: doctorRegistration } = useDoctorRegistration();
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileFormData, setProfileFormData] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    specialty: '',
+    experience: '',
+    bio: '',
+  });
+
+  // Initialize form data when doctorRegistration loads
+  useEffect(() => {
+    if (doctorRegistration) {
+      setProfileFormData({
+        fullName: doctorRegistration.full_name || '',
+        email: doctorRegistration.email || '',
+        phone: doctorRegistration.phone_number || '',
+        specialty: doctorRegistration.specialty || '',
+        experience: doctorRegistration.experience || '',
+        bio: doctorRegistration.bio || '',
+      });
+    }
+  }, [doctorRegistration]);
 
   // Fetch appointments for this doctor
   const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
@@ -233,13 +251,12 @@ const DoctorPortal = () => {
   const pendingRequests = (fetchedAppointments || []).filter(apt => {
     console.log('Checking appointment:', apt.id, 'Status:', apt.status);
     return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
-  }).map(apt => ({
+    }).map(apt => ({
     id: apt.id,
     patient: apt.patient_name || 'Unknown Patient',
     age: apt.patient_age || 'N/A',
     requestedDate: apt.date,
     requestedTime: apt.time,
-    consultationType: apt.type,
     reason: apt.notes || 'No reason provided',
     priority: 'normal',
   }));
@@ -275,7 +292,6 @@ const DoctorPortal = () => {
       age: apt.patient_age || 'N/A',
       requestedDate: apt.date,
       requestedTime: apt.time,
-      consultationType: apt.type,
       reason: apt.notes || 'No reason provided',
       priority: 'normal',
       status: apt.status,
@@ -294,7 +310,7 @@ const DoctorPortal = () => {
     }
   }, [requestFilter, fetchedAppointments]);
 
-  const displayName = user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
+  const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
   const displayInitials = displayName
     .split(' ')
@@ -347,6 +363,71 @@ const DoctorPortal = () => {
     }
   };
 
+  const handleSaveProfile = async () => {
+    if (!user?.id) return;
+    setIsSavingProfile(true);
+    
+    try {
+      const { error } = await supabase
+        .from('doctor_registrations')
+        .update({
+          full_name: profileFormData.fullName,
+          email: profileFormData.email,
+          phone_number: profileFormData.phone,
+          specialty: profileFormData.specialty,
+          experience: profileFormData.experience,
+          bio: profileFormData.bio,
+        })
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
+      toast({ title: 'Success', description: 'Profile updated successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update profile.' });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleAvailabilityToggle = async (newAvailability: boolean) => {
+    if (!user?.id) return;
+    
+    try {
+      // Update the doctors table is_active field
+      const { error } = await supabase
+        .from('doctors')
+        .update({ is_active: newAvailability })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Error updating availability:', error);
+        throw error;
+      }
+
+      // Update local state
+      setIsAvailable(newAvailability);
+      
+      // Invalidate query cache to refresh data
+      queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+      
+      toast({
+        title: 'Success',
+        description: newAvailability ? 'You are now available for consultations' : 'You are now unavailable for new consultations',
+      });
+    } catch (error) {
+      console.error('Failed to update availability:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to update availability status. Please try again.',
+        variant: 'destructive',
+      });
+      // Revert the toggle if update failed
+      setIsAvailable(!newAvailability);
+    }
+  };
+
   const requireAuth = () => {
     if (!user) {
       toast({ title: 'Please sign in', description: 'You must be signed in to access this feature.' });
@@ -390,9 +471,12 @@ const DoctorPortal = () => {
           <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2">
               <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-              <span className="text-xl font-bold">
-                MyE-<span className="text-primary">Doctor</span>
-              </span>
+              <div className="flex flex-col">
+                <span className="text-xl font-bold leading-tight">
+                  MyE-<span className="text-primary">Doctor</span>
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+              </div>
             </Link>
 
             <div className="flex items-center gap-4">
@@ -402,7 +486,7 @@ const DoctorPortal = () => {
                 <span className="text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
                 <Switch
                   checked={isAvailable}
-                  onCheckedChange={setIsAvailable}
+                  onCheckedChange={handleAvailabilityToggle}
                   className="ml-1"
                 />
               </div>
@@ -476,22 +560,6 @@ const DoctorPortal = () => {
                   ))}
                 </nav>
 
-                {isAdmin && (
-                  <div className="mt-4 pt-4 border-t border-border">
-                    <Link
-                      to="/admin/test-patient"
-                      onClick={() => setSidebarOpen(false)}
-                      className="w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <div className="flex items-center gap-3">
-                        <User className="w-5 h-5" />
-                        Admin: Test Patient
-                      </div>
-                      <ChevronRight className="w-4 h-4" />
-                    </Link>
-                  </div>
-                )}
-
                 <div className="mt-6 pt-6 border-t border-border">
                   <Button 
                     onClick={async () => {
@@ -511,38 +579,95 @@ const DoctorPortal = () => {
 
           {/* Main Content */}
           <main className="lg:col-span-3 space-y-4 md:space-y-6">
-            {/* Welcome Banner */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg md:rounded-2xl gradient-primary p-4 md:p-8 text-primary-foreground"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
-                <div>
-                  <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
-                    Welcome back, Dr {displayName.split(' ')[0]}! 👋
-                  </h1>
-                  <p className="text-xs sm:text-sm text-primary-foreground/80">
-                    You have {upcomingSchedule.length} consultations scheduled in the next 24 hours.
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right">
-                    {nextAppointment ? (
-                      <>
-                        <p className="text-sm text-primary-foreground/80">Next appointment in</p>
-                        <p className="text-2xl font-bold">{getTimeUntilNext()}</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-sm text-primary-foreground/80">No upcoming</p>
-                        <p className="text-2xl font-bold">appointments</p>
-                      </>
-                    )}
+            {/* Welcome Banner - Only show for approved doctors */}
+            {doctorRegistration?.verification_status === 'approved' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg md:rounded-2xl gradient-primary p-4 md:p-8 text-primary-foreground"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
+                  <div>
+                    <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
+                      Welcome back, Dr {displayName.split(' ')[0]}! 👋
+                    </h1>
+                    <p className="text-xs sm:text-sm text-primary-foreground/80">
+                      You have {upcomingSchedule.length} consultations scheduled in the next 24 hours.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      {nextAppointment ? (
+                        <>
+                          <p className="text-sm text-primary-foreground/80">Next appointment in</p>
+                          <p className="text-2xl font-bold">{getTimeUntilNext()}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-primary-foreground/80">No upcoming</p>
+                          <p className="text-2xl font-bold">appointments</p>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </motion.div>
+              </motion.div>
+            )}
+
+            {/* Verification Status Banner */}
+            {doctorRegistration?.verification_status === 'pending' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border-2 border-warning/50 bg-warning/10 p-4 md:p-6"
+              >
+                <div className="flex items-start gap-3">
+                  <Clock className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-warning mb-1">Welcome to MyE-Doctor! 🎉</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {doctorRegistration?.verification_status === 'approved' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border-2 border-success/50 bg-success/10 p-4 md:p-6"
+              >
+                <div className="flex items-start gap-3">
+                  <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-success mb-1">Account Approved ✓</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {doctorRegistration?.verification_status === 'rejected' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border-2 border-destructive/50 bg-destructive/10 p-4 md:p-6"
+              >
+                <div className="flex items-start gap-3">
+                  <XCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-destructive mb-1">Account Not Approved</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
 
             {/* Quick Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
@@ -761,35 +886,15 @@ const DoctorPortal = () => {
                           </div>
                           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                             <div className="text-left sm:text-right">
-                              {(() => {
-                                const t = (apt.type || '').toString().toLowerCase();
-                                if (t.includes('video')) {
-                                  return (
-                                    <Badge variant="outline" className="gap-1 mb-2">
-                                      <Video className="w-3 h-3" /> Video
-                                    </Badge>
-                                  );
-                                }
-                                if (t.includes('chat')) {
-                                  return (
-                                    <Badge variant="outline" className="gap-1 mb-2">
-                                      <MessageSquare className="w-3 h-3" /> Chat
-                                    </Badge>
-                                  );
-                                }
-                                return (
-                                  <Badge variant="outline" className="gap-1 mb-2">
-                                    <Phone className="w-3 h-3" /> Audio
-                                  </Badge>
-                                );
-                              })()}
+                              <Badge variant="outline" className="gap-1 mb-2">
+                                <Video className="w-3 h-3" /> Appointment
+                              </Badge>
                               <div>{getStatusBadge(apt.status)}</div>
                             </div>
                             <div className="flex flex-col sm:flex-row gap-2">
                               {apt.status === 'confirmed' && (
                                 <JoinConsultationButton
                                   appointmentId={apt.id}
-                                  consultationType={apt.type}
                                   participantName={apt.patient_name || ''}
                                   status={apt.status}
                                   variant="default"
@@ -1071,45 +1176,57 @@ const DoctorPortal = () => {
                             <div className="text-center">
                               <div className="flex items-center gap-1">
                                 <Star className="w-6 h-6 text-warning fill-warning" />
-                                <span className="text-3xl font-bold">{doctorData.rating}</span>
+                                <span className="text-3xl font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
                               </div>
-                              <p className="text-sm text-muted-foreground">{doctorData.totalReviews} reviews</p>
+                              <p className="text-sm text-muted-foreground">{recentReviews.length} reviews</p>
                             </div>
                           </div>
                         </div>
                       </CardHeader>
                       <CardContent>
-                        <div className="space-y-4">
-                          {recentReviews.map((review) => (
-                            <div key={review.id} className="p-4 rounded-xl border border-border">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="w-8 h-8">
-                                    <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                                      {review.patient[0]}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="font-medium">{review.patient}</span>
+                        {reviewsLoading ? (
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">Loading reviews...</p>
+                          </div>
+                        ) : recentReviews.length === 0 ? (
+                          <div className="text-center py-8">
+                            <Star className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                            <p className="text-muted-foreground">No reviews yet</p>
+                            <p className="text-sm text-muted-foreground mt-2">Reviews from patients will appear here after consultations</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {recentReviews.map((review) => (
+                              <div key={review.id} className="p-4 rounded-xl border border-border">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="w-8 h-8">
+                                      <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                                        {review.patient[0]}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="font-medium">{review.patient}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {[...Array(5)].map((_, i) => (
+                                      <Star
+                                        key={i}
+                                        className={`w-4 h-4 ${i < review.rating
+                                          ? 'text-warning fill-warning'
+                                          : 'text-muted'
+                                          }`}
+                                      />
+                                    ))}
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-1">
-                                  {[...Array(5)].map((_, i) => (
-                                    <Star
-                                      key={i}
-                                      className={`w-4 h-4 ${i < review.rating
-                                        ? 'text-warning fill-warning'
-                                        : 'text-muted'
-                                        }`}
-                                    />
-                                  ))}
-                                </div>
+                                <p className="text-sm mb-2">{review.comment}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                                </p>
                               </div>
-                              <p className="text-sm mb-2">{review.comment}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   </TabsContent>
@@ -1130,7 +1247,7 @@ const DoctorPortal = () => {
                             </Avatar>
                             <div>
                               <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                              <p className="text-muted-foreground">{user?.user_metadata?.specialty ?? doctorData.specialty}</p>
+                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? doctorData.specialty}</p>
                               <div className="mt-2">
                                 <input
                                   type="file"
@@ -1157,27 +1274,59 @@ const DoctorPortal = () => {
                           <div className="grid md:grid-cols-2 gap-4">
                             <div>
                               <label className="text-sm font-medium">Full Name</label>
-                              <Input defaultValue={user?.user_metadata?.full_name ?? doctorData.name} className="mt-1" />
+                              <Input 
+                                value={profileFormData.fullName || doctorRegistration?.full_name || ''} 
+                                onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
+                                className="mt-1" 
+                              />
                             </div>
                             <div>
                               <label className="text-sm font-medium">Email</label>
-                              <Input defaultValue={user?.email ?? doctorData.email} className="mt-1" />
+                              <Input 
+                                value={profileFormData.email || doctorRegistration?.email || ''} 
+                                onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
+                                className="mt-1" 
+                              />
                             </div>
                             <div>
                               <label className="text-sm font-medium">Phone</label>
-                              <Input defaultValue={user?.user_metadata?.phone ?? doctorData.phone} className="mt-1" />
+                              <Input 
+                                value={profileFormData.phone || doctorRegistration?.phone_number || ''} 
+                                onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
+                                className="mt-1" 
+                              />
                             </div>
                             <div>
                               <label className="text-sm font-medium">Specialty</label>
-                              <Input defaultValue={user?.user_metadata?.specialty ?? doctorData.specialty} className="mt-1" />
+                              <Input 
+                                value={profileFormData.specialty || doctorRegistration?.specialty || ''} 
+                                onChange={(e) => setProfileFormData({...profileFormData, specialty: e.target.value})}
+                                className="mt-1" 
+                              />
                             </div>
                             <div>
                               <label className="text-sm font-medium">Experience</label>
-                              <Input defaultValue={user?.user_metadata?.experience ?? doctorData.experience} className="mt-1" />
+                              <Input 
+                                value={profileFormData.experience || doctorRegistration?.experience || ''} 
+                                onChange={(e) => setProfileFormData({...profileFormData, experience: e.target.value})}
+                                className="mt-1" 
+                              />
                             </div>
                           </div>
 
-                          <Button>Save Changes</Button>
+                          <div>
+                            <label className="text-sm font-medium">Bio</label>
+                            <Textarea 
+                              value={profileFormData.bio || doctorRegistration?.bio || ''} 
+                              onChange={(e) => setProfileFormData({...profileFormData, bio: e.target.value})}
+                              placeholder="Tell patients about yourself, your experience, and approach to healthcare..."
+                              className="mt-1 min-h-[100px]" 
+                            />
+                          </div>
+
+                          <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                            {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                          </Button>
                         </div>
                       </CardContent>
                     </Card>

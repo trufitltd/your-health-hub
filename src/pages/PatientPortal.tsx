@@ -117,6 +117,8 @@ const prescriptions = [
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
+  const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
   const { user, signOut } = useAuth();
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
@@ -131,7 +133,7 @@ const PatientPortal = () => {
     navigate('/');
   };
 
-  const displayName = user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
+  const displayName = patientRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
   const profilePicture = patientRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? patientData.avatar;
   const initials = displayName
     .split(' ')
@@ -178,7 +180,7 @@ const PatientPortal = () => {
   const [specialistName, setSpecialistName] = useState('');
   const [bookingDate, setBookingDate] = useState('');
   const [bookingTime, setBookingTime] = useState('');
-  const [bookingType, setBookingType] = useState<'Video' | 'Audio' | 'Chat'>('Video');
+  // appointment type removed - all bookings are generic
   const [bookingNotes, setBookingNotes] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
@@ -188,15 +190,10 @@ const PatientPortal = () => {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
 
-  // Pricing logic
-  const getPricing = (specialty: string, consultationType: string) => {
+  // Pricing logic (single uniform consultation price)
+  const getPricing = (specialty: string) => {
     const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
-    const prices = {
-      Chat: isSpecialist ? 2500 : 1500,
-      Audio: isSpecialist ? 8000 : 4000, 
-      Video: isSpecialist ? 20000 : 8000
-    };
-    return prices[consultationType as keyof typeof prices] || 0;
+    return isSpecialist ? 8000 : 4000;
   };
 
   const formatPrice = (price: number) => `₦${price.toLocaleString()}`;
@@ -280,7 +277,6 @@ const PatientPortal = () => {
         doctor_id: selectedDoctorId,
         date: bookingDate,
         time: bookingTime,
-        type: bookingType,
         notes: bookingNotes,
         status: 'pending',
       };
@@ -335,7 +331,6 @@ const PatientPortal = () => {
         specialist_name: specialistName,
         date: bookingDate,
         time: bookingTime,
-        type: bookingType,
         notes: bookingNotes,
         status: 'pending', // Reset to pending on reschedule
       };
@@ -449,9 +444,12 @@ const PatientPortal = () => {
           <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2">
               <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-              <span className="text-xl font-bold">
-                MyE-<span className="text-primary">Doctor</span>
-              </span>
+              <div className="flex flex-col">
+                <span className="text-xl font-bold leading-tight">
+                  MyE-<span className="text-primary">Doctor</span>
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+              </div>
             </Link>
 
             <div className="flex items-center gap-4">
@@ -595,12 +593,10 @@ const PatientPortal = () => {
                     </div>
                   </div>
                   <div>
-                    <Label>Type</Label>
-                    <select className="w-full p-2 border rounded" value={bookingType} onChange={(e) => setBookingType(e.target.value as 'Video' | 'Audio' | 'Chat')}>
-                      <option value="Video">Video Call - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Video'))}</option>
-                      <option value="Audio">Audio Call - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Audio'))}</option>
-                      <option value="Chat">Chat Consultation - {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice', 'Chat'))}</option>
-                    </select>
+                    <Label>Consultation Fee</Label>
+                    <div className="p-2 text-sm">
+                      {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice'))}
+                    </div>
                   </div>
                   <div>
                     <Label>Additional Notes (Optional)</Label>
@@ -708,7 +704,7 @@ const PatientPortal = () => {
                               </Avatar>
                               <div>
                                 <p className="font-medium">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                <p className="text-sm text-muted-foreground">{apt.type}</p>
+                                <p className="text-sm text-muted-foreground">Appointment</p>
                               </div>
                             </div>
                             <div className="flex flex-col gap-2">
@@ -724,7 +720,6 @@ const PatientPortal = () => {
                               {apt.status === 'confirmed' && (
                                 <JoinConsultationButton
                                   appointmentId={apt.id}
-                                  consultationType={apt.type}
                                   participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                                   status={apt.status}
                                   variant="default"
@@ -865,7 +860,7 @@ const PatientPortal = () => {
                               </Avatar>
                               <div>
                                 <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                <p className="text-sm text-muted-foreground">{apt.type}</p>
+                                <p className="text-sm text-muted-foreground">Appointment</p>
                                 <div className="flex items-center gap-3 mt-1">
                                   <span className="text-xs flex items-center gap-1">
                                     <Calendar className="w-3 h-3" />
@@ -881,19 +876,9 @@ const PatientPortal = () => {
                             <div className="flex flex-col gap-3">
                               <div className="text-left sm:text-right">
                                 <div className="flex items-center gap-2 mb-2">
-                                  {(apt as unknown as { type?: string }).type === 'Video' ? (
-                                    <Badge variant="outline" className="gap-1">
-                                      <Video className="w-3 h-3" /> Video
-                                    </Badge>
-                                  ) : (apt as unknown as { type?: string }).type === 'Chat' ? (
-                                    <Badge variant="outline" className="gap-1">
-                                      <MessageSquare className="w-3 h-3" /> Chat
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="outline" className="gap-1">
-                                      <Phone className="w-3 h-3" /> Audio
-                                    </Badge>
-                                  )}
+                                  <Badge variant="outline" className="gap-1">
+                                    <Video className="w-3 h-3" /> Appointment
+                                  </Badge>
                                 </div>
                                 {getStatusBadge(apt.status)}
                               </div>
@@ -911,7 +896,6 @@ const PatientPortal = () => {
                                 {apt.status === 'confirmed' && (
                                   <JoinConsultationButton
                                     appointmentId={apt.id}
-                                    consultationType={apt.type}
                                     participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                                     status={apt.status}
                                     variant="default"
@@ -1013,7 +997,14 @@ const PatientPortal = () => {
                                     <Pill className="w-3 h-3" /> Prescription
                                   </Badge>
                                 )}
-                                <Button size="sm" variant="ghost">
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setSelectedConsultation(consultation);
+                                    setConsultationDetailsOpen(true);
+                                  }}
+                                >
                                   View Details
                                 </Button>
                               </div>
@@ -1181,6 +1172,77 @@ const PatientPortal = () => {
         appointmentId={selectedAppointment?.id || ''}
         doctorName={selectedAppointment ? getDoctorNameById(selectedAppointment.doctor_id, selectedAppointment.specialist_name) : ''}
       />
+
+      {/* Consultation Details Dialog */}
+      <Dialog open={consultationDetailsOpen} onOpenChange={setConsultationDetailsOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Consultation Details</DialogTitle>
+            <DialogDescription>
+              Complete information about your consultation
+            </DialogDescription>
+          </DialogHeader>
+          {selectedConsultation && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/50">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="font-medium">Doctor:</span> {selectedConsultation.doctor_name}
+                  </div>
+                  <div>
+                    <span className="font-medium">Specialty:</span> {selectedConsultation.specialty}
+                  </div>
+                  <div>
+                    <span className="font-medium">Date:</span> {new Date(selectedConsultation.date).toLocaleDateString()}
+                  </div>
+                  <div>
+                    <span className="font-medium">Status:</span> Completed
+                  </div>
+                </div>
+              </div>
+              
+              {selectedConsultation.rating && (
+                <div>
+                  <label className="text-sm font-medium">Your Rating</label>
+                  <div className="flex items-center gap-1 mt-2">
+                    {[...Array(5)].map((_, i) => (
+                      <Star
+                        key={i}
+                        className={`w-5 h-5 ${i < selectedConsultation.rating
+                          ? 'text-warning fill-warning'
+                          : 'text-muted'
+                          }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="text-sm font-medium">Consultation Notes</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[100px]">
+                  <p className="text-sm">{selectedConsultation.diagnosis}</p>
+                </div>
+              </div>
+
+              {selectedConsultation.prescription && (
+                <div className="p-4 rounded-lg border border-border">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Pill className="w-5 h-5 text-primary" />
+                    <span className="font-medium">Prescription Available</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">View prescription in the Prescriptions tab</p>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConsultationDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
