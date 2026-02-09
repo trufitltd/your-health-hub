@@ -36,6 +36,6 @@ export const useRecentReviews = (doctorId?: string, limit: number = 3) => {
       }));
     },
     enabled: !!doctorId,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchInterval: 10000,
   });
 };

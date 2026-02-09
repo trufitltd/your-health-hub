@@ -24,5 +24,6 @@ export const useDoctorRegistration = () => {
       return data;
     },
     enabled: !!user?.id,
+    refetchInterval: 5000,
   });
 };

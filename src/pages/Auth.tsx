@@ -66,9 +66,16 @@ export default function AuthPage() {
 
     try {
       if (mode === 'register') {
-        // Validate phone number for all users
-        if (!phoneNumber) {
-          toast({ title: 'Phone number required', description: 'Please enter your phone number.' });
+        // Validate email for all users
+        if (!email) {
+          toast({ title: 'Email required', description: 'Please enter your email address.' });
+          setIsLoading(false);
+          return;
+        }
+        // Basic email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          toast({ title: 'Invalid email', description: 'Please enter a valid email address.' });
           setIsLoading(false);
           return;
         }
@@ -97,25 +104,18 @@ export default function AuthPage() {
           }
         }
 
-        // Sign up with Supabase using phone number
+        // Sign up with Supabase using email - keep metadata minimal to debug 500 error
         const { data, error } = await supabase.auth.signUp({
-          phone: phoneNumber,
+          email,
           password,
-          options: {
-            data: {
-              full_name: name,
-              role,
-              email: email || null,
-            },
-          },
         });
 
         if (error) {
           // Check if user already exists
           if (error.message.includes('already registered') || error.message.includes('already been registered')) {
             toast({ 
-              title: 'Phone number in use', 
-              description: 'This phone number is already registered. Please use a different number or try logging in.' 
+              title: 'Email already in use', 
+              description: 'This email is already registered. Please use a different email or try logging in.' 
             });
             setMode('login');
           } else {
@@ -123,6 +123,97 @@ export default function AuthPage() {
           }
           setIsLoading(false);
           return;
+        }
+
+        // Immediately save doctor registration data if role is doctor
+        if (role === 'doctor' && data.user?.id) {
+          try {
+            // Upload files first
+            let profilePictureUrl = null;
+            let medicalLicenseUrl = null;
+
+            if (profilePicture) {
+              const profileExt = profilePicture.name.split('.').pop();
+              const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+              const { error: profileError } = await supabase.storage
+                .from('doctor-files')
+                .upload(profilePath, profilePicture, { upsert: true });
+              if (!profileError) {
+                profilePictureUrl = supabase.storage.from('doctor-files').getPublicUrl(profilePath).data.publicUrl;
+              }
+            }
+
+            if (medicalLicense) {
+              const licenseExt = medicalLicense.name.split('.').pop();
+              const licensePath = `${data.user.id}/credentials/medical-license.${licenseExt}`;
+              const { error: licenseError } = await supabase.storage
+                .from('doctor-files')
+                .upload(licensePath, medicalLicense, { upsert: true });
+              if (!licenseError) {
+                medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
+              }
+            }
+
+            const doctorPayload = {
+              user_id: data.user.id,
+              full_name: name,
+              gender,
+              age: parseInt(age),
+              phone_number: phoneNumber,
+              email,
+              city,
+              state,
+              country,
+              marital_status: maritalStatus,
+              hospital_affiliation: hospitalAffiliation,
+              specialty: specialty === 'others' ? otherSpecialty : specialty,
+              profile_picture_url: profilePictureUrl,
+              medical_license_url: medicalLicenseUrl,
+              identification_type: doctorIdType,
+              identification_number: doctorIdNumber,
+              verification_status: 'pending'
+            };
+
+            await supabase.from('doctor_registrations').insert([doctorPayload]);
+            await createDefaultSchedule(data.user.id);
+          } catch (err) {
+            console.error('Failed to save doctor registration:', err);
+          }
+        }
+
+        // Immediately save patient registration if role is patient so data exists in DB
+        if (role === 'patient' && data.user?.id) {
+          try {
+            const patientPayload = {
+              user_id: data.user.id,
+              full_name: name,
+              gender,
+              age: parseInt(age || '0') || 18,
+              phone_number: phoneNumber,
+              email,
+              city,
+              state,
+              country,
+              marital_status: maritalStatus,
+              emergency_contact_name: emergencyContactName,
+              emergency_contact_phone: emergencyContactPhone,
+              identification_type: identificationType,
+              identification_number: identificationNumber,
+            };
+
+            // Direct upsert to avoid RPC complexity
+            const { error: patientUpsertError } = await supabase
+              .from('patient_registrations')
+              .upsert([patientPayload], { onConflict: 'user_id' });
+
+            if (patientUpsertError) {
+              console.error('Patient upsert error on signup:', patientUpsertError);
+            } else {
+              console.log('Patient registration created/updated on signup for user:', data.user.id);
+            }
+          } catch (err) {
+            console.error('Failed to upsert patient registration on signup:', err);
+          }
         }
 
         // Store registration data for after verification
@@ -153,14 +244,24 @@ export default function AuthPage() {
         setPendingUserData(registrationData);
 
         toast({
-          title: 'Verification code sent',
-          description: 'Check your phone for the verification code.',
+          title: 'Verification link sent',
+          description: 'Check your email for the verification link.',
         });
+
+        // Check if user is already confirmed (email verification disabled)
+        if (data.user?.email_confirmed_at) {
+          console.log('Email verification disabled - user auto-confirmed');
+          localStorage.setItem('userRole', role);
+          toast({ title: 'Account created', description: 'Welcome to MyE-Doctor!' });
+          setIsLoading(false);
+          navigate(role === 'doctor' ? '/doctor-portal' : '/patient-portal');
+          return;
+        }
 
         setIsLoading(false);
         setMode('verify');
       } else if (mode === 'verify') {
-        // Verify phone number with code
+        // Verify email with code
         if (!verificationCode) {
           toast({ title: 'Verification code required', description: 'Please enter the verification code.' });
           setIsLoading(false);
@@ -168,9 +269,9 @@ export default function AuthPage() {
         }
 
         const { data, error } = await supabase.auth.verifyOtp({
-          phone: phoneNumber,
+          email,
           token: verificationCode,
-          type: 'sms'
+          type: 'email'
         });
 
         if (error) {
@@ -202,10 +303,15 @@ export default function AuthPage() {
                 identification_number: pendingUserData.identificationNumber
               };
 
-              const { error: patientError } = await supabase.from('patient_registrations').insert([registrationPayload]);
+              // Direct upsert to ensure patient record exists
+              const { error: patientError } = await supabase
+                .from('patient_registrations')
+                .upsert([registrationPayload], { onConflict: 'user_id' });
+              
               if (patientError) {
                 console.error('Patient registration error:', patientError);
-                throw patientError;
+              } else {
+                console.log('Patient registration confirmed/updated after verification');
               }
               
               // Send welcome SMS
@@ -261,7 +367,8 @@ export default function AuthPage() {
                 profile_picture_url: profilePictureUrl,
                 medical_license_url: medicalLicenseUrl,
                 identification_type: pendingUserData.doctorIdType,
-                identification_number: pendingUserData.doctorIdNumber
+                identification_number: pendingUserData.doctorIdNumber,
+                verification_status: 'pending'
               };
 
               console.log('Inserting doctor registration:', doctorPayload);
@@ -286,16 +393,6 @@ export default function AuthPage() {
                 console.error('Doctor profile sync error:', doctorProfileError);
               }
               
-              // Update verification status to verified
-              const { error: updateError } = await supabase
-                .from('doctor_registrations')
-                .update({ verification_status: 'verified' })
-                .eq('user_id', data.user.id);
-              
-              if (updateError) {
-                console.error('Failed to update verification status:', updateError);
-              }
-              
               console.log('Creating default schedule for doctor:', data.user.id);
               await createDefaultSchedule(data.user.id);
               console.log('Doctor registration completed successfully');
@@ -308,8 +405,8 @@ export default function AuthPage() {
           console.error('Missing pending user data or user ID');
         }
 
-        // Get user role from metadata
-        const userRole = data?.user?.user_metadata?.role || 'patient';
+        // Get user role from pendingUserData (set during signup)
+        const userRole = pendingUserData?.role || 'patient';
         localStorage.setItem('userRole', userRole);
 
         // Check if user session is valid
@@ -320,24 +417,24 @@ export default function AuthPage() {
           return;
         }
 
-        toast({ title: 'Phone verified', description: 'Welcome to MyEdoctor!' });
+        toast({ title: 'Email verified', description: 'Welcome to MyEdoctor!' });
         setIsLoading(false);
 
         // Redirect based on role
         navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
       } else {
-        // Validate phone number for login
-        if (!phoneNumber) {
-          toast({ title: 'Phone number required', description: 'Please enter your phone number.' });
+        // Validate email for login
+        if (!email) {
+          toast({ title: 'Email required', description: 'Please enter your email address.' });
           setIsLoading(false);
           return;
         }
 
-        console.log('Attempting login with phone:', phoneNumber);
+        console.log('Attempting login with email:', email);
 
-        // Sign in with Supabase using phone number
+        // Sign in with Supabase using email
         const { data, error } = await supabase.auth.signInWithPassword({
-          phone: phoneNumber,
+          email,
           password,
         });
 
@@ -350,8 +447,19 @@ export default function AuthPage() {
 
         console.log('Login successful, user:', data.user?.id);
 
-        // Get user role from metadata
-        const userRole = data?.user?.user_metadata?.role || 'patient';
+        // Determine user role by checking if they have a doctor registration
+        let userRole = 'patient';
+        if (data.user?.id) {
+          const { data: doctorReg } = await supabase
+            .from('doctor_registrations')
+            .select('id')
+            .eq('user_id', data.user.id)
+            .single();
+          
+          if (doctorReg) {
+            userRole = 'doctor';
+          }
+        }
         localStorage.setItem('userRole', userRole);
 
         toast({ title: 'Signed in', description: 'Welcome back!' });
@@ -380,20 +488,23 @@ export default function AuthPage() {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 mb-8">
             <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-            <span className="text-xl font-bold">
-              MyE-<span className="text-primary">Doctor</span>
-            </span>
+            <div className="flex flex-col">
+              <span className="text-xl font-bold leading-tight">
+                MyE-<span className="text-primary">Doctor</span>
+              </span>
+              <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+            </div>
           </Link>
 
           {/* Title */}
           <h1 className="text-2xl md:text-3xl font-bold mb-2">
-            {mode === 'login' ? 'Welcome back' : mode === 'verify' ? 'Verify your phone' : 'Create your account'}
+            {mode === 'login' ? 'Welcome back' : mode === 'verify' ? 'Verify your email' : 'Create your account'}
           </h1>
           <p className="text-muted-foreground mb-8">
             {mode === 'login'
-              ? 'Sign in with your phone number to access your health dashboard'
+              ? 'Sign in with your email to access your health dashboard'
               : mode === 'verify'
-              ? `Enter the verification code sent to ${phoneNumber}`
+              ? `Enter the verification code sent to ${email}`
               : 'Join thousands of patients getting quality healthcare'}
           </p>
 
@@ -446,8 +557,8 @@ export default function AuthPage() {
                       type="button"
                       onClick={async () => {
                         try {
-                          await supabase.auth.resend({ type: 'sms', phone: phoneNumber });
-                          toast({ title: 'Code resent', description: 'A new verification code has been sent.' });
+                          await supabase.auth.resend({ type: 'signup', email });
+                          toast({ title: 'Code resent', description: 'A new verification code has been sent to your email.' });
                         } catch (error) {
                           toast({ title: 'Resend failed', description: 'Please try again.' });
                         }
@@ -465,7 +576,7 @@ export default function AuthPage() {
                         setMode('register');
                         setVerificationCode('');
                         setPendingUserData(null);
-                        toast({ title: 'Registration reset', description: 'Please register again with a different phone number or contact support.' });
+                        toast({ title: 'Registration reset', description: 'Please register again with a different email or contact support.' });
                       }}
                       className="text-destructive hover:underline"
                     >
@@ -495,19 +606,35 @@ export default function AuthPage() {
                 )}
 
                 <div>
-                  <Label htmlFor="phoneNumber">Phone Number</Label>
+                  <Label htmlFor="email">{mode === 'login' ? 'Email Address' : 'Email Address *'}</Label>
+                  <div className="relative mt-1.5">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder={mode === 'login' ? 'Enter your email' : 'Enter your email address'}
+                      className="pl-10 h-12"
+                      required={mode !== 'login' || mode === 'login'}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number (Optional)' : 'Phone Number'}</Label>
                   <div className="relative mt-1.5">
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                     <Input
                       id="phoneNumber"
                       type="tel"
-                      placeholder="+234 Enter your phone number"
+                      placeholder="+234 (For data collection purposes)"
                       className="pl-10 h-12"
-                      required
+                      required={mode !== 'register'}
                       value={phoneNumber}
                       onChange={(e) => {
                         let value = e.target.value;
-                        if (!value.startsWith('+234')) {
+                        if (value && !value.startsWith('+234')) {
                           value = '+234' + value.replace(/^\+?234?/, '');
                         }
                         setPhoneNumber(value);
@@ -515,23 +642,6 @@ export default function AuthPage() {
                     />
                   </div>
                 </div>
-
-                {mode === 'register' && (
-                  <div>
-                    <Label htmlFor="email">Email Address (Optional)</Label>
-                    <div className="relative mt-1.5">
-                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                      <Input
-                        id="email"
-                        type="email"
-                        placeholder="Enter your email (optional)"
-                        className="pl-10 h-12"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
 
                 <div>
                   <Label htmlFor="password">Password</Label>

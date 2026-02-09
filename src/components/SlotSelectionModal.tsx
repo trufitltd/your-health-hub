@@ -41,11 +41,7 @@ export function SlotSelectionModal({
   // Pricing logic
   const getPricing = (specialty: string) => {
     const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
-    return {
-      Chat: isSpecialist ? '₦2,500' : '₦1,500',
-      Audio: isSpecialist ? '₦8,000' : '₦4,000', 
-      Video: isSpecialist ? '₦20,000' : '₦8,000'
-    };
+    return isSpecialist ? '₦8,000' : '₦4,000';
   };
 
   useEffect(() => {

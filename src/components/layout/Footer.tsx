@@ -105,9 +105,14 @@ export function Footer() {
 
         {/* Bottom */}
         <div className="border-t border-primary-foreground/10 mt-12 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-primary-foreground/50">
-            © {new Date().getFullYear()} MyEdoctor. All rights reserved.
-          </p>
+          <div className="flex flex-col items-center md:items-start gap-2">
+            <p className="text-sm text-primary-foreground/50">
+              © {new Date().getFullYear()} MyEdoctor. All rights reserved.
+            </p>
+            <p className="text-xs text-primary-foreground/40">
+              Powered by <span className="text-primary font-semibold">HealthLink</span>
+            </p>
+          </div>
           <div className="flex items-center gap-4">
             {socialLinks.map((social) => (
               <a

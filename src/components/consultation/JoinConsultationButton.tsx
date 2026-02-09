@@ -5,7 +5,6 @@ import { toast } from '@/components/ui/use-toast';
 
 interface JoinConsultationButtonProps {
   appointmentId: string;
-  consultationType: 'Video' | 'Audio' | 'Chat' | 'video' | 'audio' | 'chat';
   participantName: string;
   status?: string;
   variant?: 'default' | 'outline' | 'ghost' | 'secondary';
@@ -15,7 +14,6 @@ interface JoinConsultationButtonProps {
 
 export function JoinConsultationButton({
   appointmentId,
-  consultationType,
   participantName,
   status,
   variant = 'default',
@@ -23,11 +21,10 @@ export function JoinConsultationButton({
   className = ''
 }: JoinConsultationButtonProps) {
   const navigate = useNavigate();
-
-  const normalizedRaw = consultationType.toLowerCase();
-  const isVideo = normalizedRaw.includes('video');
-  const isChat = normalizedRaw.includes('chat');
-  const isAudio = normalizedRaw.includes('audio');
+  // We no longer track appointment "type". Default to video-enabled consultations.
+  const isVideo = true;
+  const isChat = false;
+  const isAudio = true;
   const isJoinable = !status || status === 'confirmed' || status === 'pending' || status === 'in-progress' || status === 'upcoming';
 
   const handleJoin = () => {
@@ -39,8 +36,8 @@ export function JoinConsultationButton({
       });
       return;
     }
-
-    navigate(`/consultation/${appointmentId}?type=${normalizedRaw}&participant=${encodeURIComponent(participantName)}`);
+    // Navigate without a type parameter; consultations are uniform now
+    navigate(`/consultation/${appointmentId}?participant=${encodeURIComponent(participantName)}`);
   };
 
   return (

@@ -11,7 +11,7 @@ interface UseConsultationReturn {
   loadMessages: () => Promise<void>;
 }
 
-export function useConsultation(appointmentId: string, patientId: string, doctorId: string, consultationType: 'video' | 'audio' | 'chat'): UseConsultationReturn {
+export function useConsultation(appointmentId: string, patientId: string, doctorId: string, consultationType?: 'video' | 'audio' | 'chat'): UseConsultationReturn {
   const [session, setSession] = useState<ConsultationSession | null>(null);
   const [messages, setMessages] = useState<ConsultationMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -28,7 +28,7 @@ export function useConsultation(appointmentId: string, patientId: string, doctor
             appointmentId,
             patientId,
             doctorId,
-            consultationType
+            consultationType || 'video'
           );
         }
 
