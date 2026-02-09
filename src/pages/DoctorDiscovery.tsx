@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Layout } from '@/components/layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,8 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { SlotSelectionModal } from '@/components/SlotSelectionModal';
-import { useAvailableSlots } from '@/hooks/useAvailableSlots';
 import { useToast } from '@/hooks/use-toast';
 import {
   Star, Search, Filter, Clock, MapPin, Award, Heart,
@@ -34,6 +32,7 @@ interface Doctor {
   total_reviews?: number;
   experience_years?: number;
   bio?: string;
+  is_active?: boolean;
 }
 
 export default function DoctorDiscovery() {
@@ -43,9 +42,7 @@ export default function DoctorDiscovery() {
   const [appointmentType, setAppointmentType] = useState<'general' | 'specialist' | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [slotSelectionOpen, setSlotSelectionOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isBooking, setIsBooking] = useState(false);
   const [filters, setFilters] = useState({
     specialty: '',
     minRating: 0,
@@ -80,6 +77,14 @@ export default function DoctorDiscovery() {
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
         (data || []).map(async (doctor) => {
+          // Fetch doctor availability status
+          const { data: doctorStatus } = await supabase
+            .from('doctors')
+            .select('is_active')
+            .eq('id', doctor.user_id)
+            .single();
+
+          // Fetch ratings
           const { data: ratingData } = await supabase
             .from('appointments')
             .select('rating')
@@ -94,6 +99,7 @@ export default function DoctorDiscovery() {
             rating: avgRating,
             total_reviews: ratings.length,
             experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
+            is_active: doctorStatus?.is_active !== false, // Default to true if not set
           };
         })
       );
@@ -101,9 +107,6 @@ export default function DoctorDiscovery() {
       return doctorsWithRatings;
     }
   });
-
-  // Fetch available slots
-  const { data: allSlots = [] } = useAvailableSlots();
 
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
@@ -148,65 +151,22 @@ export default function DoctorDiscovery() {
       navigate('/auth');
       return;
     }
-    setSelectedDoctor(doctor);
-    setSlotSelectionOpen(true);
-  };
-
-  const handleSlotSelect = async (doctor: any, date: string, time: string) => {
-    if (!user) {
-      toast({ title: 'Error', description: 'User not authenticated' });
+    if (!doctor.is_active) {
+      toast({ 
+        title: 'Doctor Unavailable', 
+        description: `${doctor.full_name} is currently unavailable. Please choose another doctor.` 
+      });
       return;
     }
-
-    setIsBooking(true);
-    try {
-      // Create appointment record in database
-      const { error } = await supabase
-        .from('appointments')
-        .insert([
-          {
-            patient_id: user.id,
-            doctor_id: selectedDoctor?.user_id,
-            date: date,
-            time: time,
-            status: 'pending',
-            notes: `${appointmentType} appointment requested`,
-          }
-        ]);
-
-      if (error) {
-        console.error('Booking error:', error);
-        toast({ 
-          title: 'Booking failed', 
-          description: error.message || 'Failed to create appointment. Please try again.' 
-        });
-        setIsBooking(false);
-        return;
+    // Navigate to slot selection page
+    navigate('/slot-selection', {
+      state: {
+        doctorId: doctor.user_id,
+        doctorName: doctor.full_name,
+        specialty: doctor.specialty,
+        profilePicture: doctor.profile_picture_url,
       }
-
-      // Success
-      toast({ 
-        title: 'Appointment booked!', 
-        description: `Your appointment with ${selectedDoctor?.full_name} on ${new Date(date).toLocaleDateString()} at ${time} has been requested.` 
-      });
-      
-      // Close modal and redirect
-      setSlotSelectionOpen(false);
-      setProfileOpen(false);
-      setSelectedDoctor(null);
-      setAppointmentType(null);
-      
-      // Redirect to patient portal appointments tab
-      navigate('/patient-portal?tab=appointments');
-    } catch (error) {
-      console.error('Booking error:', error);
-      toast({ 
-        title: 'Error', 
-        description: 'An unexpected error occurred. Please try again.' 
-      });
-    } finally {
-      setIsBooking(false);
-    }
+    });
   };
 
   const renderStars = (rating: number, count: number = 5) => {
@@ -397,7 +357,7 @@ export default function DoctorDiscovery() {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                     >
-                      <Card className="h-full flex flex-col hover:shadow-lg transition-shadow">
+                      <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
                         <CardContent className="p-6 flex-1 flex flex-col">
                           <div className="flex items-start justify-between mb-4">
                             <Avatar className="w-16 h-16">
@@ -413,6 +373,11 @@ export default function DoctorDiscovery() {
                               <Badge className="text-xs bg-blue-100 text-blue-800">
                                 {appointmentType === 'specialist' ? 'Specialist' : 'General'}
                               </Badge>
+                              {!doctor.is_active && (
+                                <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                  Unavailable
+                                </Badge>
+                              )}
                             </div>
                           </div>
 
@@ -454,6 +419,7 @@ export default function DoctorDiscovery() {
                               size="sm"
                               className="flex-1"
                               onClick={() => handleViewProfile(doctor)}
+                              disabled={!doctor.is_active}
                             >
                               View Profile
                             </Button>
@@ -461,8 +427,9 @@ export default function DoctorDiscovery() {
                               size="sm"
                               className="flex-1"
                               onClick={() => handleBookNow(doctor)}
+                              disabled={!doctor.is_active}
                             >
-                              Book Now
+                              {doctor.is_active ? 'Book Now' : 'Unavailable'}
                             </Button>
                           </div>
                         </CardContent>
@@ -566,7 +533,7 @@ export default function DoctorDiscovery() {
                       className="w-full"
                       onClick={() => {
                         setProfileOpen(false);
-                        setSlotSelectionOpen(true);
+                        handleBookNow(selectedDoctor!);
                       }}
                     >
                       Select Available Time Slot
@@ -577,18 +544,6 @@ export default function DoctorDiscovery() {
             )}
           </DialogContent>
         </Dialog>
-
-        {/* Slot Selection Modal */}
-        {selectedDoctor && (
-          <SlotSelectionModal
-            open={slotSelectionOpen}
-            onOpenChange={setSlotSelectionOpen}
-            slots={allSlots}
-            isLoading={isBooking}
-            onSlotSelect={handleSlotSelect}
-            doctorId={selectedDoctor.user_id}
-          />
-        )}
       </div>
     </Layout>
   );
