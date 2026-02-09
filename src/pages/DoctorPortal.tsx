@@ -165,16 +165,17 @@ const DoctorPortal = () => {
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
-        .select('user_id, age')
+        .select('user_id, age, full_name')
         .in('user_id', patientIds);
       
       console.log('Patient data:', patientData, 'Error:', patientError);
       
       // Merge the data
-      const patientAgeMap = new Map(patientData?.map(p => [p.user_id, p.age]) || []);
+      const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name }]) || []);
       return appointments.map(apt => ({
         ...apt,
-        patient_age: patientAgeMap.get(apt.patient_id) || null
+        patient_age: patientDataMap.get(apt.patient_id)?.age || null,
+        patient_name: patientDataMap.get(apt.patient_id)?.full_name || null
       }));
     },
     enabled: !!user?.id,
