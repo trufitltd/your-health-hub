@@ -199,7 +199,7 @@ const PatientPortal = () => {
 
   const handleNewAppointment = () => {
     if (!requireAuthForBooking()) return;
-    navigate('/booking');
+    navigate('/doctor-discovery');
   };
 
   // Booking modal state
@@ -257,8 +257,7 @@ const PatientPortal = () => {
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
-    resetBookingState();
-    setSlotSelectionOpen(true);
+    navigate('/doctor-discovery');
   };
 
   const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
