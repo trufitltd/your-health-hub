@@ -621,27 +621,29 @@ export default function AuthPage() {
                   </div>
                 </div>
 
-                <div>
-                  <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number (Optional)' : 'Phone Number'}</Label>
-                  <div className="relative mt-1.5">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                    <Input
-                      id="phoneNumber"
-                      type="tel"
-                      placeholder="+234 (For data collection purposes)"
-                      className="pl-10 h-12"
-                      required={mode !== 'register'}
-                      value={phoneNumber}
-                      onChange={(e) => {
-                        let value = e.target.value;
-                        if (value && !value.startsWith('+234')) {
-                          value = '+234' + value.replace(/^\+?234?/, '');
-                        }
-                        setPhoneNumber(value);
-                      }}
-                    />
+                {mode !== 'login' && (
+                  <div>
+                    <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number (Optional)' : 'Phone Number'}</Label>
+                    <div className="relative mt-1.5">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                      <Input
+                        id="phoneNumber"
+                        type="tel"
+                        placeholder="+234 (For data collection purposes)"
+                        className="pl-10 h-12"
+                        required={mode !== 'register'}
+                        value={phoneNumber}
+                        onChange={(e) => {
+                          let value = e.target.value;
+                          if (value && !value.startsWith('+234')) {
+                            value = '+234' + value.replace(/^\+?234?/, '');
+                          }
+                          setPhoneNumber(value);
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div>
                   <Label htmlFor="password">Password</Label>
@@ -1083,7 +1085,7 @@ export default function AuthPage() {
           className="relative z-10 max-w-md"
         >
           <h2 className="text-3xl font-bold text-primary-foreground mb-6">
-            {mode === 'register' && role === 'patient' ? 'Complete Your Registration' : 'Your Health, Our Priority'}
+            {mode === 'register' && role === 'patient' ? 'Complete Your Registration' : '-Your Doctor, Anytime, Anywhere'}
           </h2>
           <p className="text-primary-foreground/80 mb-8">
             {mode === 'register' && role === 'patient' 
