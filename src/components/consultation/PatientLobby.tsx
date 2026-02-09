@@ -11,21 +11,20 @@ import { toast } from '@/components/ui/use-toast';
 
 interface PatientLobbyProps {
   participantName: string;
-  consultationType: 'video' | 'audio' | 'chat';
   localStream: MediaStream | null;
   onLeave: () => void;
 }
 
 export function PatientLobby({
   participantName,
-  consultationType,
   localStream,
   onLeave,
 }: PatientLobbyProps) {
   const navigate = useNavigate();
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
-  const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
+  // consultations are uniform; enable audio and video by default
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
 
@@ -64,7 +63,7 @@ export function PatientLobby({
       <div className="w-full h-full max-w-4xl mx-auto flex flex-col items-center justify-center">
 
         {/* Video Preview */}
-        {consultationType === 'video' && (
+        {true && (
           <div className="relative z-10 w-full max-w-2xl aspect-video rounded-lg overflow-hidden bg-black shadow-2xl border-2 border-slate-700 mb-6">
             {isVideoEnabled ? (
               <video

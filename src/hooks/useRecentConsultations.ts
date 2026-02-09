@@ -30,7 +30,8 @@ export function useRecentConsultations() {
           specialist_name,
           rating,
           notes,
-          status
+          status,
+          doctor_id
         `)
         .eq('patient_id', user.id)
         .eq('status', 'completed')
@@ -44,10 +45,27 @@ export function useRecentConsultations() {
         throw error;
       }
 
+      // Fetch doctor specialties
+      const doctorIds = [...new Set(data.map((apt: any) => apt.doctor_id).filter(Boolean))];
+      const doctorSpecialties: Record<string, string> = {};
+      
+      if (doctorIds.length > 0) {
+        const { data: doctorData } = await supabase
+          .from('doctor_registrations')
+          .select('user_id, specialty')
+          .in('user_id', doctorIds);
+        
+        if (doctorData) {
+          doctorData.forEach((doc: any) => {
+            doctorSpecialties[doc.user_id] = doc.specialty;
+          });
+        }
+      }
+
       const result = data.map((appointment: any) => ({
         id: appointment.id,
         doctor_name: appointment.specialist_name,
-        specialty: 'General Medicine',
+        specialty: doctorSpecialties[appointment.doctor_id] || 'General Medicine',
         date: appointment.date,
         diagnosis: appointment.notes || 'Consultation completed',
         prescription: false,

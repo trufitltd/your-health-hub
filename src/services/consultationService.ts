@@ -37,7 +37,7 @@ class ConsultationService {
     appointmentId: string,
     patientId: string,
     doctorId: string,
-    consultationType: 'video' | 'audio' | 'chat'
+    consultationType?: 'video' | 'audio' | 'chat'
   ): Promise<ConsultationSession> {
     const { data, error } = await supabase
       .from('consultation_sessions')
@@ -45,7 +45,7 @@ class ConsultationService {
         appointment_id: appointmentId,
         patient_id: patientId,
         doctor_id: doctorId,
-        consultation_type: consultationType,
+        consultation_type: consultationType || 'video',
         status: 'waiting',
         started_at: new Date().toISOString(),
       })
@@ -146,16 +146,15 @@ class ConsultationService {
 
     // Update the appointment status to completed
     const session = data as ConsultationSession;
-    // TODO: Temporarily commented out for debugging
-    // const { error: appointmentError } = await supabase
-    //   .from('appointments')
-    //   .update({ status: 'completed' })
-    //   .eq('id', session.appointment_id);
+    const { error: appointmentError } = await supabase
+      .from('appointments')
+      .update({ status: 'completed' })
+      .eq('id', session.appointment_id);
 
-    // if (appointmentError) {
-    //   console.error('[ConsultationService] Error updating appointment status:', appointmentError);
-    //   // Don't throw error here as the session was successfully ended
-    // }
+    if (appointmentError) {
+      console.error('[ConsultationService] Error updating appointment status:', appointmentError);
+      // Don't throw error here as the session was successfully ended
+    }
 
     return session;
   }

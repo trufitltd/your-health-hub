@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface ControlBarProps {
-  consultationType: 'video' | 'audio' | 'chat';
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
   isChatOpen: boolean;
@@ -17,7 +16,6 @@ interface ControlBarProps {
 }
 
 export function ControlBar({
-  consultationType,
   isAudioEnabled,
   isVideoEnabled,
   isChatOpen,
@@ -34,8 +32,8 @@ export function ControlBar({
       <div className="flex items-center justify-center">
         <div className="flex items-center gap-2 sm:gap-3 bg-[#252542]/80 backdrop-blur-md rounded-full px-3 sm:px-6 py-2 sm:py-3">
           <TooltipProvider>
-            {/* Audio/Video controls - only for non-chat consultations */}
-            {consultationType !== 'chat' && (
+            {/* Audio/Video controls */}
+            {(
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -55,8 +53,8 @@ export function ControlBar({
                   <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
                 </Tooltip>
 
-                {/* Video control - only for video consultations */}
-                {consultationType === 'video' && (
+                {/* Video control */}
+                {(
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -134,10 +132,10 @@ export function ControlBar({
                   className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
                   onClick={onEndCall}
                 >
-                  {consultationType === 'chat' ? <MessageSquare className="w-5 h-5" /> : <PhoneOff className="w-5 h-5" />}
+                  <PhoneOff className="w-5 h-5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{consultationType === 'chat' ? 'End Chat' : 'End Call'}</TooltipContent>
+              <TooltipContent>End Call</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>

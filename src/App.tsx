@@ -14,7 +14,8 @@ import Install from "./pages/Install";
 import PatientPortal from "./pages/PatientPortal";
 import DoctorPortal from "./pages/DoctorPortal";
 import Consultation from "./pages/Consultation";
-import AdminTestPatient from "./pages/AdminTestPatient";
+import AdminLogin from "./pages/AdminLogin";
+import CentralAdmin from "./pages/CentralAdmin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -37,7 +38,8 @@ const App = () => (
             <Route path="/contact" element={<Contact />} />
             <Route path="/install" element={<Install />} />
             <Route path="/consultation/:appointmentId" element={<Consultation />} />
-            <Route path="/admin/test-patient" element={<AdminTestPatient />} />
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin" element={<CentralAdmin />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

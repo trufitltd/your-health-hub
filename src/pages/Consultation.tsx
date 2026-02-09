@@ -19,8 +19,8 @@ const Consultation = () => {
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [patientWaiting, setPatientWaiting] = useState(false);
 
-  // Get consultation type from URL params or default to video
-  const consultationType = (searchParams.get('type') as 'video' | 'audio' | 'chat') || 'video';
+  // Consultations are uniform; default type is video-enabled internally
+  // (no URL type parameter expected anymore)
 
   // Get participant info from URL params (in production, this would come from the database)
   const participantName = searchParams.get('participant') ||
@@ -174,7 +174,6 @@ const Consultation = () => {
   if (phase === 'pre-check') {
     return (
       <PreConsultationCheck
-        consultationType={consultationType}
         onComplete={handlePreCheckComplete}
         onCancel={handlePreCheckCancel}
       />
@@ -206,7 +205,6 @@ const Consultation = () => {
   return (
     <ConsultationRoom
       appointmentId={appointmentId!}
-      consultationType={consultationType}
       participantName={participantName}
       participantRole={role || 'patient'}
       onEndCall={handleEndCall}
