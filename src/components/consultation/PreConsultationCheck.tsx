@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Progress } from '@/components/ui/progress';
 
 interface PreConsultationCheckProps {
-  consultationType: 'video' | 'audio' | 'chat';
   onComplete: () => void;
   onCancel: () => void;
 }
@@ -21,14 +20,15 @@ interface DeviceCheck {
 }
 
 export function PreConsultationCheck({
-  consultationType,
   onComplete,
   onCancel
 }: PreConsultationCheckProps) {
+  // Consultations are uniform; perform full device checks (video + audio)
+  const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const [checks, setChecks] = useState<DeviceCheck>({
-    camera: consultationType === 'video' ? 'pending' : 'success',
-    microphone: consultationType !== 'chat' ? 'pending' : 'success',
-    speaker: consultationType !== 'chat' ? 'pending' : 'success',
+    camera: 'pending',
+    microphone: 'pending',
+    speaker: 'pending',
     connection: 'pending'
   });
   const [isTestingAudio, setIsTestingAudio] = useState(false);
@@ -42,15 +42,6 @@ export function PreConsultationCheck({
 
   const runDeviceChecks = useCallback(async () => {
     setPermissionError(null);
-
-    // For chat consultations, only check connection
-    if (consultationType === 'chat') {
-      setChecks(prev => ({ ...prev, connection: 'checking' }));
-      await new Promise(resolve => setTimeout(resolve, 800));
-      setChecks(prev => ({ ...prev, connection: 'success' }));
-      return;
-    }
-
     // Check connection (for all types)
     setChecks(prev => ({ ...prev, connection: 'checking' }));
     await new Promise(resolve => setTimeout(resolve, 800));
@@ -138,8 +129,8 @@ export function PreConsultationCheck({
       }
     }
 
-    // Check speaker (simulated) - only for video/audio
-    if (consultationType === 'video' || consultationType === 'audio') {
+    // Check speaker (simulated)
+    if (true) {
       setChecks(prev => ({ ...prev, speaker: 'checking' }));
       await new Promise(resolve => setTimeout(resolve, 500));
       setChecks(prev => ({ ...prev, speaker: 'success' }));

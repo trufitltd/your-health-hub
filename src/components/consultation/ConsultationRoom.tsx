@@ -33,7 +33,6 @@ interface Message {
 
 interface ConsultationRoomProps {
   appointmentId: string;
-  consultationType: 'video' | 'audio' | 'chat';
   participantName: string;
   participantRole: 'doctor' | 'patient';
   onEndCall: () => void;
@@ -41,14 +40,15 @@ interface ConsultationRoomProps {
 
 export function ConsultationRoom({
   appointmentId,
-  consultationType,
   participantName,
   participantRole,
   onEndCall
 }: ConsultationRoomProps) {
+  // Consultations are uniform; default to video+audio enabled internally
+  const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const { user } = useAuth();
-  const [isVideoEnabled, setIsVideoEnabled] = useState(consultationType === 'video');
-  const [isAudioEnabled, setIsAudioEnabled] = useState(consultationType !== 'chat');
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [callDuration, setCallDuration] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -202,16 +202,8 @@ export function ConsultationRoom({
   const initializeMedia = useCallback(async () => {
     try {
       const constraints: MediaStreamConstraints = {
-        video: consultationType === 'video' ? {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user'
-        } : false,
-        audio: consultationType !== 'chat' ? { 
-          echoCancellation: true, 
-          noiseSuppression: true, 
-          autoGainControl: true 
-        } : false
+        video: true,
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       };
 
       console.log('[Media] Requesting media with constraints:', constraints);
@@ -1619,7 +1611,6 @@ export function ConsultationRoom({
 
           {/* Control bar */}
           <ControlBar
-            consultationType={consultationType}
             isAudioEnabled={isAudioEnabled}
             isVideoEnabled={isVideoEnabled}
             isChatOpen={isChatOpen}
