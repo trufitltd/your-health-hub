@@ -69,7 +69,8 @@ export default function DoctorDiscovery() {
           age,
           verification_status,
           city,
-          state
+          state,
+          bio
         `)
         .eq('verification_status', 'approved')
         .order('full_name');
@@ -223,7 +224,7 @@ export default function DoctorDiscovery() {
   return (
     <Layout>
       <div className="min-h-screen bg-muted/30 py-8 md:py-12">
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-4 my-12">
           {!appointmentType ? (
             // Step 1: Choose appointment type
             <motion.div
@@ -275,14 +276,19 @@ export default function DoctorDiscovery() {
               animate={{ opacity: 1 }}
             >
               <div className="mb-8">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAppointmentType(null)}
-                  className="mb-6"
-                >
-                  ← Back to Type Selection
-                </Button>
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold">Find a {appointmentType === 'specialist' ? 'Specialist' : 'General Practitioner'}</h2>
+                    <p className="text-muted-foreground text-sm">Fee: ₦{appointmentType === 'specialist' ? '10,000' : '5,000'}</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAppointmentType(null)}
+                  >
+                    Change Type
+                  </Button>
+                </div>
 
                 <div className="flex flex-col md:flex-row gap-4 mb-6">
                   <div className="flex-1">
@@ -400,13 +406,21 @@ export default function DoctorDiscovery() {
                                 {doctor.full_name.split(' ').map(n => n[0]).join('')}
                               </AvatarFallback>
                             </Avatar>
-                            <Badge variant="outline" className="text-xs">
-                              {doctor.experience_years}y exp
-                            </Badge>
+                            <div className="flex gap-2 flex-col">
+                              <Badge variant="outline" className="text-xs">
+                                {doctor.experience_years}y exp
+                              </Badge>
+                              <Badge className="text-xs bg-blue-100 text-blue-800">
+                                {appointmentType === 'specialist' ? 'Specialist' : 'General'}
+                              </Badge>
+                            </div>
                           </div>
 
                           <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
-                          <p className="text-sm text-primary font-medium mb-3">{doctor.specialty}</p>
+                          <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
+                          {doctor.bio && (
+                            <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{doctor.bio}</p>
+                          )}
 
                           <div className="space-y-2 mb-4 flex-1">
                             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -428,6 +442,11 @@ export default function DoctorDiscovery() {
                               <span className="text-xs text-muted-foreground">({doctor.total_reviews})</span>
                             </div>
                           )}
+
+                          <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
+                            <p className="text-sm font-semibold text-success">₦{appointmentType === 'specialist' ? '10,000' : '5,000'}</p>
+                            <p className="text-xs text-muted-foreground">Consultation Fee</p>
+                          </div>
 
                           <div className="flex gap-2 pt-4 border-t">
                             <Button
