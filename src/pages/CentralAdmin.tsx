@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
-  Star, TrendingUp, Shield, Award, Eye, Trash2,
+  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail,
   Badge as BadgeIcon
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -64,6 +64,11 @@ const CentralAdmin = () => {
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
   const [isProcessing, setIsProcessing] = useState(false);
+  const [inboxSearch, setInboxSearch] = useState('');
+  const [inboxRange, setInboxRange] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
+  const [inboxPage, setInboxPage] = useState(1);
+  const [inboxPageSize, setInboxPageSize] = useState(10);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   const adminEmails = useMemo(() => {
     const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
@@ -101,9 +106,30 @@ const CentralAdmin = () => {
             .eq('doctor_id', doc.user_id)
             .eq('status', 'completed');
 
+          const { data: ratingRows, error: ratingError } = await supabase
+            .from('appointments')
+            .select('rating')
+            .eq('doctor_id', doc.user_id)
+            .not('rating', 'is', null);
+
+          if (ratingError) {
+            console.error('Error fetching ratings for doctor:', doc.user_id, ratingError);
+          }
+
+          const ratings = (ratingRows || [])
+            .map((row: { rating: number | null }) => row.rating)
+            .filter((rating: number | null): rating is number => typeof rating === 'number');
+
+          const totalReviews = ratings.length;
+          const averageRating = totalReviews > 0
+            ? Number((ratings.reduce((sum, rating) => sum + rating, 0) / totalReviews).toFixed(2))
+            : 0;
+
           return {
             ...doc,
             total_consultations: consultationCount || 0,
+            rating: averageRating,
+            total_reviews: totalReviews,
           };
         })
       );
@@ -132,6 +158,87 @@ const CentralAdmin = () => {
     enabled: !!user && isAdmin,
   });
 
+  const { data: qaAppointments = [], isLoading: qaLoading } = useQuery({
+    queryKey: ['admin-qa-appointments'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id,doctor_id,status,rating,review_comment,notes,created_at,updated_at,confirmation_sms_sent_at,appointment_date,date')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching QA appointments:', error);
+        throw error;
+      }
+
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const { data: qaSessions = [] } = useQuery({
+    queryKey: ['admin-qa-sessions'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('consultation_sessions')
+        .select('id,doctor_id,status,duration_seconds,started_at,ended_at')
+        .eq('status', 'ended')
+        .order('ended_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching QA sessions:', error);
+        return [];
+      }
+
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
+    queryKey: ['admin-contact-messages'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 20 });
+      if (error) {
+        console.error('Error fetching contact messages:', error);
+        throw error;
+      }
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const inboxStartDate = useMemo(() => {
+    if (inboxRange === 'all') return null;
+    const now = new Date();
+    const days = inboxRange === '7d' ? 7 : inboxRange === '30d' ? 30 : 90;
+    const cutoff = new Date(now);
+    cutoff.setDate(now.getDate() - days);
+    return cutoff.toISOString();
+  }, [inboxRange]);
+
+  const { data: inboxRows = [], isLoading: inboxLoading } = useQuery({
+    queryKey: ['admin-contact-inbox', inboxSearch, inboxRange, inboxPage, inboxPageSize],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_contact_messages_inbox', {
+        search_term: inboxSearch.trim() || null,
+        start_date: inboxStartDate,
+        limit_count: inboxPageSize,
+        offset_count: (inboxPage - 1) * inboxPageSize,
+      });
+      if (error) {
+        console.error('Error fetching contact inbox:', error);
+        throw error;
+      }
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
   // Check admin access - now after hooks
   if (!user) {
     navigate('/admin/login');
@@ -155,6 +262,139 @@ const CentralAdmin = () => {
       ? (doctors.reduce((sum, d) => sum + (d.rating || 0), 0) / doctors.length).toFixed(2)
       : 0,
   };
+
+  const qaMetrics = useMemo(() => {
+    const total = qaAppointments.length;
+    const completed = qaAppointments.filter((apt: any) => apt.status === 'completed').length;
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    const ratings = qaAppointments
+      .map((apt: any) => apt.rating)
+      .filter((rating: number | null) => typeof rating === 'number');
+    const averageRating = ratings.length > 0
+      ? Number((ratings.reduce((sum: number, rating: number) => sum + rating, 0) / ratings.length).toFixed(2))
+      : 0;
+
+    const documentedCompleted = qaAppointments.filter((apt: any) =>
+      apt.status === 'completed' && typeof apt.notes === 'string' && apt.notes.trim().length > 0
+    ).length;
+    const documentationCompliance = completed > 0 ? Math.round((documentedCompleted / completed) * 100) : 0;
+
+    const responseCompliant = qaAppointments.filter((apt: any) => {
+      if (!apt.created_at || !apt.updated_at) return false;
+      if (apt.status !== 'confirmed' && apt.status !== 'completed') return false;
+      const createdAt = new Date(apt.created_at).getTime();
+      const approvedAt = new Date(apt.updated_at).getTime();
+      const within24Hours = approvedAt - createdAt <= 24 * 60 * 60 * 1000;
+      return within24Hours;
+    }).length;
+    const responseTimeCompliance = total > 0 ? Math.round((responseCompliant / total) * 100) : 0;
+
+    return {
+      total,
+      completed,
+      completionRate,
+      averageRating,
+      documentationCompliance,
+      responseTimeCompliance,
+    };
+  }, [qaAppointments]);
+
+  const qaAlerts = useMemo(() => {
+    const alerts: string[] = [];
+
+    const today = new Date();
+    const oneYearAgo = new Date(today);
+    oneYearAgo.setFullYear(today.getFullYear() - 1);
+
+    const doctorsNeedingRenewal = doctors.filter((doctor) => {
+      if (!doctor.verification_date) return false;
+      const verificationDate = new Date(doctor.verification_date);
+      return verificationDate < oneYearAgo;
+    });
+
+    if (doctorsNeedingRenewal.length > 0) {
+      alerts.push(`${doctorsNeedingRenewal.length} doctor${doctorsNeedingRenewal.length > 1 ? 's' : ''} require credential renewal`);
+    }
+
+    const getAppointmentDateValue = (appointment: any) =>
+      appointment?.appointment_date || appointment?.date || appointment?.created_at;
+
+    const last30 = new Date(today);
+    last30.setDate(today.getDate() - 30);
+    const prev30 = new Date(today);
+    prev30.setDate(today.getDate() - 60);
+
+    const doctorRatings = new Map<string, { recent: number[]; previous: number[] }>();
+
+    qaAppointments.forEach((appointment: any) => {
+      if (!appointment.doctor_id || typeof appointment.rating !== 'number') return;
+      const appointmentDate = getAppointmentDateValue(appointment);
+      if (!appointmentDate) return;
+      const date = new Date(appointmentDate);
+      if (date < prev30) return;
+
+      if (!doctorRatings.has(appointment.doctor_id)) {
+        doctorRatings.set(appointment.doctor_id, { recent: [], previous: [] });
+      }
+
+      const entry = doctorRatings.get(appointment.doctor_id)!;
+      if (date >= last30) {
+        entry.recent.push(appointment.rating);
+      } else {
+        entry.previous.push(appointment.rating);
+      }
+    });
+
+    const decliningDoctors = Array.from(doctorRatings.entries()).filter(([_, data]) => {
+      if (data.recent.length < 3 || data.previous.length < 3) return false;
+      const recentAvg = data.recent.reduce((sum, rating) => sum + rating, 0) / data.recent.length;
+      const prevAvg = data.previous.reduce((sum, rating) => sum + rating, 0) / data.previous.length;
+      return recentAvg < prevAvg - 0.5;
+    });
+
+    if (decliningDoctors.length > 0) {
+      alerts.push(`${decliningDoctors.length} doctor${decliningDoctors.length > 1 ? 's' : ''} with declining patient satisfaction`);
+    }
+
+    const sessionWindow = new Date(today);
+    sessionWindow.setDate(today.getDate() - 30);
+
+    const recentSessions = qaSessions.filter((session: any) => {
+      if (!session.ended_at || !session.duration_seconds) return false;
+      return new Date(session.ended_at) >= sessionWindow;
+    });
+
+    const overallAvgDuration =
+      recentSessions.length > 0
+        ? recentSessions.reduce((sum: number, session: any) => sum + session.duration_seconds, 0) / recentSessions.length
+        : 0;
+
+    const doctorSessionDurations = new Map<string, number[]>();
+    recentSessions.forEach((session: any) => {
+      if (!session.doctor_id || typeof session.duration_seconds !== 'number') return;
+      if (!doctorSessionDurations.has(session.doctor_id)) {
+        doctorSessionDurations.set(session.doctor_id, []);
+      }
+      doctorSessionDurations.get(session.doctor_id)!.push(session.duration_seconds);
+    });
+
+    const exceedingDoctors = Array.from(doctorSessionDurations.entries()).filter(([_, durations]) => {
+      if (durations.length < 3 || overallAvgDuration === 0) return false;
+      const avgDuration = durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
+      return avgDuration > overallAvgDuration * 1.25;
+    });
+
+    if (exceedingDoctors.length > 0) {
+      alerts.push(`${exceedingDoctors.length} doctor${exceedingDoctors.length > 1 ? 's' : ''} exceeding average completion time`);
+    }
+
+    return alerts;
+  }, [doctors, qaAppointments, qaSessions]);
+
+  const inboxTotalCount = inboxRows.length > 0 ? Number(inboxRows[0].total_count || 0) : 0;
+  const inboxTotalPages = inboxTotalCount > 0 ? Math.ceil(inboxTotalCount / inboxPageSize) : 1;
+  const selectedMessage = inboxRows.find((row: any) => row.id === selectedMessageId) || null;
 
   // Filter doctors
   const filteredDoctors = doctors.filter(doctor => {
@@ -344,6 +584,7 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
+                    { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                   ].map((item) => (
@@ -481,6 +722,39 @@ const CentralAdmin = () => {
                     </CardContent>
                   </Card>
 
+                  {/* Recent Contact Messages */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg">Recent Contact Messages</CardTitle>
+                      <CardDescription>Latest inquiries from the public contact form</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {contactMessagesLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading messages...</p>
+                      ) : contactMessages.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No messages yet.</p>
+                      ) : (
+                        contactMessages.slice(0, 6).map((message: any) => (
+                          <div key={message.id} className="p-3 rounded-lg border border-border bg-muted/30">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold">
+                                  {message.first_name} {message.last_name}
+                                </p>
+                                <p className="text-xs text-muted-foreground">{message.email}</p>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium mt-2">{message.subject}</p>
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                          </div>
+                        ))
+                      )}
+                    </CardContent>
+                  </Card>
+
                   {/* Verification Workflow */}
                   <Card>
                     <CardHeader>
@@ -535,6 +809,166 @@ const CentralAdmin = () => {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              {/* Inbox Tab */}
+              <TabsContent value="inbox" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Contact Inbox</CardTitle>
+                    <CardDescription>Manage incoming messages from the public contact form</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="relative w-full lg:max-w-md">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search name, email, subject, or message..."
+                          className="pl-10"
+                          value={inboxSearch}
+                          onChange={(event) => {
+                            setInboxSearch(event.target.value);
+                            setInboxPage(1);
+                          }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { value: '7d', label: 'Last 7 days' },
+                          { value: '30d', label: 'Last 30 days' },
+                          { value: '90d', label: 'Last 90 days' },
+                          { value: 'all', label: 'All time' },
+                        ].map((item) => (
+                          <Button
+                            key={item.value}
+                            size="sm"
+                            variant={inboxRange === item.value ? 'default' : 'outline'}
+                            onClick={() => {
+                              setInboxRange(item.value as any);
+                              setInboxPage(1);
+                            }}
+                          >
+                            {item.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span>Total {inboxTotalCount} messages</span>
+                        <span>•</span>
+                        <span>Page {inboxPage} of {inboxTotalPages}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {[10, 20, 50].map((size) => (
+                          <Button
+                            key={size}
+                            size="sm"
+                            variant={inboxPageSize === size ? 'default' : 'outline'}
+                            onClick={() => {
+                              setInboxPageSize(size);
+                              setInboxPage(1);
+                            }}
+                          >
+                            {size} / page
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-2 space-y-3">
+                        {inboxLoading ? (
+                          <p className="text-sm text-muted-foreground">Loading inbox...</p>
+                        ) : inboxRows.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No messages match your filters.</p>
+                        ) : (
+                          inboxRows.map((message: any) => (
+                            <button
+                              key={message.id}
+                              type="button"
+                              onClick={() => setSelectedMessageId(message.id)}
+                              className={`w-full text-left p-4 rounded-xl border transition ${
+                                selectedMessageId === message.id
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border hover:border-primary/30 hover:bg-muted/40'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-semibold text-sm">
+                                    {message.first_name} {message.last_name}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">{message.email}</p>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                                  {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                                </span>
+                              </div>
+                              <p className="text-sm font-medium mt-2">{message.subject}</p>
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                            </button>
+                          ))
+                        )}
+
+                        <div className="flex items-center justify-between pt-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setInboxPage((prev) => Math.max(1, prev - 1))}
+                            disabled={inboxPage === 1}
+                          >
+                            Previous
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setInboxPage((prev) => Math.min(inboxTotalPages, prev + 1))}
+                            disabled={inboxPage >= inboxTotalPages}
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="lg:col-span-1">
+                        <div className="p-4 rounded-xl border border-border bg-muted/30 h-full">
+                          {!selectedMessage ? (
+                            <p className="text-sm text-muted-foreground">Select a message to view details.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              <div>
+                                <p className="text-sm font-semibold">From</p>
+                                <p className="text-sm">{selectedMessage.first_name} {selectedMessage.last_name}</p>
+                                <p className="text-xs text-muted-foreground">{selectedMessage.email}</p>
+                                {selectedMessage.phone && (
+                                  <p className="text-xs text-muted-foreground">{selectedMessage.phone}</p>
+                                )}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Subject</p>
+                                <p className="text-sm">{selectedMessage.subject}</p>
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Received</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {selectedMessage.created_at ? new Date(selectedMessage.created_at).toLocaleString() : ''}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Message</p>
+                                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                                  {selectedMessage.message}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               {/* Doctors Tab */}
@@ -798,37 +1232,57 @@ const CentralAdmin = () => {
                       <div className="p-4 rounded-lg border border-Success/30 bg-success/5">
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-medium">Documentation Compliance</span>
-                          <span className="text-2xl font-bold text-success">98%</span>
+                          <span className="text-2xl font-bold text-success">
+                            {qaLoading ? '--' : `${qaMetrics.documentationCompliance}%`}
+                          </span>
                         </div>
                         <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
-                          <div className="h-full bg-success" style={{ width: '98%' }} />
+                          <div
+                            className="h-full bg-success"
+                            style={{ width: `${qaMetrics.documentationCompliance}%` }}
+                          />
                         </div>
                       </div>
                       <div className="p-4 rounded-lg border border-primary/30 bg-primary/5">
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-medium">Appointment Completion Rate</span>
-                          <span className="text-2xl font-bold text-primary">95%</span>
+                          <span className="text-2xl font-bold text-primary">
+                            {qaLoading ? '--' : `${qaMetrics.completionRate}%`}
+                          </span>
                         </div>
                         <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
-                          <div className="h-full bg-primary" style={{ width: '95%' }} />
+                          <div
+                            className="h-full bg-primary"
+                            style={{ width: `${qaMetrics.completionRate}%` }}
+                          />
                         </div>
                       </div>
                       <div className="p-4 rounded-lg border border-accent/30 bg-accent/5">
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-medium">Patient Satisfaction Average</span>
-                          <span className="text-2xl font-bold text-accent">4.6/5</span>
+                          <span className="text-2xl font-bold text-accent">
+                            {qaLoading ? '--' : `${qaMetrics.averageRating || 0}/5`}
+                          </span>
                         </div>
                         <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
-                          <div className="h-full bg-accent" style={{ width: '92%' }} />
+                          <div
+                            className="h-full bg-accent"
+                            style={{ width: `${Math.min(100, (qaMetrics.averageRating || 0) * 20)}%` }}
+                          />
                         </div>
                       </div>
                       <div className="p-4 rounded-lg border border-warning/30 bg-warning/5">
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-medium">Response Time Compliance</span>
-                          <span className="text-2xl font-bold text-warning">88%</span>
+                          <span className="text-2xl font-bold text-warning">
+                            {qaLoading ? '--' : `${qaMetrics.responseTimeCompliance}%`}
+                          </span>
                         </div>
                         <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
-                          <div className="h-full bg-warning" style={{ width: '88%' }} />
+                          <div
+                            className="h-full bg-warning"
+                            style={{ width: `${qaMetrics.responseTimeCompliance}%` }}
+                          />
                         </div>
                       </div>
                     </div>
@@ -839,9 +1293,13 @@ const CentralAdmin = () => {
                         <div>
                           <p className="font-semibold text-sm mb-1">Monitoring Alerts</p>
                           <ul className="text-sm text-muted-foreground space-y-1">
-                            <li>• 2 doctors require credential renewal</li>
-                            <li>• 1 doctor with declining patient satisfaction trend</li>
-                            <li>• 3 doctors exceeding average completion time</li>
+                            {qaAlerts.length === 0 ? (
+                              <li>• No active alerts right now</li>
+                            ) : (
+                              qaAlerts.map((alert) => (
+                                <li key={alert}>• {alert}</li>
+                              ))
+                            )}
                           </ul>
                         </div>
                       </div>
