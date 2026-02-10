@@ -184,8 +184,7 @@ export default function DoctorDiscovery() {
         })
       );
 
-      return doctorsWithRatings;
-
+      return doctorsWithRatings.filter(doctor => doctor.is_active !== false);
     }
   });
 

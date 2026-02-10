@@ -34,7 +34,22 @@ export const useAppointments = () => {
         .order('date', { ascending: true });
 
       if (error) throw error;
-      return data as Appointment[];
+      
+      // Fetch doctor profile pictures
+      const doctorIds = (data || []).map(apt => apt.doctor_id).filter(Boolean);
+      if (doctorIds.length === 0) return data as Appointment[];
+      
+      const { data: doctorData } = await supabase
+        .from('doctor_registrations')
+        .select('user_id, profile_picture_url')
+        .in('user_id', doctorIds);
+      
+      const doctorPictureMap = new Map(doctorData?.map(d => [d.user_id, d.profile_picture_url]) || []);
+      
+      return (data || []).map(apt => ({
+        ...apt,
+        doctor_profile_picture: doctorPictureMap.get(apt.doctor_id) || null
+      })) as Appointment[];
     },
     enabled: !!user?.id,
   });
