@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
-  Star, TrendingUp, Shield, Award, Eye, Trash2,
+  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail,
   Badge as BadgeIcon
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -64,6 +64,11 @@ const CentralAdmin = () => {
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
   const [isProcessing, setIsProcessing] = useState(false);
+  const [inboxSearch, setInboxSearch] = useState('');
+  const [inboxRange, setInboxRange] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
+  const [inboxPage, setInboxPage] = useState(1);
+  const [inboxPageSize, setInboxPageSize] = useState(10);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   const adminEmails = useMemo(() => {
     const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
@@ -186,6 +191,48 @@ const CentralAdmin = () => {
         return [];
       }
 
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
+    queryKey: ['admin-contact-messages'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 20 });
+      if (error) {
+        console.error('Error fetching contact messages:', error);
+        throw error;
+      }
+      return data || [];
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const inboxStartDate = useMemo(() => {
+    if (inboxRange === 'all') return null;
+    const now = new Date();
+    const days = inboxRange === '7d' ? 7 : inboxRange === '30d' ? 30 : 90;
+    const cutoff = new Date(now);
+    cutoff.setDate(now.getDate() - days);
+    return cutoff.toISOString();
+  }, [inboxRange]);
+
+  const { data: inboxRows = [], isLoading: inboxLoading } = useQuery({
+    queryKey: ['admin-contact-inbox', inboxSearch, inboxRange, inboxPage, inboxPageSize],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_contact_messages_inbox', {
+        search_term: inboxSearch.trim() || null,
+        start_date: inboxStartDate,
+        limit_count: inboxPageSize,
+        offset_count: (inboxPage - 1) * inboxPageSize,
+      });
+      if (error) {
+        console.error('Error fetching contact inbox:', error);
+        throw error;
+      }
       return data || [];
     },
     enabled: !!user && isAdmin,
@@ -344,6 +391,10 @@ const CentralAdmin = () => {
 
     return alerts;
   }, [doctors, qaAppointments, qaSessions]);
+
+  const inboxTotalCount = inboxRows.length > 0 ? Number(inboxRows[0].total_count || 0) : 0;
+  const inboxTotalPages = inboxTotalCount > 0 ? Math.ceil(inboxTotalCount / inboxPageSize) : 1;
+  const selectedMessage = inboxRows.find((row: any) => row.id === selectedMessageId) || null;
 
   // Filter doctors
   const filteredDoctors = doctors.filter(doctor => {
@@ -533,6 +584,7 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
+                    { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                   ].map((item) => (
@@ -670,6 +722,39 @@ const CentralAdmin = () => {
                     </CardContent>
                   </Card>
 
+                  {/* Recent Contact Messages */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg">Recent Contact Messages</CardTitle>
+                      <CardDescription>Latest inquiries from the public contact form</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {contactMessagesLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading messages...</p>
+                      ) : contactMessages.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No messages yet.</p>
+                      ) : (
+                        contactMessages.slice(0, 6).map((message: any) => (
+                          <div key={message.id} className="p-3 rounded-lg border border-border bg-muted/30">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold">
+                                  {message.first_name} {message.last_name}
+                                </p>
+                                <p className="text-xs text-muted-foreground">{message.email}</p>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium mt-2">{message.subject}</p>
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                          </div>
+                        ))
+                      )}
+                    </CardContent>
+                  </Card>
+
                   {/* Verification Workflow */}
                   <Card>
                     <CardHeader>
@@ -724,6 +809,166 @@ const CentralAdmin = () => {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              {/* Inbox Tab */}
+              <TabsContent value="inbox" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Contact Inbox</CardTitle>
+                    <CardDescription>Manage incoming messages from the public contact form</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="relative w-full lg:max-w-md">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search name, email, subject, or message..."
+                          className="pl-10"
+                          value={inboxSearch}
+                          onChange={(event) => {
+                            setInboxSearch(event.target.value);
+                            setInboxPage(1);
+                          }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { value: '7d', label: 'Last 7 days' },
+                          { value: '30d', label: 'Last 30 days' },
+                          { value: '90d', label: 'Last 90 days' },
+                          { value: 'all', label: 'All time' },
+                        ].map((item) => (
+                          <Button
+                            key={item.value}
+                            size="sm"
+                            variant={inboxRange === item.value ? 'default' : 'outline'}
+                            onClick={() => {
+                              setInboxRange(item.value as any);
+                              setInboxPage(1);
+                            }}
+                          >
+                            {item.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span>Total {inboxTotalCount} messages</span>
+                        <span>•</span>
+                        <span>Page {inboxPage} of {inboxTotalPages}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {[10, 20, 50].map((size) => (
+                          <Button
+                            key={size}
+                            size="sm"
+                            variant={inboxPageSize === size ? 'default' : 'outline'}
+                            onClick={() => {
+                              setInboxPageSize(size);
+                              setInboxPage(1);
+                            }}
+                          >
+                            {size} / page
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-2 space-y-3">
+                        {inboxLoading ? (
+                          <p className="text-sm text-muted-foreground">Loading inbox...</p>
+                        ) : inboxRows.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No messages match your filters.</p>
+                        ) : (
+                          inboxRows.map((message: any) => (
+                            <button
+                              key={message.id}
+                              type="button"
+                              onClick={() => setSelectedMessageId(message.id)}
+                              className={`w-full text-left p-4 rounded-xl border transition ${
+                                selectedMessageId === message.id
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border hover:border-primary/30 hover:bg-muted/40'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-semibold text-sm">
+                                    {message.first_name} {message.last_name}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">{message.email}</p>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                                  {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                                </span>
+                              </div>
+                              <p className="text-sm font-medium mt-2">{message.subject}</p>
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                            </button>
+                          ))
+                        )}
+
+                        <div className="flex items-center justify-between pt-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setInboxPage((prev) => Math.max(1, prev - 1))}
+                            disabled={inboxPage === 1}
+                          >
+                            Previous
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setInboxPage((prev) => Math.min(inboxTotalPages, prev + 1))}
+                            disabled={inboxPage >= inboxTotalPages}
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="lg:col-span-1">
+                        <div className="p-4 rounded-xl border border-border bg-muted/30 h-full">
+                          {!selectedMessage ? (
+                            <p className="text-sm text-muted-foreground">Select a message to view details.</p>
+                          ) : (
+                            <div className="space-y-3">
+                              <div>
+                                <p className="text-sm font-semibold">From</p>
+                                <p className="text-sm">{selectedMessage.first_name} {selectedMessage.last_name}</p>
+                                <p className="text-xs text-muted-foreground">{selectedMessage.email}</p>
+                                {selectedMessage.phone && (
+                                  <p className="text-xs text-muted-foreground">{selectedMessage.phone}</p>
+                                )}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Subject</p>
+                                <p className="text-sm">{selectedMessage.subject}</p>
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Received</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {selectedMessage.created_at ? new Date(selectedMessage.created_at).toLocaleString() : ''}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold">Message</p>
+                                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                                  {selectedMessage.message}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               {/* Doctors Tab */}
