@@ -91,9 +91,9 @@ const PatientPortal = () => {
           id,
           prescriptions,
           created_at,
-          doctor_id,
-          doctors!inner(full_name),
-          appointments!inner(specialist_name)
+          consultation_sessions!inner(
+            appointments!inner(specialist_name)
+          )
         `)
         .eq('patient_id', user.id)
         .not('prescriptions', 'is', null)
@@ -101,7 +101,7 @@ const PatientPortal = () => {
 
       if (error) {
         console.error('Error fetching prescriptions:', error);
-        throw error;
+        return [];
       }
 
       // Parse prescriptions and format them
@@ -121,7 +121,7 @@ const PatientPortal = () => {
                 id: `${note.id}-${formatted.length}`,
                 medication: parts[0] || line,
                 dosage: parts[1] || 'As prescribed',
-                doctor: note.doctors?.full_name || note.appointments?.specialist_name || 'Dr. Unknown',
+                doctor: note.consultation_sessions?.appointments?.specialist_name || 'Dr. Unknown',
                 date: note.created_at,
                 refillsRemaining: 3, // Default value
                 status: 'active'
