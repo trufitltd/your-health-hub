@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 const contactInfo = [
   {
@@ -56,6 +57,14 @@ const faqs = [
 
 export default function ContactPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    subject: '',
+    message: '',
+  });
 
   // Scroll to top when page mounts
   useEffect(() => {
@@ -66,11 +75,35 @@ export default function ContactPage() {
     e.preventDefault();
     setIsSubmitting(true);
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      const { error } = await supabase.from('contact_messages').insert({
+        first_name: formData.firstName.trim(),
+        last_name: formData.lastName.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim() || null,
+        subject: formData.subject.trim(),
+        message: formData.message.trim(),
+      });
 
-    setIsSubmitting(false);
-    toast.success('Message sent successfully! We\'ll get back to you soon.');
+      if (error) {
+        console.error('Failed to send contact message:', error);
+        throw error;
+      }
+
+      setFormData({
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        subject: '',
+        message: '',
+      });
+      toast.success('Message sent successfully! We\'ll get back to you soon.');
+    } catch (error) {
+      toast.error('Failed to send message. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -140,27 +173,63 @@ export default function ContactPage() {
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="firstName">First Name</Label>
-                    <Input id="firstName" placeholder="John" className="mt-1.5" required />
+                    <Input
+                      id="firstName"
+                      placeholder="John"
+                      className="mt-1.5"
+                      value={formData.firstName}
+                      onChange={(event) => setFormData((prev) => ({ ...prev, firstName: event.target.value }))}
+                      required
+                    />
                   </div>
                   <div>
                     <Label htmlFor="lastName">Last Name</Label>
-                    <Input id="lastName" placeholder="Doe" className="mt-1.5" required />
+                    <Input
+                      id="lastName"
+                      placeholder="Doe"
+                      className="mt-1.5"
+                      value={formData.lastName}
+                      onChange={(event) => setFormData((prev) => ({ ...prev, lastName: event.target.value }))}
+                      required
+                    />
                   </div>
                 </div>
 
                 <div>
                   <Label htmlFor="email">Email Address</Label>
-                  <Input id="email" type="email" placeholder="john@example.com" className="mt-1.5" required />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="john@example.com"
+                    className="mt-1.5"
+                    value={formData.email}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, email: event.target.value }))}
+                    required
+                  />
                 </div>
 
                 <div>
                   <Label htmlFor="phone">Phone Number (Optional)</Label>
-                  <Input id="phone" type="tel" placeholder="+1 (234) 567-890" className="mt-1.5" />
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="+1 (234) 567-890"
+                    className="mt-1.5"
+                    value={formData.phone}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, phone: event.target.value }))}
+                  />
                 </div>
 
                 <div>
                   <Label htmlFor="subject">Subject</Label>
-                  <Input id="subject" placeholder="How can we help?" className="mt-1.5" required />
+                  <Input
+                    id="subject"
+                    placeholder="How can we help?"
+                    className="mt-1.5"
+                    value={formData.subject}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, subject: event.target.value }))}
+                    required
+                  />
                 </div>
 
                 <div>
@@ -169,6 +238,8 @@ export default function ContactPage() {
                     id="message"
                     placeholder="Tell us more about your inquiry..."
                     className="mt-1.5 min-h-[120px]"
+                    value={formData.message}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, message: event.target.value }))}
                     required
                   />
                 </div>

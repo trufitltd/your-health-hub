@@ -1553,11 +1553,12 @@ export function ConsultationRoom({
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-800">
                       <div className="text-center">
-                        <Avatar className="w-16 h-16 mx-auto mb-1">
-                          <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                            {myInitials}
-                          </AvatarFallback>
-                        </Avatar>
+                        {renderAvatar(
+                          myAvatarLoaded ? myAvatarUrl : null,
+                          myInitials,
+                          'w-16 h-16 mx-auto mb-1',
+                          'bg-primary text-primary-foreground text-xl'
+                        )}
                         <p className="text-white text-xs font-medium">You</p>
                       </div>
                     </div>
