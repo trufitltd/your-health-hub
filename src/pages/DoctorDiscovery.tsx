@@ -12,6 +12,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
+import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import {
   Star, Search, Filter, Clock, MapPin, Award, Heart,
   ChevronRight, Loader
@@ -20,6 +21,7 @@ import {
 interface Doctor {
   id: string;
   user_id: string;
+  auth_user_id?: string;
   full_name: string;
   specialty: string;
   hospital_affiliation: string;
@@ -40,6 +42,7 @@ export default function DoctorDiscovery() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { presenceMap } = useDoctorPresence();
   const [appointmentType, setAppointmentType] = useState<'general' | 'specialist' | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -153,10 +156,10 @@ export default function DoctorDiscovery() {
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
         (data || []).map(async (doctor) => {
-          // Fetch doctor availability status
+          // Fetch doctor availability status AND auth user ID
           const { data: doctorStatus } = await supabase
             .from('doctors')
-            .select('is_active, online_status')
+            .select('is_active, id')
             .eq('id', doctor.user_id)
             .single();
 
@@ -172,24 +175,41 @@ export default function DoctorDiscovery() {
 
           return {
             ...doctor,
+            auth_user_id: doctorStatus?.id || doctor.user_id,
             rating: avgRating,
             total_reviews: ratings.length,
             experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
-            is_active: doctorStatus?.is_active !== false, // Default to true if not set
-            online_status: (doctorStatus?.online_status || 'offline') as 'online' | 'away' | 'offline',
+            is_active: doctorStatus?.is_active !== false,
           };
         })
       );
 
       return doctorsWithRatings;
+
     }
   });
+
+  // Merge presence data with doctors
+  const doctorsWithPresence = useMemo(() => {
+    console.log('[DoctorDiscovery] Current presence map:', presenceMap);
+    console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, auth_user_id: d.auth_user_id, name: d.full_name })));
+    return doctors.map(doctor => {
+      // Try auth_user_id first, fallback to user_id
+      const lookupId = doctor.auth_user_id || doctor.user_id;
+      const status = presenceMap[lookupId] || 'offline';
+      console.log(`[DoctorDiscovery] Doctor ${doctor.full_name} (user_id: ${doctor.user_id}, auth: ${doctor.auth_user_id}): ${status}`);
+      return {
+        ...doctor,
+        online_status: status as 'online' | 'away' | 'offline',
+      };
+    });
+  }, [doctors, presenceMap]);
 
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
     if (!appointmentType) return [];
 
-    return doctors.filter(doctor => {
+    return doctorsWithPresence.filter(doctor => {
       const matchesSearch = 
         doctor.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         doctor.specialty.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -207,15 +227,15 @@ export default function DoctorDiscovery() {
 
       return matchesSearch && isGeneralOrMatchesType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
     });
-  }, [appointmentType, searchQuery, filters, doctors, availabilityMode, availableDoctorIds]);
+  }, [appointmentType, searchQuery, filters, doctorsWithPresence, availabilityMode, availableDoctorIds]);
 
   // Get unique specialties and hospitals for filter dropdowns
   const specialties = useMemo(() => 
-    [...new Set(doctors.map(d => d.specialty))].sort(), [doctors]
+    [...new Set(doctorsWithPresence.map(d => d.specialty))].sort(), [doctorsWithPresence]
   );
 
   const hospitals = useMemo(() =>
-    [...new Set(doctors.map(d => d.hospital_affiliation))].sort(), [doctors]
+    [...new Set(doctorsWithPresence.map(d => d.hospital_affiliation))].sort(), [doctorsWithPresence]
   );
 
   const handleViewProfile = (doctor: Doctor) => {
