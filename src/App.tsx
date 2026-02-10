@@ -13,6 +13,8 @@ import Contact from "./pages/Contact";
 import Install from "./pages/Install";
 import PatientPortal from "./pages/PatientPortal";
 import DoctorPortal from "./pages/DoctorPortal";
+import DoctorDiscovery from "./pages/DoctorDiscovery";
+import SlotSelection from "./pages/SlotSelection";
 import Consultation from "./pages/Consultation";
 import AdminLogin from "./pages/AdminLogin";
 import CentralAdmin from "./pages/CentralAdmin";
@@ -32,6 +34,8 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route path="/patient-portal" element={<PatientPortal />} />
             <Route path="/doctor-portal" element={<DoctorPortal />} />
+            <Route path="/doctor-discovery" element={<DoctorDiscovery />} />
+            <Route path="/slot-selection" element={<SlotSelection />} />
             <Route path="/services" element={<Services />} />
             <Route path="/specialists" element={<Specialists />} />
             <Route path="/booking" element={<Booking />} />

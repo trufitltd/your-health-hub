@@ -37,7 +37,7 @@ import { MessagesTab } from '@/components/patient-portal/MessagesTab';
 import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 // Dummy Patient Data
@@ -84,36 +84,6 @@ const upcomingAppointments = [
   },
 ];
 
-const prescriptions = [
-  {
-    id: 1,
-    medication: 'Lisinopril 10mg',
-    dosage: 'Once daily',
-    doctor: 'Dr. Emily Chen',
-    date: '2025-12-20',
-    refillsRemaining: 2,
-    status: 'active',
-  },
-  {
-    id: 2,
-    medication: 'Vitamin D3 1000IU',
-    dosage: 'Once daily with food',
-    doctor: 'Dr. James Wilson',
-    date: '2025-12-20',
-    refillsRemaining: 5,
-    status: 'active',
-  },
-  {
-    id: 3,
-    medication: 'Amoxicillin 500mg',
-    dosage: 'Three times daily',
-    doctor: 'Dr. James Wilson',
-    date: '2025-12-20',
-    refillsRemaining: 0,
-    status: 'completed',
-  },
-];
-
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -148,6 +118,65 @@ const PatientPortal = () => {
     }
   }, [patientRegistration]);
   const navigate = useNavigate();
+
+  // Fetch prescriptions from doctor_consultation_notes
+  const { data: fetchedPrescriptions = [], isLoading: prescriptionsLoading } = useQuery({
+    queryKey: ['prescriptions', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+
+      const { data: notes, error } = await supabase
+        .from('doctor_consultation_notes')
+        .select(`
+          id,
+          prescriptions,
+          created_at,
+          doctor_id,
+          doctors!inner(full_name),
+          appointments!inner(specialist_name)
+        `)
+        .eq('patient_id', user.id)
+        .not('prescriptions', 'is', null)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching prescriptions:', error);
+        throw error;
+      }
+
+      // Parse prescriptions and format them
+      const formatted: any[] = [];
+      (notes || []).forEach((note: any) => {
+        if (note.prescriptions) {
+          try {
+            // Try to parse as JSON if it's structured
+            const parsed = typeof note.prescriptions === 'string' 
+              ? note.prescriptions.split('\n').filter((line: string) => line.trim())
+              : [note.prescriptions];
+            
+            parsed.forEach((line: string) => {
+              // Simple parsing: expect format like "Medication - Dosage" or just the text
+              const parts = line.split('-').map((p: string) => p.trim());
+              formatted.push({
+                id: `${note.id}-${formatted.length}`,
+                medication: parts[0] || line,
+                dosage: parts[1] || 'As prescribed',
+                doctor: note.doctors?.full_name || note.appointments?.specialist_name || 'Dr. Unknown',
+                date: note.created_at,
+                refillsRemaining: 3, // Default value
+                status: 'active'
+              });
+            });
+          } catch (err) {
+            console.error('Error parsing prescription:', err);
+          }
+        }
+      });
+
+      return formatted;
+    },
+    enabled: !!user?.id,
+  });
 
   const handleSignOut = async () => {
     await signOut();
@@ -191,7 +220,7 @@ const PatientPortal = () => {
 
   const handleNewAppointment = () => {
     if (!requireAuthForBooking()) return;
-    navigate('/booking');
+    navigate('/doctor-discovery');
   };
 
   // Booking modal state
@@ -249,8 +278,7 @@ const PatientPortal = () => {
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
-    resetBookingState();
-    setSlotSelectionOpen(true);
+    navigate('/doctor-discovery');
   };
 
   const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
@@ -1070,47 +1098,59 @@ const PatientPortal = () => {
                 <Card>
                   <CardHeader>
                     <CardTitle>My Prescriptions</CardTitle>
-                    <CardDescription>Active and past prescriptions</CardDescription>
+                    <CardDescription>Active and past prescriptions from your consultations</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      {prescriptions.map((prescription) => (
-                        <div key={prescription.id} className={`p-4 rounded-xl border ${prescription.status === 'active' ? 'border-success/30 bg-success/5' : 'border-border'}`}>
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-start gap-3">
-                              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${prescription.status === 'active' ? 'bg-success/10' : 'bg-muted'}`}>
-                                <Pill className={`w-5 h-5 ${prescription.status === 'active' ? 'text-success' : 'text-muted-foreground'}`} />
+                    {prescriptionsLoading ? (
+                      <div className="text-center py-8">
+                        <p className="text-muted-foreground">Loading prescriptions...</p>
+                      </div>
+                    ) : fetchedPrescriptions.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Pill className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                        <p className="text-muted-foreground">No prescriptions yet</p>
+                        <p className="text-sm text-muted-foreground mt-2">Prescriptions from your doctor consultations will appear here</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {fetchedPrescriptions.map((prescription) => (
+                          <div key={prescription.id} className={`p-4 rounded-xl border ${prescription.status === 'active' ? 'border-success/30 bg-success/5' : 'border-border'}`}>
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-start gap-3">
+                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${prescription.status === 'active' ? 'bg-success/10' : 'bg-muted'}`}>
+                                  <Pill className={`w-5 h-5 ${prescription.status === 'active' ? 'text-success' : 'text-muted-foreground'}`} />
+                                </div>
+                                <div>
+                                  <p className="font-semibold">{prescription.medication}</p>
+                                  <p className="text-sm text-muted-foreground">{prescription.dosage}</p>
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Prescribed by {prescription.doctor} • {new Date(prescription.date).toLocaleDateString()}
+                                  </p>
+                                </div>
                               </div>
-                              <div>
-                                <p className="font-semibold">{prescription.medication}</p>
-                                <p className="text-sm text-muted-foreground">{prescription.dosage}</p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  Prescribed by {prescription.doctor} • {new Date(prescription.date).toLocaleDateString()}
-                                </p>
+                              <div className="text-right">
+                                {getStatusBadge(prescription.status)}
+                                {prescription.status === 'active' && (
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    {prescription.refillsRemaining} refills remaining
+                                  </p>
+                                )}
                               </div>
                             </div>
-                            <div className="text-right">
-                              {getStatusBadge(prescription.status)}
-                              {prescription.status === 'active' && (
-                                <p className="text-xs text-muted-foreground mt-2">
-                                  {prescription.refillsRemaining} refills remaining
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          {prescription.status === 'active' && (
-                            <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
-                              <Button size="sm" variant="outline">
-                                View Details
-                              </Button>
-                              <Button size="sm">
-                                Request Refill
-                              </Button>
-                            </div>
+                            {prescription.status === 'active' && (
+                              <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
+                                <Button size="sm" variant="outline">
+                                  View Details
+                                </Button>
+                                <Button size="sm">
+                                  Request Refill
+                                </Button>
+                              </div>
                           )}
                         </div>
                       ))}
                     </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
