@@ -1,105 +1,168 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Layout } from '@/components/layout';
-import { Search, Star, Clock, Calendar, MapPin, Video, ArrowRight } from 'lucide-react';
+import { Search, Star, Clock, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 
-const specialties = [
-  'All Specialties',
-  'General Medicine',
-  'Cardiology',
-  'Dermatology',
-  'Pediatrics',
-  'Gynecology',
-  'Neurology',
-  'Orthopedics',
-  'Psychiatry',
-];
+interface DoctorCard {
+  id: string;
+  name: string;
+  specialty: string;
+  avatar_url?: string | null;
+  bio?: string | null;
+}
 
-const doctors = [
-  {
-    id: 1,
-    name: 'Dr. Sarah Johnson',
-    specialty: 'Cardiology',
-    experience: '15 years',
-    rating: 4.9,
-    reviews: 234,
-    nextAvailable: 'Today, 2:00 PM',
-    image: 'https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=300&h=300&fit=crop',
-    price: 75,
-  },
-  {
-    id: 2,
-    name: 'Dr. Michael Chen',
-    specialty: 'General Medicine',
-    experience: '12 years',
-    rating: 4.8,
-    reviews: 189,
-    nextAvailable: 'Today, 4:30 PM',
-    image: 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=300&h=300&fit=crop',
-    price: 50,
-  },
-  {
-    id: 3,
-    name: 'Dr. Emily Williams',
-    specialty: 'Dermatology',
-    experience: '10 years',
-    rating: 4.9,
-    reviews: 156,
-    nextAvailable: 'Tomorrow, 10:00 AM',
-    image: 'https://images.unsplash.com/photo-1594824476967-48c8b964273f?w=300&h=300&fit=crop',
-    price: 80,
-  },
-  {
-    id: 4,
-    name: 'Dr. James Rodriguez',
-    specialty: 'Pediatrics',
-    experience: '18 years',
-    rating: 4.7,
-    reviews: 312,
-    nextAvailable: 'Today, 5:00 PM',
-    image: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=300&h=300&fit=crop',
-    price: 60,
-  },
-  {
-    id: 5,
-    name: 'Dr. Lisa Park',
-    specialty: 'Gynecology',
-    experience: '14 years',
-    rating: 4.9,
-    reviews: 278,
-    nextAvailable: 'Tomorrow, 9:00 AM',
-    image: 'https://images.unsplash.com/photo-1651008376811-b90baee60c1f?w=300&h=300&fit=crop',
-    price: 85,
-  },
-  {
-    id: 6,
-    name: 'Dr. David Kim',
-    specialty: 'Neurology',
-    experience: '20 years',
-    rating: 4.8,
-    reviews: 167,
-    nextAvailable: 'Wed, 11:00 AM',
-    image: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&h=300&fit=crop',
-    price: 95,
-  },
-];
+interface DoctorScheduleRow {
+  doctor_id: string;
+  day_of_week: number;
+  start_time: string;
+  is_available: boolean;
+}
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const formatTime = (time: string) => {
+  if (!time) return '';
+  const [hours, minutes] = time.split(':');
+  const hour = Number(hours);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = ((hour + 11) % 12) + 1;
+  return `${displayHour}:${minutes} ${suffix}`;
+};
+
+const getNextAvailable = (schedules: DoctorScheduleRow[] | undefined) => {
+  if (!schedules || schedules.length === 0) return null;
+  const now = new Date();
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = new Date(now);
+    date.setDate(now.getDate() + offset);
+    const day = date.getDay();
+    const daySchedules = schedules.filter((schedule) => schedule.day_of_week === day && schedule.is_available);
+    if (daySchedules.length > 0) {
+      const first = daySchedules.sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
+      return `${DAY_NAMES[day]}, ${formatTime(first.start_time)}`;
+    }
+  }
+  return null;
+};
 
 export default function SpecialistsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSpecialty, setSelectedSpecialty] = useState('All Specialties');
+  const [expandedBios, setExpandedBios] = useState<Set<string>>(new Set());
 
   // Scroll to top when page mounts
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
+  const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
+    queryKey: ['specialists-doctors'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('doctors')
+        .select('id,name,specialty,avatar_url')
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('Error fetching doctors:', error);
+        throw error;
+      }
+
+      // Fetch bio from doctor_registrations
+      const doctorIds = (data || []).map(d => d.id);
+      const { data: registrations } = await supabase
+        .from('doctor_registrations')
+        .select('user_id,bio')
+        .in('user_id', doctorIds);
+
+      const bioMap = new Map(registrations?.map(r => [r.user_id, r.bio]) || []);
+
+      return (data || []).map(d => ({
+        ...d,
+        bio: bioMap.get(d.id) || null
+      })) as DoctorCard[];
+    },
+  });
+
+  const { data: ratings = [] } = useQuery({
+    queryKey: ['specialists-doctor-ratings'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('doctor_id,rating')
+        .not('rating', 'is', null);
+
+      if (error) {
+        console.error('Error fetching ratings:', error);
+        return [];
+      }
+
+      return data || [];
+    },
+  });
+
+  const { data: schedules = [] } = useQuery({
+    queryKey: ['specialists-doctor-schedules'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('doctor_schedules')
+        .select('doctor_id,day_of_week,start_time,is_available')
+        .eq('is_available', true);
+
+      if (error) {
+        console.error('Error fetching schedules:', error);
+        return [];
+      }
+
+      return data || [];
+    },
+  });
+
+  const ratingByDoctor = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    ratings.forEach((row: { doctor_id: string; rating: number | null }) => {
+      if (!row.doctor_id || typeof row.rating !== 'number') return;
+      if (!map.has(row.doctor_id)) {
+        map.set(row.doctor_id, { total: 0, count: 0 });
+      }
+      const entry = map.get(row.doctor_id)!;
+      entry.total += row.rating;
+      entry.count += 1;
+    });
+    return map;
+  }, [ratings]);
+
+  const schedulesByDoctor = useMemo(() => {
+    const map = new Map<string, DoctorScheduleRow[]>();
+    schedules.forEach((row: DoctorScheduleRow) => {
+      if (!map.has(row.doctor_id)) {
+        map.set(row.doctor_id, []);
+      }
+      map.get(row.doctor_id)!.push(row);
+    });
+    return map;
+  }, [schedules]);
+
+  const specialties = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        doctors
+          .map((doctor) => doctor.specialty)
+          .filter((specialty) => specialty && specialty.trim().length > 0)
+      )
+    ).sort();
+    return ['All Specialties', ...values];
+  }, [doctors]);
+
   const filteredDoctors = doctors.filter((doctor) => {
     const matchesSearch = doctor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      doctor.specialty.toLowerCase().includes(searchQuery.toLowerCase());
+      (doctor.specialty || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesSpecialty = selectedSpecialty === 'All Specialties' || doctor.specialty === selectedSpecialty;
     return matchesSearch && matchesSpecialty;
   });
@@ -172,7 +235,17 @@ export default function SpecialistsPage() {
 
           {/* Doctors Grid */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredDoctors.map((doctor, index) => (
+            {filteredDoctors.map((doctor, index) => {
+              const ratingInfo = ratingByDoctor.get(doctor.id);
+              const rating = ratingInfo && ratingInfo.count > 0
+                ? Number((ratingInfo.total / ratingInfo.count).toFixed(1))
+                : null;
+              const reviews = ratingInfo?.count || 0;
+              const nextAvailable = getNextAvailable(schedulesByDoctor.get(doctor.id));
+              const isBioExpanded = expandedBios.has(doctor.id);
+              const hasLongBio = (doctor.bio || '').trim().length > 140;
+
+              return (
               <motion.div
                 key={doctor.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -182,35 +255,54 @@ export default function SpecialistsPage() {
               >
                 <div className="flex items-start gap-4 mb-4">
                   <img
-                    src={doctor.image}
+                    src={doctor.avatar_url || '/placeholder.svg'}
                     alt={doctor.name}
                     className="w-16 h-16 rounded-2xl object-cover"
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{doctor.name}</h3>
-                    <p className="text-sm text-primary">{doctor.specialty}</p>
-                    <p className="text-xs text-muted-foreground">{doctor.experience} experience</p>
+                    <p className="text-sm text-primary">{doctor.specialty || 'General Practice'}</p>
+                    <div className="text-xs text-muted-foreground">
+                      <p className={isBioExpanded ? '' : 'line-clamp-2'}>
+                        {doctor.bio || 'No bio provided.'}
+                      </p>
+                      {hasLongBio && (
+                        <button
+                          type="button"
+                          className="mt-1 text-[11px] font-medium text-primary hover:underline"
+                          onClick={() => {
+                            setExpandedBios((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(doctor.id)) {
+                                next.delete(doctor.id);
+                              } else {
+                                next.add(doctor.id);
+                              }
+                              return next;
+                            });
+                          }}
+                        >
+                          {isBioExpanded ? 'Read less' : 'Read more'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-4 mb-4 text-sm">
                   <div className="flex items-center gap-1">
                     <Star className="w-4 h-4 text-warning fill-warning" />
-                    <span className="font-medium">{doctor.rating}</span>
-                    <span className="text-muted-foreground">({doctor.reviews})</span>
+                    <span className="font-medium">{rating ?? 'N/A'}</span>
+                    <span className="text-muted-foreground">({reviews})</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
                   <Clock className="w-4 h-4" />
-                  <span>Next: {doctor.nextAvailable}</span>
+                  <span>Next: {nextAvailable || 'Check availability'}</span>
                 </div>
 
-                <div className="flex items-center justify-between pt-4 border-t border-border">
-                  <div>
-                    <span className="text-2xl font-bold text-primary">₦{doctor.price}</span>
-                    <span className="text-sm text-muted-foreground">/session</span>
-                  </div>
+                <div className="flex items-center justify-end pt-4 border-t border-border">
                   <Link to={`/booking?doctor=${doctor.id}`}>
                     <Button variant="gradient" size="sm">
                       <Video className="w-4 h-4" />
@@ -219,10 +311,17 @@ export default function SpecialistsPage() {
                   </Link>
                 </div>
               </motion.div>
-            ))}
+            );
+            })}
           </div>
 
-          {filteredDoctors.length === 0 && (
+          {doctorsLoading && (
+            <div className="text-center py-16">
+              <p className="text-muted-foreground">Loading specialists...</p>
+            </div>
+          )}
+
+          {!doctorsLoading && filteredDoctors.length === 0 && (
             <div className="text-center py-16">
               <p className="text-muted-foreground">No specialists found matching your criteria.</p>
             </div>
