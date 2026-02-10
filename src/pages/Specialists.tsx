@@ -68,6 +68,7 @@ export default function SpecialistsPage() {
       const { data, error } = await supabase
         .from('doctors')
         .select('id,name,specialty,avatar_url')
+        .eq('is_active', true)
         .order('name', { ascending: true });
 
       if (error) {
