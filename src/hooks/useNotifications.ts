@@ -23,7 +23,14 @@ export function useNotifications() {
       // Get upcoming appointments for reminders
       const { data: upcomingAppointments } = await supabase
         .from('appointments')
-        .select('id, specialist_name, date, time, status')
+        .select(`
+          id,
+          date,
+          time,
+          status,
+          doctor_id,
+          doctor_registrations!inner(full_name)
+        `)
         .eq('patient_id', user.id)
         .in('status', ['confirmed', 'pending'])
         .gte('date', new Date().toISOString().split('T')[0])
@@ -38,7 +45,7 @@ export function useNotifications() {
           const hoursDiff = timeDiff / (1000 * 60 * 60);
 
           if (hoursDiff <= 24 && hoursDiff > 0) {
-            const doctorName = apt.specialist_name;
+            const doctorName = apt.doctor_registrations?.full_name || 'Your Doctor';
             let timeText = '';
             if (hoursDiff < 1) {
               timeText = 'Less than 1 hour';
