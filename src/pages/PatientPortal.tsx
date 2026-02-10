@@ -126,6 +126,27 @@ const PatientPortal = () => {
   const { data: patientRegistration } = usePatientRegistration();
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileFormData, setProfileFormData] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    age: '',
+    bloodType: '',
+  });
+
+  // Initialize form data when patientRegistration loads
+  useEffect(() => {
+    if (patientRegistration) {
+      setProfileFormData({
+        fullName: patientRegistration.full_name || '',
+        email: patientRegistration.email || '',
+        phone: patientRegistration.phone_number || '',
+        age: patientRegistration.age?.toString() || '',
+        bloodType: patientRegistration.blood_type || '',
+      });
+    }
+  }, [patientRegistration]);
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -416,6 +437,33 @@ const PatientPortal = () => {
       toast({ title: 'Error', description: 'Failed to update profile picture.' });
     } finally {
       setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!user?.id) return;
+    setIsSavingProfile(true);
+    
+    try {
+      const { error } = await supabase
+        .from('patient_registrations')
+        .update({
+          full_name: profileFormData.fullName,
+          email: profileFormData.email,
+          phone_number: profileFormData.phone,
+          age: parseInt(profileFormData.age) || null,
+          blood_type: profileFormData.bloodType,
+        })
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      queryClient.invalidateQueries({ queryKey: ['patient-registration'] });
+      toast({ title: 'Success', description: 'Profile updated successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update profile.' });
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -1132,33 +1180,54 @@ const PatientPortal = () => {
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
                           <label className="text-sm font-medium">Full Name</label>
-                          <Input defaultValue={user?.user_metadata?.full_name ?? patientData.name} className="mt-1" />
+                          <Input 
+                            value={profileFormData.fullName || patientRegistration?.full_name || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
+                            className="mt-1" 
+                          />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Email</label>
-                          <Input defaultValue={user?.email ?? patientData.email} className="mt-1" />
+                          <Input 
+                            value={profileFormData.email || patientRegistration?.email || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
+                            className="mt-1" 
+                          />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Phone</label>
-                          <Input defaultValue={user?.user_metadata?.phone ?? patientData.phone} className="mt-1" />
+                          <Input 
+                            value={profileFormData.phone || patientRegistration?.phone_number || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
+                            className="mt-1" 
+                          />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Date of Birth</label>
-                          <Input type="date" defaultValue={user?.user_metadata?.dateOfBirth ?? patientData.dateOfBirth} className="mt-1" />
+                          <label className="text-sm font-medium">Age</label>
+                          <Input 
+                            type="number"
+                            value={profileFormData.age || patientRegistration?.age?.toString() || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, age: e.target.value})}
+                            className="mt-1" 
+                          />
                         </div>
                         <div>
                           <label className="text-sm font-medium">Blood Type</label>
-                          <Input defaultValue={user?.user_metadata?.bloodType ?? patientData.bloodType} className="mt-1" />
+                          <Input 
+                            value={profileFormData.bloodType || patientRegistration?.blood_type || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, bloodType: e.target.value})}
+                            placeholder="e.g., A+, O-, B+"
+                            className="mt-1" 
+                          />
                         </div>
                       </div>
 
-                      <Button>Save Changes</Button>
+                      <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                        {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
-                
-                {/* Patient Registration Details */}
-                <PatientRegistration />
               </TabsContent>
             </Tabs>
           </main>
