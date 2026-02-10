@@ -33,17 +33,30 @@ export function PatientsTable() {
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
   const deletePatient = useMutation({
     mutationFn: async (patientId: string) => {
-      // Delete from auth.users (cascades to related tables)
-      const { error } = await supabase.auth.admin.deleteUser(patientId);
-      if (error) throw error;
+      console.log('Attempting to delete patient:', patientId);
+      const { data, error } = await supabase.rpc('admin_delete_user', {
+        user_id_to_delete: patientId
+      });
+      
+      console.log('Delete response:', { data, error });
+      
+      if (error) {
+        console.error('RPC error:', error);
+        throw error;
+      }
+      if (data && !data.success) {
+        console.error('Function returned error:', data.message);
+        throw new Error(data.message);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-patients'] });
       toast({ title: 'Success', description: 'Patient removed from platform' });
       setDeletePatientId(null);
     },
-    onError: () => {
-      toast({ title: 'Error', description: 'Failed to remove patient', variant: 'destructive' });
+    onError: (error: any) => {
+      console.error('Delete patient failed:', error);
+      toast({ title: 'Error', description: error.message || 'Failed to remove patient', variant: 'destructive' });
     },
   });
 
