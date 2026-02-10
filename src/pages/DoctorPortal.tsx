@@ -33,6 +33,7 @@ import { ScheduleEditor } from '@/components/ScheduleEditor';
 import { useDoctorStats } from '@/hooks/useDoctorStats';
 import { useRecentReviews } from '@/hooks/useRecentReviews';
 import { useDoctorRegistration } from '@/hooks/useDoctorRegistration';
+import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
@@ -113,6 +114,9 @@ const DoctorPortal = () => {
 
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
+  
+  // Fetch doctor earnings
+  const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -269,7 +273,7 @@ const DoctorPortal = () => {
     totalPatients: doctorStats?.totalPatients || 0,
     consultationsThisMonth: doctorStats?.consultationsThisMonth || 0,
     pendingRequests: pendingRequests.length,
-    earnings: 12450, // Keep static for now as we don't have earnings data
+    earnings: earningsData?.thisMonthEarnings || 0,
     rating: doctorStats?.rating || 0,
   };
 
@@ -1164,7 +1168,9 @@ const DoctorPortal = () => {
                             </div>
                             <div>
                               <p className="text-sm text-muted-foreground">This Month</p>
-                              <p className="text-2xl font-bold">₦{stats.earnings.toLocaleString()}</p>
+                              <p className="text-2xl font-bold">
+                                {earningsLoading ? '...' : `₦${stats.earnings.toLocaleString()}`}
+                              </p>
                             </div>
                           </div>
                         </CardContent>
@@ -1177,7 +1183,9 @@ const DoctorPortal = () => {
                             </div>
                             <div>
                               <p className="text-sm text-muted-foreground">Growth</p>
-                              <p className="text-2xl font-bold">+12%</p>
+                              <p className="text-2xl font-bold">
+                                {earningsLoading ? '...' : `${earningsData?.growth || 0 > 0 ? '+' : ''}${earningsData?.growth || 0}%`}
+                              </p>
                             </div>
                           </div>
                         </CardContent>
@@ -1190,7 +1198,9 @@ const DoctorPortal = () => {
                             </div>
                             <div>
                               <p className="text-sm text-muted-foreground">Consultations</p>
-                              <p className="text-2xl font-bold">{stats.consultationsThisMonth}</p>
+                              <p className="text-2xl font-bold">
+                                {earningsLoading ? '...' : earningsData?.thisMonthConsultations || 0}
+                              </p>
                             </div>
                           </div>
                         </CardContent>
@@ -1200,13 +1210,44 @@ const DoctorPortal = () => {
                     <Card>
                       <CardHeader>
                         <CardTitle>Earnings History</CardTitle>
-                        <CardDescription>Your consultation earnings over time</CardDescription>
+                        <CardDescription>Your consultation earnings over the last 6 months</CardDescription>
                       </CardHeader>
                       <CardContent>
-                        <div className="h-64 flex items-center justify-center text-muted-foreground">
-                          <BarChart3 className="w-12 h-12 mr-3" />
-                          <span>Earnings chart coming soon</span>
-                        </div>
+                        {earningsLoading ? (
+                          <div className="h-64 flex items-center justify-center text-muted-foreground">
+                            <p>Loading earnings data...</p>
+                          </div>
+                        ) : !earningsData?.monthlyData || earningsData.monthlyData.length === 0 ? (
+                          <div className="h-64 flex items-center justify-center text-muted-foreground">
+                            <BarChart3 className="w-12 h-12 mr-3" />
+                            <span>No earnings data available yet</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {earningsData.monthlyData.map((month) => {
+                              const maxEarnings = Math.max(...earningsData.monthlyData.map(m => m.earnings));
+                              const barWidth = maxEarnings > 0 ? (month.earnings / maxEarnings) * 100 : 0;
+                              
+                              return (
+                                <div key={month.month} className="space-y-2">
+                                  <div className="flex items-center justify-between text-sm">
+                                    <span className="font-medium">{month.month}</span>
+                                    <div className="text-right">
+                                      <span className="font-bold">₦{month.earnings.toLocaleString()}</span>
+                                      <span className="text-muted-foreground ml-2">({month.consultations} consultations)</span>
+                                    </div>
+                                  </div>
+                                  <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
+                                    <div 
+                                      className="h-full bg-gradient-to-r from-primary to-success rounded-full transition-all duration-500"
+                                      style={{ width: `${barWidth}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   </TabsContent>
