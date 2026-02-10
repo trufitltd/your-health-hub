@@ -49,6 +49,81 @@ export default function DoctorDiscovery() {
     minExperience: 0,
     hospital: '',
   });
+  const [availabilityMode, setAvailabilityMode] = useState<'none' | 'now' | 'exact' | 'range'>('none');
+  const [availabilityFilters, setAvailabilityFilters] = useState({
+    date: '',
+    time: '',
+    startDate: '',
+    startTime: '',
+    endDate: '',
+    endTime: '',
+  });
+  const [showAvailabilityDialog, setShowAvailabilityDialog] = useState(false);
+
+  // Helper: Get current date/time in correct format
+  const getNowDatetime = () => {
+    const now = new Date();
+    const date = now.toISOString().split('T')[0];
+    const time = now.toTimeString().slice(0, 5);
+    return { date, time };
+  };
+
+  // Fetch doctors who have an available schedule based on mode
+  const { data: availableDoctorIds = [] } = useQuery({
+    queryKey: ['available-doctors', availabilityMode, availabilityFilters],
+    queryFn: async () => {
+      let checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
+
+      if (availabilityMode === 'now') {
+        const { date, time } = getNowDatetime();
+        const dayIndex = new Date(date).getDay();
+        checkTimes.push({ date, time, dayIndex });
+      } else if (availabilityMode === 'exact') {
+        if (!availabilityFilters.date || !availabilityFilters.time) return [];
+        const dayIndex = new Date(availabilityFilters.date).getDay();
+        checkTimes.push({ 
+          date: availabilityFilters.date, 
+          time: availabilityFilters.time, 
+          dayIndex 
+        });
+      } else if (availabilityMode === 'range') {
+        if (!availabilityFilters.startDate || !availabilityFilters.startTime) return [];
+        const endD = availabilityFilters.endDate || availabilityFilters.startDate;
+        const endT = availabilityFilters.endTime || '23:59';
+        
+        let current = new Date(availabilityFilters.startDate);
+        const end = new Date(endD);
+        
+        while (current <= end) {
+          const dateStr = current.toISOString().split('T')[0];
+          const dayIndex = current.getDay();
+          checkTimes.push({ date: dateStr, time: availabilityFilters.startTime, dayIndex });
+          checkTimes.push({ date: dateStr, time: endT, dayIndex });
+          current.setDate(current.getDate() + 1);
+        }
+      }
+
+      if (checkTimes.length === 0) return [];
+
+      const doctorSet = new Set<string>();
+
+      for (const { dayIndex, time } of checkTimes) {
+        const { data: schedules, error } = await supabase
+          .from('doctor_schedules')
+          .select('doctor_id')
+          .eq('day_of_week', dayIndex)
+          .eq('is_available', true)
+          .lte('start_time', time)
+          .gt('end_time', time);
+        
+        if (error) throw error;
+        (schedules || []).forEach(s => doctorSet.add(s.doctor_id));
+      }
+
+      return Array.from(doctorSet);
+    },
+    enabled: availabilityMode !== 'none',
+  });
 
   // Fetch doctors
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
@@ -126,10 +201,11 @@ export default function DoctorDiscovery() {
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
       const matchesExperience = !filters.minExperience || (doctor.experience_years || 0) >= filters.minExperience;
       const matchesHospital = !filters.hospital || doctor.hospital_affiliation.toLowerCase().includes(filters.hospital.toLowerCase());
+      const matchesAvailability = availabilityMode === 'none' || availableDoctorIds.includes(doctor.user_id);
 
-      return matchesSearch && isGeneralOrMatchesType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital;
+      return matchesSearch && isGeneralOrMatchesType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
     });
-  }, [appointmentType, searchQuery, filters, doctors]);
+  }, [appointmentType, searchQuery, filters, doctors, availabilityMode, availableDoctorIds]);
 
   // Get unique specialties and hospitals for filter dropdowns
   const specialties = useMemo(() => 
@@ -143,6 +219,40 @@ export default function DoctorDiscovery() {
   const handleViewProfile = (doctor: Doctor) => {
     setSelectedDoctor(doctor);
     setProfileOpen(true);
+  };
+
+  // Helper: Format date for display
+  const formatDateForDisplay = (dateStr: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  // Helper: Format time for display
+  const formatTimeForDisplay = (timeStr: string) => {
+    if (!timeStr) return '';
+    const [hours, minutes] = timeStr.split(':');
+    const hour = parseInt(hours);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${displayHour}:${minutes} ${ampm}`;
+  };
+
+  // Helper: Get availability filter display text
+  const getAvailabilityFilterText = () => {
+    if (availabilityMode === 'now') {
+      return 'Available now';
+    } else if (availabilityMode === 'exact' && availabilityFilters.date && availabilityFilters.time) {
+      return `${formatDateForDisplay(availabilityFilters.date)} at ${formatTimeForDisplay(availabilityFilters.time)}`;
+    } else if (availabilityMode === 'range' && availabilityFilters.startDate && availabilityFilters.startTime) {
+      const startText = `${formatDateForDisplay(availabilityFilters.startDate)} ${formatTimeForDisplay(availabilityFilters.startTime)}`;
+      if (availabilityFilters.endDate && availabilityFilters.endTime) {
+        const endText = `${formatDateForDisplay(availabilityFilters.endDate)} ${formatTimeForDisplay(availabilityFilters.endTime)}`;
+        return `${startText} - ${endText}`;
+      }
+      return `From ${startText}`;
+    }
+    return null;
   };
 
   const handleBookNow = (doctor: Doctor) => {
@@ -311,6 +421,45 @@ export default function DoctorDiscovery() {
                       <option key={hospital} value={hospital}>{hospital}</option>
                     ))}
                   </select>
+                </div>
+
+                {/* Availability Filter - Compact */}
+                <div className="flex items-center gap-3 mb-6 flex-wrap">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={availabilityMode === 'now'}
+                      onChange={(e) => setAvailabilityMode(e.target.checked ? 'now' : 'none')}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm font-medium">Available now</span>
+                  </label>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAvailabilityDialog(true)}
+                  >
+                    <Clock className="w-4 h-4 mr-2" />
+                    {getAvailabilityFilterText() ? (
+                      <span>{getAvailabilityFilterText()}</span>
+                    ) : (
+                      <span>Select date & time</span>
+                    )}
+                  </Button>
+
+                  {(availabilityMode === 'exact' || availabilityMode === 'range') && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setAvailabilityMode('none');
+                        setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+                      }}
+                    >
+                      ✕
+                    </Button>
+                  )}
                 </div>
 
                 {/* Results info */}
@@ -542,6 +691,131 @@ export default function DoctorDiscovery() {
                 </div>
               </>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Availability Selection Dialog */}
+        <Dialog open={showAvailabilityDialog} onOpenChange={setShowAvailabilityDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Select Date & Time</DialogTitle>
+              <DialogDescription>
+                Choose when you'd like to see a doctor
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {/* Specific Date & Time */}
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={availabilityMode === 'exact'}
+                    onChange={() => setAvailabilityMode('exact')}
+                    className="w-4 h-4"
+                  />
+                  <span className="font-medium">Specific date & time</span>
+                </label>
+                {availabilityMode === 'exact' && (
+                  <div className="ml-7">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="text-xs text-muted-foreground mb-1 block">Date</label>
+                        <Input
+                          type="date"
+                          value={availabilityFilters.date}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, date: e.target.value })}
+                          className="px-3 py-2"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-xs text-muted-foreground mb-1 block">Time</label>
+                        <Input
+                          type="time"
+                          step={1800}
+                          value={availabilityFilters.time}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, time: e.target.value })}
+                          className="px-3 py-2"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Date & Time Range */}
+              <div className="space-y-3 pt-4 border-t">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={availabilityMode === 'range'}
+                    onChange={() => setAvailabilityMode('range')}
+                    className="w-4 h-4"
+                  />
+                  <span className="font-medium">Date & time range</span>
+                </label>
+                {availabilityMode === 'range' && (
+                  <div className="ml-7 space-y-3">
+                    <div>
+                      <label className="text-xs text-muted-foreground mb-1 block">From</label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="date"
+                          value={availabilityFilters.startDate}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, startDate: e.target.value })}
+                          className="px-3 py-2 flex-1"
+                        />
+                        <Input
+                          type="time"
+                          step={1800}
+                          value={availabilityFilters.startTime}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, startTime: e.target.value })}
+                          className="px-3 py-2 flex-1"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground mb-1 block">To (optional)</label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="date"
+                          value={availabilityFilters.endDate}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, endDate: e.target.value })}
+                          className="px-3 py-2 flex-1"
+                        />
+                        <Input
+                          type="time"
+                          step={1800}
+                          value={availabilityFilters.endTime}
+                          onChange={(e) => setAvailabilityFilters({ ...availabilityFilters, endTime: e.target.value })}
+                          className="px-3 py-2 flex-1"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowAvailabilityDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => setShowAvailabilityDialog(false)}
+                disabled={
+                  (availabilityMode === 'exact' && (!availabilityFilters.date || !availabilityFilters.time)) ||
+                  (availabilityMode === 'range' && (!availabilityFilters.startDate || !availabilityFilters.startTime))
+                }
+              >
+                Apply Filter
+              </Button>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
