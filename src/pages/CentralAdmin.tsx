@@ -174,7 +174,7 @@ const CentralAdmin = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('appointments')
-        .select('id,doctor_id,status,rating,review_comment,notes,created_at,updated_at,confirmation_sms_sent_at,appointment_date,date')
+        .select('id,doctor_id,status,rating,review_comment,notes,created_at,updated_at,date')
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -487,15 +487,29 @@ const CentralAdmin = () => {
   const handleDeleteDoctor = async (doctorId: string) => {
     setIsProcessing(true);
     try {
-      const { error } = await supabase.auth.admin.deleteUser(doctorId);
-      if (error) throw error;
+      console.log('Attempting to delete doctor:', doctorId);
+      const { data, error } = await supabase.rpc('admin_delete_user', {
+        user_id_to_delete: doctorId
+      });
+      
+      console.log('Delete response:', { data, error });
+      
+      if (error) {
+        console.error('RPC error:', error);
+        throw error;
+      }
+      if (data && !data.success) {
+        console.error('Function returned error:', data.message);
+        throw new Error(data.message);
+      }
 
       toast({ title: 'Success', description: 'Doctor removed from platform' });
       setDeleteDoctorId(null);
       queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
       refetch();
-    } catch (error) {
-      toast({ title: 'Error', description: 'Failed to remove doctor', variant: 'destructive' });
+    } catch (error: any) {
+      console.error('Delete doctor failed:', error);
+      toast({ title: 'Error', description: error.message || 'Failed to remove doctor', variant: 'destructive' });
     } finally {
       setIsProcessing(false);
     }
