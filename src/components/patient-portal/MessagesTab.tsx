@@ -77,7 +77,6 @@ export function MessagesTab() {
                 status,
                 date,
                 time,
-                type,
                 specialist_name
               )
             )
