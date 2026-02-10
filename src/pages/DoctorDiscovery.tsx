@@ -33,6 +33,7 @@ interface Doctor {
   experience_years?: number;
   bio?: string;
   is_active?: boolean;
+  online_status?: 'online' | 'away' | 'offline';
 }
 
 export default function DoctorDiscovery() {
@@ -155,7 +156,7 @@ export default function DoctorDiscovery() {
           // Fetch doctor availability status
           const { data: doctorStatus } = await supabase
             .from('doctors')
-            .select('is_active')
+            .select('is_active, online_status')
             .eq('id', doctor.user_id)
             .single();
 
@@ -175,6 +176,7 @@ export default function DoctorDiscovery() {
             total_reviews: ratings.length,
             experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
             is_active: doctorStatus?.is_active !== false, // Default to true if not set
+            online_status: (doctorStatus?.online_status || 'offline') as 'online' | 'away' | 'offline',
           };
         })
       );
@@ -219,6 +221,19 @@ export default function DoctorDiscovery() {
   const handleViewProfile = (doctor: Doctor) => {
     setSelectedDoctor(doctor);
     setProfileOpen(true);
+  };
+
+  // Helper: Get status color and label
+  const getStatusColor = (status?: 'online' | 'away' | 'offline') => {
+    switch (status) {
+      case 'online':
+        return { bg: 'bg-green-500', text: 'Online', ring: 'ring-green-500' };
+      case 'away':
+        return { bg: 'bg-amber-500', text: 'Away', ring: 'ring-amber-500' };
+      case 'offline':
+      default:
+        return { bg: 'bg-gray-400', text: 'Offline', ring: 'ring-gray-400' };
+    }
   };
 
   // Helper: Format date for display
@@ -509,12 +524,15 @@ export default function DoctorDiscovery() {
                       <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
                         <CardContent className="p-6 flex-1 flex flex-col">
                           <div className="flex items-start justify-between mb-4">
-                            <Avatar className="w-16 h-16">
-                              <AvatarImage src={doctor.profile_picture_url} />
-                              <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                                {doctor.full_name.split(' ').map(n => n[0]).join('')}
-                              </AvatarFallback>
-                            </Avatar>
+                            <div className="relative">
+                              <Avatar className="w-16 h-16">
+                                <AvatarImage src={doctor.profile_picture_url} />
+                                <AvatarFallback className="bg-primary/10 text-primary text-lg">
+                                  {doctor.full_name.split(' ').map(n => n[0]).join('')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
+                            </div>
                             <div className="flex gap-2 flex-col">
                               <Badge variant="outline" className="text-xs">
                                 {doctor.experience_years}y exp
@@ -603,14 +621,20 @@ export default function DoctorDiscovery() {
                 <div className="space-y-6">
                   {/* Header */}
                   <div className="flex gap-6">
-                    <Avatar className="w-24 h-24">
-                      <AvatarImage src={selectedDoctor.profile_picture_url} />
-                      <AvatarFallback className="bg-primary/10 text-primary text-2xl">
-                        {selectedDoctor.full_name.split(' ').map(n => n[0]).join('')}
-                      </AvatarFallback>
-                    </Avatar>
+                    <div className="relative">
+                      <Avatar className="w-24 h-24">
+                        <AvatarImage src={selectedDoctor.profile_picture_url} />
+                        <AvatarFallback className="bg-primary/10 text-primary text-2xl">
+                          {selectedDoctor.full_name.split(' ').map(n => n[0]).join('')}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className={`absolute bottom-0 right-0 w-5 h-5 rounded-full ${getStatusColor(selectedDoctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(selectedDoctor.online_status).text} />
+                    </div>
                     <div className="flex-1">
-                      <h2 className="text-2xl font-bold mb-2">Dr. {selectedDoctor.full_name}</h2>
+                      <div className="flex items-center gap-2 mb-2">
+                        <h2 className="text-2xl font-bold">Dr. {selectedDoctor.full_name}</h2>
+                        <Badge variant="outline" className="text-xs">{getStatusColor(selectedDoctor.online_status).text}</Badge>
+                      </div>
                       <p className="text-lg text-primary font-medium mb-3">{selectedDoctor.specialty}</p>
 
                       <div className="flex items-center gap-4 mb-4">
