@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, FileText, User, Calendar, AlertTriangle, Pill } from 'lucide-react';
+import { X, Save, FileText, User, Calendar, AlertTriangle, Pill, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
@@ -8,6 +8,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { useHealthRecords } from '@/hooks/useHealthRecords';
 
 interface PatientFolder {
   id: string;
@@ -42,6 +43,7 @@ export function DoctorNotesPanel({
   const [isSaving, setIsSaving] = useState(false);
   const [patientFolder, setPatientFolder] = useState<PatientFolder | null>(null);
   const [isLoadingFolder, setIsLoadingFolder] = useState(true);
+  const { records: healthRecords, isLoading: recordsLoading } = useHealthRecords(patientId);
 
   // Load patient folder on mount
   useEffect(() => {
@@ -220,6 +222,47 @@ export function DoctorNotesPanel({
                   </div>
                 ) : (
                   <p className="text-slate-500 text-xs italic">No patient folder found</p>
+                )}
+              </div>
+              
+              <Separator className="bg-white/10" />
+              
+              {/* Health Records Section */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <FileText className="w-4 h-4 text-primary" />
+                  <h4 className="font-medium text-white">Patient Health Records</h4>
+                </div>
+                
+                {recordsLoading ? (
+                  <div className="text-slate-400 text-sm">Loading health records...</div>
+                ) : healthRecords.length === 0 ? (
+                  <p className="text-slate-500 text-xs italic">No health records uploaded</p>
+                ) : (
+                  <div className="space-y-2">
+                    {healthRecords.map((record) => (
+                      <div key={record.id} className="flex items-center justify-between p-2 rounded bg-[#1a1a2e] hover:bg-[#1f1f3a] transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-white truncate">{record.file_name}</p>
+                          <p className="text-xs text-slate-400">
+                            {new Date(record.uploaded_at).toLocaleDateString()}
+                            {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
+                          </p>
+                          {record.notes && (
+                            <p className="text-xs text-slate-500 mt-1">{record.notes}</p>
+                          )}
+                        </div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-primary hover:text-primary/80 flex-shrink-0"
+                          onClick={() => window.open(record.file_url, '_blank')}
+                        >
+                          <Download className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
               

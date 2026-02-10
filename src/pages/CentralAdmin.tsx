@@ -21,6 +21,16 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
@@ -69,6 +79,7 @@ const CentralAdmin = () => {
   const [inboxPage, setInboxPage] = useState(1);
   const [inboxPageSize, setInboxPageSize] = useState(10);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
 
   const adminEmails = useMemo(() => {
     const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
@@ -468,6 +479,23 @@ const CentralAdmin = () => {
         description: 'Failed to approve doctor. Please try again.',
         variant: 'destructive',
       });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteDoctor = async (doctorId: string) => {
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase.auth.admin.deleteUser(doctorId);
+      if (error) throw error;
+
+      toast({ title: 'Success', description: 'Doctor removed from platform' });
+      setDeleteDoctorId(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+      refetch();
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to remove doctor', variant: 'destructive' });
     } finally {
       setIsProcessing(false);
     }
@@ -1037,6 +1065,14 @@ const CentralAdmin = () => {
                                 <Eye className="w-4 h-4 mr-2" />
                                 Review
                               </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => setDeleteDoctorId(doctor.user_id)}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
                             </div>
                           </div>
                         ))
@@ -1526,6 +1562,27 @@ const CentralAdmin = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Doctor Confirmation */}
+      <AlertDialog open={!!deleteDoctorId} onOpenChange={(open) => !open && setDeleteDoctorId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Doctor</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove this doctor from the platform? This will delete their account and all associated data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteDoctorId && handleDeleteDoctor(deleteDoctorId)}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              Remove Doctor
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
