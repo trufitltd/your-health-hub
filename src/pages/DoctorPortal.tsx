@@ -37,67 +37,9 @@ import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
-// Dummy Doctor Data
-const doctorData = {
-  name: 'Dr. Emily Chen',
-  email: 'emily.chen@myedoctor.com',
-  phone: '+1 (555) 987-6543',
-  specialty: 'Cardiologist',
-  experience: '12 years',
-  rating: 4.9,
-  totalReviews: 234,
-  avatar: '',
-  isAvailable: true,
-};
-
-
-
-const patientList = [
-  {
-    id: 1,
-    name: 'Sarah Johnson',
-    age: 35,
-    lastVisit: '2025-12-20',
-    condition: 'Hypertension',
-    nextAppointment: '2026-01-08',
-  },
-  {
-    id: 2,
-    name: 'Michael Brown',
-    age: 45,
-    lastVisit: '2025-12-15',
-    condition: 'Arrhythmia',
-    nextAppointment: '2026-01-06',
-  },
-  {
-    id: 3,
-    name: 'Emma Wilson',
-    age: 28,
-    lastVisit: 'New Patient',
-    condition: 'Palpitations',
-    nextAppointment: '2026-01-06',
-  },
-  {
-    id: 4,
-    name: 'James Lee',
-    age: 52,
-    lastVisit: '2025-11-28',
-    condition: 'Heart Failure',
-    nextAppointment: '2026-01-06',
-  },
-  {
-    id: 5,
-    name: 'Lisa Martinez',
-    age: 40,
-    lastVisit: '2025-10-15',
-    condition: 'Preventive Care',
-    nextAppointment: '2026-01-06',
-  },
-];
-
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
-  const [isAvailable, setIsAvailable] = useState(doctorData.isAvailable);
+  const [isAvailable, setIsAvailable] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewNotesOpen, setViewNotesOpen] = useState(false);
   const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
@@ -187,28 +129,44 @@ const DoctorPortal = () => {
 
   const handleAcceptRequest = async (appointmentId: string) => {
     try {
-      const { error } = await supabase
+      console.log('Accepting appointment:', appointmentId, 'User ID:', user?.id);
+      const { data, error } = await supabase
         .from('appointments')
         .update({ status: 'confirmed' })
         .eq('id', appointmentId);
-      if (error) throw error;
+      
+      if (error) {
+        console.error('Error accepting appointment:', error);
+        throw error;
+      }
+      
+      console.log('Appointment accepted successfully:', data);
       toast({ title: 'Accepted', description: 'Appointment has been confirmed.' });
       refetch();
     } catch (error) {
+      console.error('Failed to accept appointment:', error);
       toast({ title: 'Error', description: 'Failed to accept appointment.' });
     }
   };
 
   const handleDeclineRequest = async (appointmentId: string) => {
     try {
-      const { error } = await supabase
+      console.log('Declining appointment:', appointmentId, 'User ID:', user?.id);
+      const { data, error } = await supabase
         .from('appointments')
         .update({ status: 'rejected' })
         .eq('id', appointmentId);
-      if (error) throw error;
+      
+      if (error) {
+        console.error('Error declining appointment:', error);
+        throw error;
+      }
+      
+      console.log('Appointment declined successfully:', data);
       toast({ title: 'Declined', description: 'Appointment has been declined.' });
       refetch();
     } catch (error) {
+      console.error('Failed to decline appointment:', error);
       toast({ title: 'Error', description: 'Failed to decline appointment.' });
     }
   };
@@ -354,8 +312,8 @@ const DoctorPortal = () => {
     return Array.from(patientsMap.values());
   }, [fetchedAppointments]);
 
-  const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
-  const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
+  const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? 'Doctor';
+  const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? '';
   const displayInitials = displayName
     .split(' ')
     .map((n) => n[0])
@@ -1336,7 +1294,7 @@ const DoctorPortal = () => {
                             </Avatar>
                             <div>
                               <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? doctorData.specialty}</p>
+                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? 'General Practice'}</p>
                               <div className="mt-2">
                                 <input
                                   type="file"
