@@ -111,17 +111,18 @@ const DoctorPortal = () => {
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
-        .select('user_id, age, full_name')
+        .select('user_id, age, full_name, profile_picture_url')
         .in('user_id', patientIds);
       
       console.log('Patient data:', patientData, 'Error:', patientError);
       
       // Merge the data
-      const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name }]) || []);
+      const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
       return appointments.map(apt => ({
         ...apt,
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
-        patient_name: patientDataMap.get(apt.patient_id)?.full_name || null
+        patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
+        patient_profile_picture: patientDataMap.get(apt.patient_id)?.profile_picture_url || null
       }));
     },
     enabled: !!user?.id,
@@ -732,6 +733,7 @@ const DoctorPortal = () => {
                             }`}>
                               <div className="flex items-center gap-3">
                                 <Avatar className="w-10 h-10">
+                                  <AvatarImage src={(apt as any).patient_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary text-sm">
                                     {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
                                   </AvatarFallback>
@@ -876,6 +878,7 @@ const DoctorPortal = () => {
                             </div>
                             <div className="w-px h-12 bg-border" />
                             <Avatar className="w-12 h-12">
+                              <AvatarImage src={(apt as any).patient_profile_picture || ''} />
                               <AvatarFallback className="bg-primary/10 text-primary">
                                 {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
                               </AvatarFallback>
