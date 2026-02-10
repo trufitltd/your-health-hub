@@ -20,6 +20,7 @@ export interface ScheduleInput {
   slot_duration_minutes?: number;
   max_patients_per_slot?: number;
   is_available?: boolean;
+  id?: string;
 }
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -62,16 +63,8 @@ export const upsertSchedule = async (
   schedule: ScheduleInput
 ): Promise<DoctorSchedule> => {
   try {
-    // First, check if schedule exists for this day
-    const { data: existing } = await supabase
-      .from('doctor_schedules')
-      .select('id')
-      .eq('doctor_id', doctorId)
-      .eq('day_of_week', schedule.day_of_week)
-      .single();
-
-    if (existing) {
-      // Update existing schedule
+    // If an id is provided, update that specific slot
+    if (schedule.id) {
       const { data, error } = await supabase
         .from('doctor_schedules')
         .update({
@@ -82,31 +75,31 @@ export const upsertSchedule = async (
           is_available: schedule.is_available !== false,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', existing.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      return data as DoctorSchedule;
-    } else {
-      // Create new schedule
-      const { data, error } = await supabase
-        .from('doctor_schedules')
-        .insert({
-          doctor_id: doctorId,
-          day_of_week: schedule.day_of_week,
-          start_time: schedule.start_time,
-          end_time: schedule.end_time,
-          slot_duration_minutes: schedule.slot_duration_minutes || 30,
-          max_patients_per_slot: schedule.max_patients_per_slot || 1,
-          is_available: schedule.is_available !== false,
-        })
+        .eq('id', schedule.id)
         .select()
         .single();
 
       if (error) throw error;
       return data as DoctorSchedule;
     }
+
+    // Otherwise insert a new slot for the given day
+    const { data, error } = await supabase
+      .from('doctor_schedules')
+      .insert({
+        doctor_id: doctorId,
+        day_of_week: schedule.day_of_week,
+        start_time: schedule.start_time,
+        end_time: schedule.end_time,
+        slot_duration_minutes: schedule.slot_duration_minutes || 30,
+        max_patients_per_slot: schedule.max_patients_per_slot || 1,
+        is_available: schedule.is_available !== false,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data as DoctorSchedule;
   } catch (err) {
     console.error('Error upserting schedule:', err);
     throw err;
@@ -116,13 +109,13 @@ export const upsertSchedule = async (
 /**
  * Delete a schedule for a specific day
  */
-export const deleteSchedule = async (doctorId: string, dayOfWeek: number): Promise<void> => {
+export const deleteSchedule = async (doctorId: string, scheduleId: string): Promise<void> => {
   try {
     const { error } = await supabase
       .from('doctor_schedules')
       .delete()
       .eq('doctor_id', doctorId)
-      .eq('day_of_week', dayOfWeek);
+      .eq('id', scheduleId);
 
     if (error) throw error;
   } catch (err) {
@@ -142,32 +135,30 @@ export const toggleDayAvailability = async (
   try {
     console.log(`[toggleDayAvailability] doctorId=${doctorId}, dayOfWeek=${dayOfWeek}, isAvailable=${isAvailable}`);
     
-    // Get existing schedule
-    const { data: existing, error: fetchError } = await supabase
+    // Fetch any schedules for this day
+    const { data: existingSchedules, error: fetchError } = await supabase
       .from('doctor_schedules')
       .select('*')
       .eq('doctor_id', doctorId)
-      .eq('day_of_week', dayOfWeek)
-      .single();
+      .eq('day_of_week', dayOfWeek);
 
-    if (fetchError && fetchError.code !== 'PGRST116') {
-      // PGRST116 = no rows returned (which is fine)
-      console.error('Error fetching existing schedule:', fetchError);
+    if (fetchError) {
+      console.error('Error fetching existing schedules:', fetchError);
+      // proceed to create default if needed
     }
 
-    if (!existing) {
-      console.log(`[toggleDayAvailability] No existing schedule for day ${dayOfWeek}, creating new one`);
-      return await upsertSchedule(doctorId, {
+    if (!existingSchedules || existingSchedules.length === 0) {
+      // Create a default single slot for the day
+      const created = await upsertSchedule(doctorId, {
         day_of_week: dayOfWeek,
         start_time: '09:00',
         end_time: '17:00',
         is_available: isAvailable,
       });
+      return created || null;
     }
 
-    console.log(`[toggleDayAvailability] Existing schedule found:`, existing);
-
-    // Update existing schedule
+    // Update all schedules for that day to set availability
     const { data, error } = await supabase
       .from('doctor_schedules')
       .update({
@@ -176,16 +167,14 @@ export const toggleDayAvailability = async (
       })
       .eq('doctor_id', doctorId)
       .eq('day_of_week', dayOfWeek)
-      .select()
-      .single();
+      .select();
 
     if (error) {
-      console.error('Error updating schedule:', error);
-      throw new Error(`Failed to update schedule: ${error.message}`);
+      console.error('Error updating schedules:', error);
+      throw new Error(`Failed to update schedules: ${error.message}`);
     }
-    
-    console.log(`[toggleDayAvailability] Success - day ${dayOfWeek} now ${isAvailable ? 'available' : 'unavailable'}:`, data);
-    return (data as DoctorSchedule) || null;
+
+    return (data && data[0]) as DoctorSchedule | null;
   } catch (err) {
     console.error('Error in toggleDayAvailability:', err);
     throw err;
