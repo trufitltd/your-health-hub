@@ -751,7 +751,7 @@ const PatientPortal = () => {
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <Avatar>
-                                <AvatarImage src="" />
+                                <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                 <AvatarFallback className="bg-primary/10 text-primary">
                                   {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                     .split(' ')
@@ -907,7 +907,7 @@ const PatientPortal = () => {
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <Avatar className="w-12 h-12">
-                                <AvatarImage src="" />
+                                <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                 <AvatarFallback className="bg-primary/10 text-primary">
                                   {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                     .split(' ')
