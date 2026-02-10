@@ -35,6 +35,8 @@ import { useRecentReviews } from '@/hooks/useRecentReviews';
 import { useDoctorRegistration } from '@/hooks/useDoctorRegistration';
 import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
+import { usePatientPresence } from '@/hooks/usePatientPresence';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 // Dummy Doctor Data
@@ -105,6 +107,12 @@ const DoctorPortal = () => {
   const [requestFilter, setRequestFilter] = useState<'pending' | 'accepted' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
+
+  // Track doctor presence
+  useTrackUserPresence(user?.id, role as 'doctor' | 'patient');
+  
+  // Subscribe to patient presence
+  const { presenceMap: patientPresenceMap } = usePatientPresence();
 
   // Fetch doctor statistics
   const { data: doctorStats, isLoading: statsLoading } = useDoctorStats(user?.id);
@@ -507,6 +515,16 @@ const DoctorPortal = () => {
     }
   };
 
+  const getPresenceIndicator = (patientId: string) => {
+    const status = patientPresenceMap[patientId] || 'offline';
+    const colors = {
+      online: 'bg-green-500',
+      away: 'bg-yellow-500',
+      offline: 'bg-gray-400'
+    };
+    return <span className={`w-2 h-2 rounded-full ${colors[status]}`} title={status} />;
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -773,11 +791,16 @@ const DoctorPortal = () => {
                               apt.status === 'confirmed' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
                             }`}>
                               <div className="flex items-center gap-3">
-                                <Avatar className="w-10 h-10">
-                                  <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                                    {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
-                                  </AvatarFallback>
-                                </Avatar>
+                                <div className="relative">
+                                  <Avatar className="w-10 h-10">
+                                    <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                                      {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="absolute bottom-0 right-0">
+                                    {getPresenceIndicator(apt.patient_id)}
+                                  </div>
+                                </div>
                                 <div>
                                   <p className="font-medium text-sm">{apt.patient_name || 'Unknown Patient'}</p>
                                   <p className="text-xs text-muted-foreground">{apt.time}</p>
@@ -917,15 +940,22 @@ const DoctorPortal = () => {
                               <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString()}</p>
                             </div>
                             <div className="w-px h-12 bg-border" />
-                            <Avatar className="w-12 h-12">
-                              <AvatarFallback className="bg-primary/10 text-primary">
-                                {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-semibold">{apt.patient_name}</p>
-                              <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} Year Old` : 'Age N/A'}</p>
-                              <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
+                            <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                              <div className="relative">
+                                <Avatar className="w-12 h-12">
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="absolute bottom-0 right-0">
+                                  {getPresenceIndicator(apt.patient_id)}
+                                </div>
+                              </div>
+                              <div>
+                                <p className="font-semibold">{apt.patient_name}</p>
+                                <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} Year Old` : 'Age N/A'}</p>
+                                <p className="text-sm text-muted-foreground">{apt.notes || 'No notes'}</p>
+                              </div>
                             </div>
                           </div>
                           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -1016,11 +1046,16 @@ const DoctorPortal = () => {
                         {filteredRequests.map((request) => (
                           <div key={request.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                              <Avatar className="w-12 h-12">
-                                <AvatarFallback className="bg-primary/10 text-primary">
-                                  {request.patient.split(' ').map(n => n[0]).join('')}
-                                </AvatarFallback>
-                              </Avatar>
+                              <div className="relative">
+                                <Avatar className="w-12 h-12">
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {request.patient.split(' ').map(n => n[0]).join('')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="absolute bottom-0 right-0">
+                                  {getPresenceIndicator(request.id)}
+                                </div>
+                              </div>
                               <div>
                                 <div className="flex items-center gap-2">
                                   <p className="font-semibold">{request.patient}</p>
@@ -1108,11 +1143,16 @@ const DoctorPortal = () => {
                         patientsList.map((patient) => (
                           <div key={patient.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                              <Avatar className="w-12 h-12">
-                                <AvatarFallback className="bg-primary/10 text-primary">
-                                  {patient.name.split(' ').map(n => n[0]).join('')}
-                                </AvatarFallback>
-                              </Avatar>
+                              <div className="relative">
+                                <Avatar className="w-12 h-12">
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {patient.name.split(' ').map(n => n[0]).join('')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="absolute bottom-0 right-0">
+                                  {getPresenceIndicator(patient.id)}
+                                </div>
+                              </div>
                               <div>
                                 <p className="font-semibold">{patient.name}</p>
                                 <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? 'years old' : ''}</p>

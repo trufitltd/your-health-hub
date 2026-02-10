@@ -18,6 +18,9 @@ import { toast } from '@/components/ui/use-toast';
 import { consultationService } from '@/services/consultationService';
 import { supabase } from '@/integrations/supabase/client';
 import { WebRTCService, type WebRTCSignal } from '@/services/webrtcService';
+import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
+import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { ChatSidebar } from './ChatSidebar';
 import { ControlBar } from './ControlBar';
 import { DoctorNotesPanel } from './DoctorNotesPanel';
@@ -47,6 +50,14 @@ export function ConsultationRoom({
   // Consultations are uniform; default to video+audio enabled internally
   const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const { user } = useAuth();
+  
+  // Track user presence during consultation
+  useTrackUserPresence(user?.id, participantRole);
+  
+  // Subscribe to presence based on role
+  const { presenceMap: doctorPresenceMap } = useDoctorPresence();
+  const { presenceMap: patientPresenceMap } = usePatientPresence();
+  
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
