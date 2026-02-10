@@ -23,7 +23,7 @@ import { Label } from '@/components/ui/label';
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
-  Heart, Activity, Pill, Phone, Plus, Search
+  Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -37,6 +37,7 @@ import { MessagesTab } from '@/components/patient-portal/MessagesTab';
 import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
+import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
@@ -89,11 +90,14 @@ const PatientPortal = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
+  const [isUploadingRecord, setIsUploadingRecord] = useState(false);
+  const [uploadNotes, setUploadNotes] = useState('');
   const { user, signOut } = useAuth();
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
+  const { records: healthRecords, isLoading: recordsLoading, uploadRecord, deleteRecord } = useHealthRecords(user?.id);
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -181,6 +185,28 @@ const PatientPortal = () => {
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
+  };
+
+  const handleRecordUpload = async (file: File) => {
+    setIsUploadingRecord(true);
+    try {
+      await uploadRecord.mutateAsync({ file, notes: uploadNotes });
+      setUploadNotes('');
+      toast({ title: 'Success', description: 'Health record uploaded successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to upload health record.' });
+    } finally {
+      setIsUploadingRecord(false);
+    }
+  };
+
+  const handleDeleteRecord = async (recordId: string) => {
+    try {
+      await deleteRecord.mutateAsync(recordId);
+      toast({ title: 'Success', description: 'Health record deleted successfully!' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to delete health record.' });
+    }
   };
 
   const displayName = patientRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
@@ -1165,13 +1191,90 @@ const PatientPortal = () => {
                 <Card>
                   <CardHeader>
                     <CardTitle>Health Records</CardTitle>
-                    <CardDescription>Your medical history and documents</CardDescription>
+                    <CardDescription>Upload and manage your medical documents</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-center py-12">
-                      <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                      <p className="text-muted-foreground">No records uploaded yet</p>
-                      <Button className="mt-4">Upload Records</Button>
+                    <div className="space-y-6">
+                      {/* Upload Section */}
+                      <div className="border-2 border-dashed border-border rounded-lg p-6">
+                        <div className="text-center">
+                          <Upload className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                          <p className="text-sm text-muted-foreground mb-4">Upload medical records, lab results, prescriptions, etc.</p>
+                          <div className="space-y-3">
+                            <Input
+                              placeholder="Add notes (optional)"
+                              value={uploadNotes}
+                              onChange={(e) => setUploadNotes(e.target.value)}
+                              className="max-w-md mx-auto"
+                            />
+                            <input
+                              type="file"
+                              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleRecordUpload(file);
+                              }}
+                              className="hidden"
+                              id="record-upload"
+                            />
+                            <Button
+                              onClick={() => document.getElementById('record-upload')?.click()}
+                              disabled={isUploadingRecord}
+                            >
+                              {isUploadingRecord ? 'Uploading...' : 'Upload Records'}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Records List */}
+                      {recordsLoading ? (
+                        <div className="text-center py-8">
+                          <p className="text-muted-foreground">Loading records...</p>
+                        </div>
+                      ) : healthRecords.length === 0 ? (
+                        <div className="text-center py-8">
+                          <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                          <p className="text-muted-foreground">No records uploaded yet</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {healthRecords.map((record) => (
+                            <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
+                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <FileText className="w-8 h-8 text-primary flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium truncate">{record.file_name}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {new Date(record.uploaded_at).toLocaleDateString()}
+                                    {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
+                                  </p>
+                                  {record.notes && (
+                                    <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => window.open(record.file_url, '_blank')}
+                                >
+                                  <Download className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => handleDeleteRecord(record.id)}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
