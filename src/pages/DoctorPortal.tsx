@@ -165,16 +165,17 @@ const DoctorPortal = () => {
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
-        .select('user_id, age')
+        .select('user_id, age, full_name')
         .in('user_id', patientIds);
       
       console.log('Patient data:', patientData, 'Error:', patientError);
       
       // Merge the data
-      const patientAgeMap = new Map(patientData?.map(p => [p.user_id, p.age]) || []);
+      const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name }]) || []);
       return appointments.map(apt => ({
         ...apt,
-        patient_age: patientAgeMap.get(apt.patient_id) || null
+        patient_age: patientDataMap.get(apt.patient_id)?.age || null,
+        patient_name: patientDataMap.get(apt.patient_id)?.full_name || null
       }));
     },
     enabled: !!user?.id,
@@ -309,6 +310,45 @@ const DoctorPortal = () => {
         return allRequests;
     }
   }, [requestFilter, fetchedAppointments]);
+
+  // Derive patients list from appointments
+  const patientsList = useMemo(() => {
+    const patientsMap = new Map<string, any>();
+    
+    (fetchedAppointments || []).forEach(apt => {
+      if (apt.patient_id && apt.patient_name) {
+        if (!patientsMap.has(apt.patient_id)) {
+          patientsMap.set(apt.patient_id, {
+            id: apt.patient_id,
+            name: apt.patient_name,
+            age: apt.patient_age || 'N/A',
+            lastVisit: apt.date,
+            appointments: []
+          });
+        }
+        const patient = patientsMap.get(apt.patient_id);
+        patient.appointments.push({
+          date: apt.date,
+          time: apt.time,
+          status: apt.status
+        });
+      }
+    });
+
+    // Sort appointments for each patient to get the latest one
+    patientsMap.forEach(patient => {
+      patient.appointments.sort((a: any, b: any) => {
+        const dateA = new Date(`${a.date}T${a.time}`).getTime();
+        const dateB = new Date(`${b.date}T${b.time}`).getTime();
+        return dateB - dateA;
+      });
+      if (patient.appointments.length > 0) {
+        patient.lastVisit = patient.appointments[0].date;
+      }
+    });
+
+    return Array.from(patientsMap.values());
+  }, [fetchedAppointments]);
 
   const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? doctorData.name;
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? doctorData.avatar;
@@ -1054,39 +1094,47 @@ const DoctorPortal = () => {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {patientList.map((patient) => (
-                        <div key={patient.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
-                          <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                            <Avatar className="w-12 h-12">
-                              <AvatarFallback className="bg-primary/10 text-primary">
-                                {patient.name.split(' ').map(n => n[0]).join('')}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-semibold">{patient.name}</p>
-                              <p className="text-sm text-muted-foreground">{patient.age} years old • {patient.condition}</p>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                Last visit: {patient.lastVisit === 'New Patient' ? patient.lastVisit : new Date(patient.lastVisit).toLocaleDateString()}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
-                            <div className="text-left sm:text-right mb-2 sm:mb-0">
-                              <p className="text-xs text-muted-foreground">Next appointment</p>
-                              <p className="text-sm font-medium">{new Date(patient.nextAppointment).toLocaleDateString()}</p>
-                            </div>
-                            <div className="flex flex-col sm:flex-row gap-2">
-                              <Button size="sm" variant="outline" className="w-full sm:w-auto">
-                                View Profile
-                              </Button>
-                              <Button size="sm" variant="ghost" className="w-full sm:w-auto">
-                                <MessageSquare className="w-4 h-4 mr-2" />
-                                Message
-                              </Button>
-                            </div>
-                          </div>
+                      {patientsList.length === 0 ? (
+                        <div className="text-center py-12">
+                          <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                          <p className="text-muted-foreground">No patients yet</p>
+                          <p className="text-sm text-muted-foreground mt-2">Patients will appear here once they book appointments with you</p>
                         </div>
-                      ))}
+                      ) : (
+                        patientsList.map((patient) => (
+                          <div key={patient.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
+                            <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                              <Avatar className="w-12 h-12">
+                                <AvatarFallback className="bg-primary/10 text-primary">
+                                  {patient.name.split(' ').map(n => n[0]).join('')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <p className="font-semibold">{patient.name}</p>
+                                <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? 'years old' : ''}</p>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  Last visit: {new Date(patient.lastVisit).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+                              <div className="text-left sm:text-right mb-2 sm:mb-0">
+                                <p className="text-xs text-muted-foreground">Total appointments</p>
+                                <p className="text-sm font-medium">{patient.appointments.length}</p>
+                              </div>
+                              <div className="flex flex-col sm:flex-row gap-2">
+                                <Button size="sm" variant="outline" className="w-full sm:w-auto">
+                                  View Profile
+                                </Button>
+                                <Button size="sm" variant="ghost" className="w-full sm:w-auto">
+                                  <MessageSquare className="w-4 h-4 mr-2" />
+                                  Message
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </CardContent>
                 </Card>
