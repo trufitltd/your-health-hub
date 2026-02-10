@@ -60,16 +60,16 @@ export const useSchedules = (doctorId: string | undefined) => {
 
   // Mutation for deleting schedule
   const deleteMutation = useMutation({
-    mutationFn: (dayOfWeek: number) =>
-      deleteSchedule(doctorId!, dayOfWeek),
-    onSuccess: (_, dayOfWeek) => {
+    mutationFn: (scheduleId: string) =>
+      deleteSchedule(doctorId!, scheduleId),
+    onSuccess: (_, scheduleId) => {
       queryClient.invalidateQueries({ queryKey: ['schedules', doctorId] });
       queryClient.invalidateQueries({ queryKey: ['schedules-formatted', doctorId] });
       // Also invalidate available-slots for patients to see updated availability
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
         title: 'Success',
-        description: `Schedule removed for ${getDayName(dayOfWeek)}`,
+        description: `Schedule removed`,
       });
     },
     onError: (error) => {
@@ -141,9 +141,9 @@ export const useSchedules = (doctorId: string | undefined) => {
     isLoading: schedulesQuery.isLoading || formattedQuery.isLoading,
     error: schedulesQuery.error || formattedQuery.error,
 
-    // Mutations
-    upsertSchedule: upsertMutation.mutate,
-    deleteSchedule: deleteMutation.mutate,
+    // Mutations (async variants where appropriate)
+    upsertSchedule: upsertMutation.mutateAsync,
+    deleteSchedule: deleteMutation.mutateAsync,
     toggleAvailability: toggleMutation.mutate,
     createDefaultSchedule: createDefaultMutation.mutate,
 
