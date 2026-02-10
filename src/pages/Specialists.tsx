@@ -15,6 +15,7 @@ interface DoctorCard {
   specialty: string;
   avatar_url?: string | null;
   bio?: string | null;
+  experience?: string | null;
 }
 
 interface DoctorScheduleRow {
@@ -74,18 +75,19 @@ export default function SpecialistsPage() {
         throw error;
       }
 
-      // Fetch bio from doctor_registrations
+      // Fetch bio and experience from doctor_registrations
       const doctorIds = (data || []).map(d => d.id);
       const { data: registrations } = await supabase
         .from('doctor_registrations')
-        .select('user_id,bio')
+        .select('user_id,bio,experience')
         .in('user_id', doctorIds);
 
-      const bioMap = new Map(registrations?.map(r => [r.user_id, r.bio]) || []);
+      const registrationMap = new Map(registrations?.map(r => [r.user_id, r]) || []);
 
       return (data || []).map(d => ({
         ...d,
-        bio: bioMap.get(d.id) || null
+        bio: registrationMap.get(d.id)?.bio || null,
+        experience: registrationMap.get(d.id)?.experience || null
       })) as DoctorCard[];
     },
   });
@@ -262,7 +264,10 @@ export default function SpecialistsPage() {
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{doctor.name}</h3>
                     <p className="text-sm text-primary">{doctor.specialty || 'General Practice'}</p>
-                    <div className="text-xs text-muted-foreground">
+                    {doctor.experience && (
+                      <p className="text-xs text-muted-foreground mt-1">Experience: {doctor.experience} years</p>
+                    )}
+                    <div className="text-xs text-muted-foreground mt-1">
                       <p className={isBioExpanded ? '' : 'line-clamp-2'}>
                         {doctor.bio || 'No bio provided.'}
                       </p>
