@@ -41,50 +41,6 @@ import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
-// Dummy Patient Data
-const patientData = {
-  name: 'Sarah Johnson',
-  email: 'sarah.johnson@email.com',
-  phone: '+1 (555) 123-4567',
-  dateOfBirth: '1990-05-15',
-  bloodType: 'O+',
-  avatar: '',
-  memberSince: 'January 2024',
-};
-
-const upcomingAppointments = [
-  {
-    id: 1,
-    doctor: 'Dr. Emily Chen',
-    specialty: 'Cardiologist',
-    date: '2026-01-08',
-    time: '10:00 AM',
-    type: 'Video Call',
-    avatar: '',
-    status: 'confirmed',
-  },
-  {
-    id: 2,
-    doctor: 'Dr. Michael Roberts',
-    specialty: 'General Medicine',
-    date: '2026-01-12',
-    time: '2:30 PM',
-    type: 'Audio Call',
-    avatar: '',
-    status: 'pending',
-  },
-  {
-    id: 3,
-    doctor: 'Dr. Lisa Wang',
-    specialty: 'Dermatologist',
-    date: '2026-01-15',
-    time: '11:00 AM',
-    type: 'Video Call',
-    avatar: '',
-    status: 'confirmed',
-  },
-];
-
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -209,8 +165,8 @@ const PatientPortal = () => {
     }
   };
 
-  const displayName = patientRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? patientData.name;
-  const profilePicture = patientRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? patientData.avatar;
+  const displayName = patientRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? 'Patient';
+  const profilePicture = patientRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? '';
   const initials = displayName
     .split(' ')
     .map((n) => n[0])
@@ -1296,7 +1252,7 @@ const PatientPortal = () => {
                         </Avatar>
                         <div>
                           <p className="font-semibold text-lg">{displayName}</p>
-                          <p className="text-muted-foreground">{user?.email ?? patientData.email}</p>
+                          <p className="text-muted-foreground">{user?.email}</p>
                           <div className="mt-2">
                             <input
                               type="file"
