@@ -47,6 +47,7 @@ const DoctorPortal = () => {
   const [requestFilter, setRequestFilter] = useState<'pending' | 'accepted' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Fetch doctor statistics
   const { data: doctorStats, isLoading: statsLoading } = useDoctorStats(user?.id);
@@ -57,11 +58,85 @@ const DoctorPortal = () => {
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
   
+  // Fetch doctor availability status
+  const { data: doctorAvailability } = useQuery({
+    queryKey: ['doctor-availability', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return { is_active: false, has_schedules: false };
+      
+      // Check is_active from doctors table
+      const { data: doctorData } = await supabase
+        .from('doctors')
+        .select('is_active')
+        .eq('id', user.id)
+        .single();
+      
+      // Check if doctor has any available schedules
+      const { data: schedules } = await supabase
+        .from('doctor_schedules')
+        .select('id')
+        .eq('doctor_id', user.id)
+        .eq('is_available', true)
+        .limit(1);
+      
+      return {
+        is_active: doctorData?.is_active !== false,
+        has_schedules: (schedules || []).length > 0
+      };
+    },
+    enabled: !!user?.id,
+  });
+
+  // Sync availability state with database
+  useEffect(() => {
+    if (doctorAvailability) {
+      const actualAvailability = doctorAvailability.is_active && doctorAvailability.has_schedules;
+      setIsAvailable(actualAvailability);
+    }
+  }, [doctorAvailability]);
+
+  // Real-time subscription for schedule changes to update availability
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`doctor-availability-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'doctor_schedules',
+          filter: `doctor_id=eq.${user.id}`
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['doctor-availability', user.id] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'doctors',
+          filter: `id=eq.${user.id}`
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['doctor-availability', user.id] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, queryClient]);
+  
   // Fetch doctor earnings
   const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
-  const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
@@ -84,6 +159,31 @@ const DoctorPortal = () => {
       });
     }
   }, [doctorRegistration]);
+
+  // Real-time subscription for doctor appointments
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('doctor-appointments-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `doctor_id=eq.${user.id}`
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['doctor-appointments', user.id] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, queryClient]);
 
   // Fetch appointments for this doctor
   const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
@@ -399,14 +499,25 @@ const DoctorPortal = () => {
     
     try {
       // Update the doctors table is_active field
-      const { error } = await supabase
+      const { error: doctorError } = await supabase
         .from('doctors')
         .update({ is_active: newAvailability })
         .eq('id', user.id);
 
-      if (error) {
-        console.error('Error updating availability:', error);
-        throw error;
+      if (doctorError) {
+        console.error('Error updating availability:', doctorError);
+        throw doctorError;
+      }
+
+      // Also update all doctor schedules to match availability
+      const { error: scheduleError } = await supabase
+        .from('doctor_schedules')
+        .update({ is_available: newAvailability })
+        .eq('doctor_id', user.id);
+
+      if (scheduleError) {
+        console.error('Error updating schedules:', scheduleError);
+        throw scheduleError;
       }
 
       // Update local state
@@ -414,6 +525,8 @@ const DoctorPortal = () => {
       
       // Invalidate query cache to refresh data
       queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+      queryClient.invalidateQueries({ queryKey: ['doctor-availability', user.id] });
+      queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
       
       toast({
         title: 'Success',
