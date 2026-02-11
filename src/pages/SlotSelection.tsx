@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout } from '@/components/layout';
@@ -29,6 +29,35 @@ export default function SlotSelection() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
+
+  // Scroll to top when page loads
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+
+  // Auto-scroll to time selection when date is selected
+  useEffect(() => {
+    if (selectedDate) {
+      setTimeout(() => {
+        const timeSection = document.getElementById('time-selection');
+        if (timeSection) {
+          timeSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [selectedDate]);
+
+  // Auto-scroll to summary when time is selected
+  useEffect(() => {
+    if (selectedTime) {
+      setTimeout(() => {
+        const summarySection = document.getElementById('appointment-summary');
+        if (summarySection) {
+          summarySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [selectedTime]);
 
   // Redirect if no doctor selected
   if (!state?.doctorId) {
@@ -88,15 +117,13 @@ export default function SlotSelection() {
       const dateStr = date.toISOString().split('T')[0];
       // Get day of week as number (0=Sunday, 1=Monday, etc.)
       const dayIndex = date.getDay();
-      // Convert to database format (1=Monday, 2=Tuesday, ..., 7=Sunday)
-      const dbDayOfWeek = dayIndex === 0 ? 7 : dayIndex;
 
-      console.log(`Checking date ${dateStr}, dayOfWeek: ${dayIndex}, dbDayOfWeek: ${dbDayOfWeek}`);
+      console.log(`Checking date ${dateStr}, dayOfWeek: ${dayIndex}`);
 
-      // Check if doctor works on this day
+      // Check if doctor works on this day AND has available schedules
       const hasSchedule = schedules.some(s => {
-        console.log(`Schedule day_of_week: "${s.day_of_week}", type: ${typeof s.day_of_week}`);
-        return s.day_of_week && parseInt(String(s.day_of_week)) === dbDayOfWeek;
+        console.log(`Schedule day_of_week: "${s.day_of_week}", is_available: ${s.is_available}, type: ${typeof s.day_of_week}`);
+        return s.day_of_week !== null && parseInt(String(s.day_of_week)) === dayIndex && s.is_available === true;
       });
 
       if (hasSchedule) {
@@ -116,10 +143,12 @@ export default function SlotSelection() {
     const date = new Date(selectedDate);
     // Get day of week as number (0=Sunday, 1=Monday, etc.)
     const dayIndex = date.getDay();
-    // Convert to database format (1=Monday, 2=Tuesday, ..., 7=Sunday)
-    const dbDayOfWeek = dayIndex === 0 ? 7 : dayIndex;
 
-    const daySchedules = schedules.filter(s => s.day_of_week && parseInt(String(s.day_of_week)) === dbDayOfWeek);
+    const daySchedules = schedules.filter(s => 
+      s.day_of_week !== null && 
+      parseInt(String(s.day_of_week)) === dayIndex && 
+      s.is_available === true
+    );
 
     const times = new Set<string>();
     daySchedules.forEach(schedule => {
@@ -315,6 +344,7 @@ export default function SlotSelection() {
             {/* Time Selection */}
             {selectedDate && (
               <motion.div
+                id="time-selection"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
@@ -362,6 +392,7 @@ export default function SlotSelection() {
             {/* Confirmation Summary */}
             {selectedDate && selectedTime && (
               <motion.div
+                id="appointment-summary"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
