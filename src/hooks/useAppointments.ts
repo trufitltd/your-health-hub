@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { useEffect } from 'react';
 
 export interface Appointment {
   id: string;
@@ -57,6 +58,31 @@ export const useAppointments = () => {
   const invalidateAppointments = () => {
     queryClient.invalidateQueries({ queryKey: ['appointments', user?.id] });
   };
+
+  // Real-time subscription for appointments
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('appointments-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `patient_id=eq.${user.id}`
+        },
+        () => {
+          invalidateAppointments();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   return {
     appointments,
