@@ -217,11 +217,13 @@ export const getFormattedSchedule = async (doctorId: string) => {
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
     const defaultSchedules = [
+      { day_of_week: 0, start_time: '09:00', end_time: '17:00' }, // Sunday
       { day_of_week: 1, start_time: '09:00', end_time: '17:00' }, // Monday
       { day_of_week: 2, start_time: '09:00', end_time: '17:00' }, // Tuesday
       { day_of_week: 3, start_time: '09:00', end_time: '17:00' }, // Wednesday
       { day_of_week: 4, start_time: '09:00', end_time: '17:00' }, // Thursday
       { day_of_week: 5, start_time: '09:00', end_time: '17:00' }, // Friday
+      { day_of_week: 6, start_time: '09:00', end_time: '17:00' }, // Saturday
     ];
 
     // Direct insert without checking for existing schedules
