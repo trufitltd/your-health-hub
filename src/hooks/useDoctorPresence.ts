@@ -9,23 +9,37 @@ export const useDoctorPresence = () => {
   const [channel, setChannel] = useState<RealtimeChannel | null>(null);
 
   useEffect(() => {
-    const presenceChannel = supabase.channel('doctors-presence');
+    const presenceChannel = supabase.channel('doctors-presence', {
+      config: {
+        presence: {
+          key: 'doctors-presence-subscriber',
+        },
+      },
+    });
 
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
+        console.log('[Doctor Presence] Raw presence state:', state);
         const newMap: Record<string, PresenceStatus> = {};
         
         Object.values(state).forEach((presences: any[]) => {
           presences.forEach((presence) => {
             if (presence.user_id) {
               newMap[presence.user_id] = presence.status || 'online';
+              console.log('[Doctor Presence] Found doctor:', presence.user_id, 'status:', presence.status);
             }
           });
         });
         
         console.log('[Doctor Presence] Updated presence map:', newMap);
         setPresenceMap(newMap);
+      })
+      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+        console.log('[Doctor Presence] Doctor joined:', key, newPresences);
+      })
+      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+        console.log('[Doctor Presence] Doctor left:', key, leftPresences);
       })
       .subscribe();
 
