@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '@/components/layout';
@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
@@ -42,6 +42,7 @@ export default function DoctorDiscovery() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { presenceMap } = useDoctorPresence();
   const [appointmentType, setAppointmentType] = useState<'general' | 'specialist' | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
@@ -163,6 +164,14 @@ export default function DoctorDiscovery() {
             .eq('id', doctor.user_id)
             .single();
 
+          // Check if doctor has any available schedules
+          const { data: schedules } = await supabase
+            .from('doctor_schedules')
+            .select('id')
+            .eq('doctor_id', doctor.user_id)
+            .eq('is_available', true)
+            .limit(1);
+
           // Fetch ratings
           const { data: ratingData } = await supabase
             .from('appointments')
@@ -173,13 +182,16 @@ export default function DoctorDiscovery() {
           const ratings = (ratingData || []).map(r => r.rating).filter(Boolean);
           const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b) / ratings.length : 0;
 
+          const hasAvailableSchedules = (schedules || []).length > 0;
+          const isActive = doctorStatus?.is_active !== false;
+
           return {
             ...doctor,
             auth_user_id: doctorStatus?.id || doctor.user_id,
             rating: avgRating,
             total_reviews: ratings.length,
             experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
-            is_active: doctorStatus?.is_active !== false,
+            is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })
       );
@@ -203,6 +215,37 @@ export default function DoctorDiscovery() {
       };
     });
   }, [doctors, presenceMap]);
+
+  // Real-time subscription for doctor schedules and availability
+  useEffect(() => {
+    const channel = supabase
+      .channel('doctor-discovery-updates')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'doctor_schedules' },
+        (payload) => {
+          console.log('Doctor schedule changed:', payload);
+          queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
+          queryClient.invalidateQueries({ queryKey: ['available-doctors'] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'doctors' },
+        (payload) => {
+          console.log('Doctor status changed:', payload);
+          queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
+          queryClient.invalidateQueries({ queryKey: ['available-doctors'] });
+        }
+      )
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
 
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
