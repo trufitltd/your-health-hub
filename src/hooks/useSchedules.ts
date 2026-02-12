@@ -11,12 +11,39 @@ import {
   ScheduleInput,
 } from '@/services/scheduleService';
 import { toast } from '@/components/ui/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 /**
  * Hook to fetch and manage doctor schedules
  */
 export const useSchedules = (doctorId: string | undefined) => {
   const queryClient = useQueryClient();
+
+  // Real-time subscription for schedule changes
+  useEffect(() => {
+    if (!doctorId) return;
+
+    const channel = supabase
+      .channel(`doctor-schedules-${doctorId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'doctor_schedules',
+          filter: `doctor_id=eq.${doctorId}`
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['schedules', doctorId] });
+          queryClient.invalidateQueries({ queryKey: ['schedules-formatted', doctorId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [doctorId, queryClient]);
 
   // Fetch raw schedules
   const schedulesQuery = useQuery({
