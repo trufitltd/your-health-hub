@@ -368,7 +368,7 @@ export default function AuthPage() {
                 medical_license_url: medicalLicenseUrl,
                 identification_type: pendingUserData.doctorIdType,
                 identification_number: pendingUserData.doctorIdNumber,
-                verification_status: 'pending'
+                verification_status: 'pending', //Todo: Implement set status from backend, dont trust user input for process flow
               };
 
               console.log('Inserting doctor registration:', doctorPayload);

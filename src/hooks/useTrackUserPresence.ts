@@ -34,16 +34,23 @@ export const useTrackUserPresence = (
     };
 
     const initPresence = async () => {
-      channel = supabase.channel(channelName);
+      channel = supabase.channel(channelName, {
+        config: {
+          presence: {
+            key: userId,
+          },
+        },
+      });
       
       await channel.subscribe(async (subscribeStatus) => {
         if (subscribeStatus === 'SUBSCRIBED') {
-          console.log(`[Presence] ${userRole} tracking started for user:`, userId);
+          console.log(`[Presence] ${userRole} tracking started for user:`, userId, 'on channel:', channelName);
           await channel!.track({ 
             user_id: userId, 
             status: 'online', 
             online_at: new Date().toISOString() 
           });
+          console.log(`[Presence] ${userRole} broadcasted presence for:`, userId);
         }
       });
       
