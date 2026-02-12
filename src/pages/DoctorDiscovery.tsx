@@ -21,7 +21,6 @@ import {
 interface Doctor {
   id: string;
   user_id: string;
-  auth_user_id?: string;
   full_name: string;
   specialty: string;
   hospital_affiliation: string;
@@ -157,10 +156,10 @@ export default function DoctorDiscovery() {
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
         (data || []).map(async (doctor) => {
-          // Fetch doctor availability status AND auth user ID
+          // Fetch doctor availability status
           const { data: doctorStatus } = await supabase
             .from('doctors')
-            .select('is_active, id')
+            .select('is_active')
             .eq('id', doctor.user_id)
             .single();
 
@@ -187,7 +186,6 @@ export default function DoctorDiscovery() {
 
           return {
             ...doctor,
-            auth_user_id: doctorStatus?.id || doctor.user_id,
             rating: avgRating,
             total_reviews: ratings.length,
             experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
@@ -205,10 +203,9 @@ export default function DoctorDiscovery() {
     console.log('[DoctorDiscovery] Current presence map:', presenceMap);
     console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, auth_user_id: d.auth_user_id, name: d.full_name })));
     return doctors.map(doctor => {
-      // Try auth_user_id first, fallback to user_id
-      const lookupId = doctor.auth_user_id || doctor.user_id;
-      const status = presenceMap[lookupId] || 'offline';
-      console.log(`[DoctorDiscovery] Doctor ${doctor.full_name} (user_id: ${doctor.user_id}, auth: ${doctor.auth_user_id}): ${status}`);
+      // Use user_id which matches the auth user ID
+      const status = presenceMap[doctor.user_id] || 'offline';
+      console.log(`[DoctorDiscovery] Doctor ${doctor.full_name} (user_id: ${doctor.user_id}): ${status}`);
       return {
         ...doctor,
         online_status: status as 'online' | 'away' | 'offline',

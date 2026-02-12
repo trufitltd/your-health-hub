@@ -52,7 +52,13 @@ const DoctorPortal = () => {
   const queryClient = useQueryClient();
 
   // Track doctor presence
-  useTrackUserPresence(user?.id, role as 'doctor' | 'patient');
+  useEffect(() => {
+    if (user?.id) {
+      console.log('[DoctorPortal] Tracking presence for doctor:', user.id, 'role:', role);
+    }
+  }, [user?.id, role]);
+  
+  useTrackUserPresence(user?.id, 'doctor');
   
   // Subscribe to patient presence
   const { presenceMap: patientPresenceMap } = usePatientPresence();
@@ -361,6 +367,7 @@ const DoctorPortal = () => {
     const allRequests = (fetchedAppointments || []).map(apt => ({
       id: apt.id,
       patient: apt.patient_name || 'Unknown Patient',
+      patient_id: apt.patient_id,
       age: apt.patient_age || 'N/A',
       requestedDate: apt.date,
       requestedTime: apt.time,
@@ -591,10 +598,10 @@ const DoctorPortal = () => {
     const status = patientPresenceMap[patientId] || 'offline';
     const colors = {
       online: 'bg-green-500',
-      away: 'bg-yellow-500',
+      away: 'bg-amber-500',
       offline: 'bg-gray-400'
     };
-    return <span className={`w-2 h-2 rounded-full ${colors[status]}`} title={status} />;
+    return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
   return (
@@ -1125,7 +1132,7 @@ const DoctorPortal = () => {
                                   </AvatarFallback>
                                 </Avatar>
                                 <div className="absolute bottom-0 right-0">
-                                  {getPresenceIndicator(request.id)}
+                                  {getPresenceIndicator(request.patient_id)}
                                 </div>
                               </div>
                               <div>

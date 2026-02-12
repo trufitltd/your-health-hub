@@ -39,6 +39,8 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
 import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
+import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 const PatientPortal = () => {
@@ -49,6 +51,13 @@ const PatientPortal = () => {
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
   const { user, signOut } = useAuth();
+  
+  // Track patient presence
+  useTrackUserPresence(user?.id, 'patient');
+  
+  // Subscribe to doctor presence
+  const { presenceMap: doctorPresenceMap } = useDoctorPresence();
+  
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
@@ -494,6 +503,16 @@ const PatientPortal = () => {
     }
   };
 
+  const getDoctorPresenceIndicator = (doctorId: string) => {
+    const status = doctorPresenceMap[doctorId] || 'offline';
+    const colors = {
+      online: 'bg-green-500',
+      away: 'bg-amber-500',
+      offline: 'bg-gray-400'
+    };
+    return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -750,16 +769,21 @@ const PatientPortal = () => {
                         }).slice(0, 3).map((apt) => (
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                              <Avatar>
-                                <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
-                                <AvatarFallback className="bg-primary/10 text-primary">
-                                  {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
-                                    .split(' ')
-                                    .map((n) => n[0])
-                                    .join('')
-                                    .slice(0, 2)}
-                                </AvatarFallback>
-                              </Avatar>
+                              <div className="relative">
+                                <Avatar>
+                                  <AvatarImage src="" />
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                      .split(' ')
+                                      .map((n) => n[0])
+                                      .join('')
+                                      .slice(0, 2)}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="absolute bottom-0 right-0">
+                                  {getDoctorPresenceIndicator((apt as unknown as { doctor_id?: string }).doctor_id || '')}
+                                </div>
+                              </div>
                               <div>
                                 <p className="font-medium">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                 <p className="text-sm text-muted-foreground">Appointment</p>
@@ -906,16 +930,21 @@ const PatientPortal = () => {
                         {appointments.map((apt) => (
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                              <Avatar className="w-12 h-12">
-                                <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
-                                <AvatarFallback className="bg-primary/10 text-primary">
-                                  {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
-                                    .split(' ')
-                                    .map((n) => n[0])
-                                    .join('')
-                                    .slice(0, 2)}
-                                </AvatarFallback>
-                              </Avatar>
+                              <div className="relative">
+                                <Avatar className="w-12 h-12">
+                                  <AvatarImage src="" />
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                      .split(' ')
+                                      .map((n) => n[0])
+                                      .join('')
+                                      .slice(0, 2)}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="absolute bottom-0 right-0">
+                                  {getDoctorPresenceIndicator((apt as unknown as { doctor_id?: string }).doctor_id || '')}
+                                </div>
+                              </div>
                               <div>
                                 <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                 <p className="text-sm text-muted-foreground">Appointment</p>
