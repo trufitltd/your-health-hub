@@ -63,6 +63,30 @@ export default function DoctorDiscovery() {
     endTime: '',
   });
   const [showAvailabilityDialog, setShowAvailabilityDialog] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
+  const [lastScrollY, setLastScrollY] = useState(0);
+
+  // Handle scroll to show/hide filters
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      
+      if (currentScrollY < 50) {
+        setShowFilters(true);
+      } else if (currentScrollY > lastScrollY) {
+        // Scrolling down
+        setShowFilters(false);
+      } else {
+        // Scrolling up
+        setShowFilters(true);
+      }
+      
+      setLastScrollY(currentScrollY);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [lastScrollY]);
 
   // Helper: Get current date/time in correct format
   const getNowDatetime = () => {
@@ -373,23 +397,36 @@ export default function DoctorDiscovery() {
   return (
     <Layout>
       <div className="min-h-screen bg-muted/30 py-8 md:py-12">
-        <div className="container mx-auto px-4 my-12">
+        <div className="container mx-auto px-4">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
-            <div className="mb-8">
-              <div className="mb-6">
-                <h1 className="text-4xl font-bold mb-2">Find a Doctor</h1>
-                <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
-              </div>
+            {/* Header */}
+            <div className="mb-6">
+              <h1 className="text-4xl font-bold mb-2">Find a Doctor</h1>
+              <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
+            </div>
 
-              <div className="mb-8">
-                <div className="flex items-center gap-3 mb-6 flex-wrap">
+            {/* Sticky Filter Bar */}
+            <div className={`sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-4 mb-6 -mx-4 px-4 transition-transform duration-300 ${showFilters ? 'translate-y-0' : '-translate-y-full'}`}>
+              <div className="space-y-4">
+                {/* Primary Filters */}
+                <div className="flex flex-wrap gap-3">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search doctors, specialties..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  
                   <select
                     value={doctorTypeFilter}
                     onChange={(e) => setDoctorTypeFilter(e.target.value as 'all' | 'general' | 'specialist')}
-                    className="px-4 py-2 border rounded-lg bg-background"
+                    className="px-4 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer"
                   >
                     <option value="all">All Doctors</option>
                     <option value="general">General Practice</option>
@@ -399,7 +436,7 @@ export default function DoctorDiscovery() {
                   <select
                     value={filters.specialty}
                     onChange={(e) => setFilters({ ...filters, specialty: e.target.value })}
-                    className="px-4 py-2 border rounded-lg bg-background"
+                    className="px-4 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer"
                   >
                     <option value="">All Specialties</option>
                     {specialties.map(specialty => (
@@ -407,23 +444,46 @@ export default function DoctorDiscovery() {
                     ))}
                   </select>
 
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border hover:bg-muted transition-colors cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={availabilityMode === 'now'}
+                      onChange={(e) => setAvailabilityMode(e.target.checked ? 'now' : 'none')}
+                      className="w-4 h-4 cursor-pointer"
+                    />
+                    <span className="text-sm font-medium">Available Now</span>
+                  </label>
+
+                  <Button
+                    variant="outline"
+                    size="default"
+                    onClick={() => setShowAvailabilityDialog(true)}
+                    className="gap-2"
+                  >
+                    <Clock className="w-4 h-4" />
+                    {getAvailabilityFilterText() || 'Availability'}
+                  </Button>
+                </div>
+
+                {/* Secondary Filters */}
+                <div className="flex flex-wrap gap-3 items-center">
                   <select
                     value={filters.minRating}
                     onChange={(e) => setFilters({ ...filters, minRating: parseFloat(e.target.value) })}
-                    className="px-4 py-2 border rounded-lg bg-background"
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
-                    <option value={0}>All Ratings</option>
-                    <option value={3}>3+ Stars</option>
-                    <option value={4}>4+ Stars</option>
-                    <option value={4.5}>4.5+ Stars</option>
+                    <option value={0}>Any Rating</option>
+                    <option value={3}>3+ ⭐</option>
+                    <option value={4}>4+ ⭐</option>
+                    <option value={4.5}>4.5+ ⭐</option>
                   </select>
 
                   <select
                     value={filters.minExperience}
                     onChange={(e) => setFilters({ ...filters, minExperience: parseFloat(e.target.value) })}
-                    className="px-4 py-2 border rounded-lg bg-background"
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
-                    <option value={0}>All Experience</option>
+                    <option value={0}>Any Experience</option>
                     <option value={5}>5+ Years</option>
                     <option value={10}>10+ Years</option>
                     <option value={15}>15+ Years</option>
@@ -432,39 +492,13 @@ export default function DoctorDiscovery() {
                   <select
                     value={filters.hospital}
                     onChange={(e) => setFilters({ ...filters, hospital: e.target.value })}
-                    className="px-4 py-2 border rounded-lg bg-background"
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
                     <option value="">All Hospitals</option>
                     {hospitals.map(hospital => (
                       <option key={hospital} value={hospital}>{hospital}</option>
                     ))}
                   </select>
-                </div>
-
-                {/* Availability Filter - Compact */}
-                <div className="flex items-center gap-3 mb-6 flex-wrap">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={availabilityMode === 'now'}
-                      onChange={(e) => setAvailabilityMode(e.target.checked ? 'now' : 'none')}
-                      className="w-4 h-4"
-                    />
-                    <span className="text-sm font-medium">Available now</span>
-                  </label>
-                  
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowAvailabilityDialog(true)}
-                  >
-                    <Clock className="w-4 h-4 mr-2" />
-                    {getAvailabilityFilterText() ? (
-                      <span>{getAvailabilityFilterText()}</span>
-                    ) : (
-                      <span>Select date & time</span>
-                    )}
-                  </Button>
 
                   {(availabilityMode === 'exact' || availabilityMode === 'range') && (
                     <Button
@@ -474,59 +508,71 @@ export default function DoctorDiscovery() {
                         setAvailabilityMode('none');
                         setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
                       }}
+                      className="gap-1"
                     >
-                      ✕
+                      <span>Clear Date Filter</span>
+                      <span className="text-lg">✕</span>
                     </Button>
                   )}
-                </div>
 
-                {/* Results info */}
-                <div className="flex items-center justify-between mb-6">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {filteredDoctors.length} doctors
-                  </p>
-                  {Object.values(filters).some(v => v) && (
+                  {(Object.values(filters).some(v => v) || searchQuery || doctorTypeFilter !== 'all' || availabilityMode !== 'none') && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' })}
+                      onClick={() => {
+                        setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' });
+                        setSearchQuery('');
+                        setDoctorTypeFilter('all');
+                        setAvailabilityMode('none');
+                        setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+                      }}
+                      className="gap-1 text-destructive hover:text-destructive"
                     >
-                      Clear Filters
+                      <Filter className="w-4 h-4" />
+                      Clear All
                     </Button>
                   )}
                 </div>
-              </div>
 
-              {/* Doctor Cards */}
-              {doctorsLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader className="w-8 h-8 animate-spin text-primary" />
+                {/* Results Count */}
+                <div className="flex items-center justify-between text-sm">
+                  <p className="text-muted-foreground">
+                    <span className="font-semibold text-foreground">{filteredDoctors.length}</span> doctors found
+                  </p>
                 </div>
-              ) : filteredDoctors.length === 0 ? (
-                <Card className="text-center py-12">
-                  <CardContent>
-                    <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-lg font-semibold mb-2">No doctors found</p>
-                    <p className="text-muted-foreground mb-4">Try adjusting your filters or search query</p>
-                    <Button
-                      variant="outline"
-                      onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' })}
-                    >
-                      Clear All Filters
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid md:grid-cols-3 gap-6">
-                  {filteredDoctors.map(doctor => (
-                    <motion.div
-                      key={doctor.id}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                    >
-                      <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
-                        <CardContent className="p-6 flex-1 flex flex-col">
-                          <div className="flex items-start justify-between mb-4">
+              </div>
+            </div>
+
+            {/* Doctor Cards */}
+            {doctorsLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : filteredDoctors.length === 0 ? (
+              <Card className="text-center py-12">
+                <CardContent>
+                  <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-lg font-semibold mb-2">No doctors found</p>
+                  <p className="text-muted-foreground mb-4">Try adjusting your filters or search query</p>
+                  <Button
+                    variant="outline"
+                    onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' })}
+                  >
+                    Clear All Filters
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid md:grid-cols-3 gap-6">
+                {filteredDoctors.map(doctor => (
+                  <motion.div
+                    key={doctor.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
+                      <CardContent className="p-6 flex-1 flex flex-col">
+                        <div className="flex items-start justify-between mb-4">
                             <div className="relative">
                               <Avatar className="w-16 h-16">
                                 <AvatarImage src={doctor.profile_picture_url} />
@@ -608,7 +654,6 @@ export default function DoctorDiscovery() {
                   ))}
                 </div>
               )}
-            </div>
           </motion.div>
         </div>
 
