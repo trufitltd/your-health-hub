@@ -43,7 +43,7 @@ export default function DoctorDiscovery() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { presenceMap } = useDoctorPresence();
-  const [appointmentType, setAppointmentType] = useState<'general' | 'specialist' | null>(null);
+  const [doctorTypeFilter, setDoctorTypeFilter] = useState<'all' | 'general' | 'specialist'>('all');
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -246,17 +246,16 @@ export default function DoctorDiscovery() {
 
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
-    if (!appointmentType) return [];
-
     return doctorsWithPresence.filter(doctor => {
       const matchesSearch = 
         doctor.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         doctor.specialty.toLowerCase().includes(searchQuery.toLowerCase()) ||
         doctor.hospital_affiliation.toLowerCase().includes(searchQuery.toLowerCase());
 
-      const isGeneralOrMatchesType =
-        appointmentType === 'general' ? doctor.specialty.toLowerCase() === 'general practice' :
-        appointmentType === 'specialist' ? doctor.specialty.toLowerCase() !== 'general practice' : true;
+      const matchesDoctorType =
+        doctorTypeFilter === 'all' ? true :
+        doctorTypeFilter === 'general' ? doctor.specialty.toLowerCase() === 'general practice' :
+        doctorTypeFilter === 'specialist' ? doctor.specialty.toLowerCase() !== 'general practice' : true;
 
       const matchesSpecialty = !filters.specialty || doctor.specialty.toLowerCase().includes(filters.specialty.toLowerCase());
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
@@ -264,9 +263,9 @@ export default function DoctorDiscovery() {
       const matchesHospital = !filters.hospital || doctor.hospital_affiliation.toLowerCase().includes(filters.hospital.toLowerCase());
       const matchesAvailability = availabilityMode === 'none' || availableDoctorIds.includes(doctor.user_id);
 
-      return matchesSearch && isGeneralOrMatchesType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
+      return matchesSearch && matchesDoctorType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
     });
-  }, [appointmentType, searchQuery, filters, doctorsWithPresence, availabilityMode, availableDoctorIds]);
+  }, [searchQuery, filters, doctorsWithPresence, availabilityMode, availableDoctorIds, doctorTypeFilter]);
 
   // Get unique specialties and hospitals for filter dropdowns
   const specialties = useMemo(() => 
@@ -280,6 +279,12 @@ export default function DoctorDiscovery() {
   const handleViewProfile = (doctor: Doctor) => {
     setSelectedDoctor(doctor);
     setProfileOpen(true);
+  };
+
+  // Helper: Get consultation fee based on specialty
+  const getConsultationFee = (specialty: string) => {
+    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
+    return isSpecialist ? 10000 : 5000;
   };
 
   // Helper: Get status color and label
@@ -369,99 +374,38 @@ export default function DoctorDiscovery() {
     <Layout>
       <div className="min-h-screen bg-muted/30 py-8 md:py-12">
         <div className="container mx-auto px-4 my-12">
-          {!appointmentType ? (
-            // Step 1: Choose appointment type
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="max-w-3xl mx-auto"
-            >
-              <div className="text-center mb-12">
-                <h1 className="text-4xl font-bold mb-4">Find the Right Doctor</h1>
-                <p className="text-lg text-muted-foreground">Start by choosing what you need</p>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <div className="mb-8">
+              <div className="mb-6">
+                <h1 className="text-4xl font-bold mb-2">Find a Doctor</h1>
+                <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-6">
-                {[
-                  {
-                    type: 'general' as const,
-                    title: 'General Checkup',
-                    description: 'See a general practitioner for routine checkups and health advice',
-                    icon: '👨‍⚕️'
-                  },
-                  {
-                    type: 'specialist' as const,
-                    title: 'Specialist Consultation',
-                    description: 'Consult with specialists in specific medical fields',
-                    icon: '🏥'
-                  }
-                ].map(option => (
-                  <motion.button
-                    key={option.type}
-                    whileHover={{ scale: 1.05 }}
-                    onClick={() => setAppointmentType(option.type)}
-                    className="text-left"
-                  >
-                    <Card className="h-full cursor-pointer border-2 hover:border-primary transition-all">
-                      <CardContent className="p-8">
-                        <div className="text-5xl mb-4">{option.icon}</div>
-                        <h3 className="text-xl font-bold mb-2">{option.title}</h3>
-                        <p className="text-muted-foreground">{option.description}</p>
-                      </CardContent>
-                    </Card>
-                  </motion.button>
-                ))}
-              </div>
-            </motion.div>
-          ) : (
-            // Step 2: Doctor discovery with filters
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-            >
               <div className="mb-8">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold">Find a {appointmentType === 'specialist' ? 'Specialist' : 'General Practitioner'}</h2>
-                    <p className="text-muted-foreground text-sm">Fee: ₦{appointmentType === 'specialist' ? '10,000' : '5,000'}</p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setAppointmentType(null)}
+                <div className="flex items-center gap-3 mb-6 flex-wrap">
+                  <select
+                    value={doctorTypeFilter}
+                    onChange={(e) => setDoctorTypeFilter(e.target.value as 'all' | 'general' | 'specialist')}
+                    className="px-4 py-2 border rounded-lg bg-background"
                   >
-                    Change Type
-                  </Button>
-                </div>
+                    <option value="all">All Doctors</option>
+                    <option value="general">General Practice</option>
+                    <option value="specialist">Specialists</option>
+                  </select>
 
-                <div className="flex flex-col md:flex-row gap-4 mb-6">
-                  <div className="flex-1">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                      <Input
-                        placeholder="Search doctors, specialties, hospitals..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-10"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Filters */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                  {appointmentType === 'specialist' && (
-                    <select
-                      value={filters.specialty}
-                      onChange={(e) => setFilters({ ...filters, specialty: e.target.value })}
-                      className="px-4 py-2 border rounded-lg bg-background"
-                    >
-                      <option value="">All Specialties</option>
-                      {specialties.filter(s => s.toLowerCase() !== 'general practice').map(specialty => (
-                        <option key={specialty} value={specialty}>{specialty}</option>
-                      ))}
-                    </select>
-                  )}
+                  <select
+                    value={filters.specialty}
+                    onChange={(e) => setFilters({ ...filters, specialty: e.target.value })}
+                    className="px-4 py-2 border rounded-lg bg-background"
+                  >
+                    <option value="">All Specialties</option>
+                    {specialties.map(specialty => (
+                      <option key={specialty} value={specialty}>{specialty}</option>
+                    ))}
+                  </select>
 
                   <select
                     value={filters.minRating}
@@ -539,7 +483,7 @@ export default function DoctorDiscovery() {
                 {/* Results info */}
                 <div className="flex items-center justify-between mb-6">
                   <p className="text-sm text-muted-foreground">
-                    Showing {filteredDoctors.length} {appointmentType === 'specialist' ? 'specialists' : 'doctors'}
+                    Showing {filteredDoctors.length} doctors
                   </p>
                   {Object.values(filters).some(v => v) && (
                     <Button
@@ -597,7 +541,7 @@ export default function DoctorDiscovery() {
                                 {doctor.experience_years}y exp
                               </Badge>
                               <Badge className="text-xs bg-blue-100 text-blue-800">
-                                {appointmentType === 'specialist' ? 'Specialist' : 'General'}
+                                {doctor.specialty.toLowerCase() === 'general practice' ? 'General' : 'Specialist'}
                               </Badge>
                               {!doctor.is_active && (
                                 <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
@@ -635,7 +579,7 @@ export default function DoctorDiscovery() {
                           )}
 
                           <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                            <p className="text-sm font-semibold text-success">₦{appointmentType === 'specialist' ? '10,000' : '5,000'}</p>
+                            <p className="text-sm font-semibold text-success">₦{getConsultationFee(doctor.specialty).toLocaleString()}</p>
                             <p className="text-xs text-muted-foreground">Consultation Fee</p>
                           </div>
 
@@ -664,8 +608,8 @@ export default function DoctorDiscovery() {
                   ))}
                 </div>
               )}
-            </motion.div>
-          )}
+            </div>
+          </motion.div>
         </div>
 
         {/* Doctor Profile Modal */}
