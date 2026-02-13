@@ -895,6 +895,7 @@ const DoctorPortal = () => {
                               <div className="flex items-center gap-3">
                                 <div className="relative">
                                   <Avatar className="w-10 h-10">
+                                    <AvatarImage src={(apt as any).patient_profile_picture || ''} />
                                     <AvatarFallback className="bg-primary/10 text-primary text-sm">
                                       {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
                                     </AvatarFallback>
@@ -1045,6 +1046,7 @@ const DoctorPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar className="w-12 h-12">
+                                  <AvatarImage src={(apt as any).patient_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {apt.patient_name ? apt.patient_name.split(' ').map(n => n[0]).join('') : 'P'}
                                   </AvatarFallback>
@@ -1150,6 +1152,7 @@ const DoctorPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar className="w-12 h-12">
+                                  <AvatarImage src={(request as any).patient_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {request.patient.split(' ').map(n => n[0]).join('')}
                                   </AvatarFallback>
@@ -1247,6 +1250,7 @@ const DoctorPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar className="w-12 h-12">
+                                  <AvatarImage src={(patient as any).profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {patient.name.split(' ').map(n => n[0]).join('')}
                                   </AvatarFallback>
