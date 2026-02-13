@@ -22,31 +22,43 @@ export function useRecentConsultations() {
 
       console.log('[Recent Consultations] Fetching for user:', user.id);
 
-      const { data, error } = await supabase
+      // Fetch completed appointments
+      const { data: appointments, error: aptError } = await supabase
         .from('appointments')
-        .select(`
-          id,
-          date,
-          specialist_name,
-          rating,
-          notes,
-          status,
-          doctor_id
-        `)
+        .select('id, date, specialist_name, rating, doctor_id, notes')
         .eq('patient_id', user.id)
         .eq('status', 'completed')
         .order('date', { ascending: false })
         .limit(10);
 
-      console.log('[Recent Consultations] Query result:', { data, error });
-
-      if (error) {
-        console.error('[Recent Consultations] Error:', error);
-        throw error;
+      if (aptError) {
+        console.error('[Recent Consultations] Error:', aptError);
+        throw aptError;
       }
 
+      if (!appointments || appointments.length === 0) return [];
+
+      // Fetch consultation notes for these appointments
+      const { data: notesData } = await supabase
+        .from('doctor_consultation_notes')
+        .select(`
+          id,
+          diagnosis,
+          prescriptions,
+          consultation_sessions!inner(appointment_id)
+        `)
+        .eq('patient_id', user.id)
+        .in('consultation_sessions.appointment_id', appointments.map(a => a.id));
+
+      // Create a map of appointment_id to notes
+      const notesMap: Record<string, any> = {};
+      (notesData || []).forEach((note: any) => {
+        const aptId = note.consultation_sessions?.appointment_id;
+        if (aptId) notesMap[aptId] = note;
+      });
+
       // Fetch doctor specialties
-      const doctorIds = [...new Set(data.map((apt: any) => apt.doctor_id).filter(Boolean))];
+      const doctorIds = [...new Set(appointments.map(a => a.doctor_id).filter(Boolean))];
       const doctorSpecialties: Record<string, string> = {};
       
       if (doctorIds.length > 0) {
@@ -62,17 +74,20 @@ export function useRecentConsultations() {
         }
       }
 
-      const result = data.map((appointment: any) => ({
-        id: appointment.id,
-        doctor_name: appointment.specialist_name,
-        specialty: doctorSpecialties[appointment.doctor_id] || 'General Medicine',
-        date: appointment.date,
-        diagnosis: appointment.notes || 'Consultation completed',
-        prescription: false,
-        rating: appointment.rating || null,
-      }));
+      const result = appointments.map((apt: any) => {
+        const notes = notesMap[apt.id];
+        return {
+          id: apt.id,
+          doctor_name: apt.specialist_name,
+          specialty: doctorSpecialties[apt.doctor_id] || 'General Medicine',
+          date: apt.date,
+          diagnosis: notes?.diagnosis || apt.notes || 'Consultation completed',
+          prescription: !!notes?.prescriptions,
+          rating: apt.rating || null,
+        };
+      });
 
-      console.log('[Recent Consultations] Mapped result:', result);
+      console.log('[Recent Consultations] Result:', result);
       return result;
     },
     enabled: !!user?.id,

@@ -146,7 +146,8 @@ export default function DoctorDiscovery() {
           verification_status,
           city,
           state,
-          bio
+          bio,
+          experience
         `)
         .eq('verification_status', 'approved')
         .order('full_name');
@@ -188,7 +189,7 @@ export default function DoctorDiscovery() {
             ...doctor,
             rating: avgRating,
             total_reviews: ratings.length,
-            experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
+            experience_years: doctor.experience || 5,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })
@@ -255,8 +256,8 @@ export default function DoctorDiscovery() {
         doctor.hospital_affiliation.toLowerCase().includes(searchQuery.toLowerCase());
 
       const isGeneralOrMatchesType =
-        appointmentType === 'general' ? doctor.specialty.toLowerCase() === 'general practice' :
-        appointmentType === 'specialist' ? doctor.specialty.toLowerCase() !== 'general practice' : true;
+        appointmentType === 'general' ? doctor.specialty.toLowerCase().includes('general') :
+        appointmentType === 'specialist' ? !doctor.specialty.toLowerCase().includes('general') : true;
 
       const matchesSpecialty = !filters.specialty || doctor.specialty.toLowerCase().includes(filters.specialty.toLowerCase());
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
@@ -385,8 +386,8 @@ export default function DoctorDiscovery() {
                 {[
                   {
                     type: 'general' as const,
-                    title: 'General Checkup',
-                    description: 'See a general practitioner for routine checkups and health advice',
+                    title: 'General Consultation',
+                    description: 'Consult a licensed general practitioner for comprehensive diagnosis, and ongoing health management',
                     icon: '👨‍⚕️'
                   },
                   {
