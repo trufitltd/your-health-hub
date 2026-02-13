@@ -5,7 +5,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3
+  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -620,7 +620,16 @@ const DoctorPortal = () => {
               </div>
             </Link>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </Button>
+
               {/* Availability Toggle */}
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
@@ -641,7 +650,7 @@ const DoctorPortal = () => {
 
               <button 
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                className="hidden lg:flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
               >
                 <Avatar className="w-9 h-9 flex-shrink-0">
                   <AvatarImage src={profilePicture} />
@@ -663,6 +672,20 @@ const DoctorPortal = () => {
           <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
             <Card className="lg:sticky lg:top-24 rounded-lg">
               <CardContent className="p-3 sm:p-4">
+                {/* User Profile Section - Visible on mobile when sidebar is open */}
+                <div className="lg:hidden mb-4 pb-4 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="w-12 h-12">
+                      <AvatarImage src={profilePicture} />
+                      <AvatarFallback className="bg-primary text-primary-foreground">{displayInitials}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                      <p className="text-sm text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                    </div>
+                  </div>
+                </div>
+
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
                   {[
                     { id: 'overview', label: 'Dashboard', icon: BarChart3 },
