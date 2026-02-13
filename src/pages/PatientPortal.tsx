@@ -771,7 +771,7 @@ const PatientPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar>
-                                  <AvatarImage src="" />
+                                  <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                       .split(' ')
@@ -932,7 +932,7 @@ const PatientPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar className="w-12 h-12">
-                                  <AvatarImage src="" />
+                                  <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                       .split(' ')
