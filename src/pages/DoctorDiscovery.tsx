@@ -170,7 +170,8 @@ export default function DoctorDiscovery() {
           verification_status,
           city,
           state,
-          bio
+          bio,
+          experience
         `)
         .eq('verification_status', 'approved')
         .order('full_name');
@@ -212,7 +213,7 @@ export default function DoctorDiscovery() {
             ...doctor,
             rating: avgRating,
             total_reviews: ratings.length,
-            experience_years: Math.floor((new Date().getFullYear() - new Date(doctor.created_at || 0).getFullYear()) || 5),
+            experience_years: doctor.experience || 5,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })

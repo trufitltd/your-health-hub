@@ -794,7 +794,7 @@ const PatientPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar>
-                                  <AvatarImage src="" />
+                                  <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                       .split(' ')
@@ -955,7 +955,7 @@ const PatientPortal = () => {
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
                               <div className="relative">
                                 <Avatar className="w-12 h-12">
-                                  <AvatarImage src="" />
+                                  <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
                                   <AvatarFallback className="bg-primary/10 text-primary">
                                     {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
                                       .split(' ')
@@ -1441,17 +1441,16 @@ const PatientPortal = () => {
               <div>
                 <label className="text-sm font-medium">Consultation Notes</label>
                 <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[100px]">
-                  <p className="text-sm">{selectedConsultation.diagnosis}</p>
+                  <p className="text-sm whitespace-pre-wrap">{selectedConsultation.diagnosis}</p>
                 </div>
               </div>
 
               {selectedConsultation.prescription && (
-                <div className="p-4 rounded-lg border border-border">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Pill className="w-5 h-5 text-primary" />
-                    <span className="font-medium">Prescription Available</span>
+                <div>
+                  <label className="text-sm font-medium">Prescription</label>
+                  <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[60px]">
+                    <p className="text-sm whitespace-pre-wrap">Prescription available - view in Prescriptions tab</p>
                   </div>
-                  <p className="text-sm text-muted-foreground">View prescription in the Prescriptions tab</p>
                 </div>
               )}
             </div>
