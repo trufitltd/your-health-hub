@@ -1,6 +1,12 @@
 import { Mic, MicOff, Video, VideoOff, MessageSquare, Hand, PhoneOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 
 interface ControlBarProps {
   isAudioEnabled: boolean;
@@ -13,7 +19,9 @@ interface ControlBarProps {
   onToggleVideo: () => void;
   onToggleChat: () => void;
   onToggleHand: () => void;
-  onEndCall: () => void;
+  onLeaveCall: () => void;
+  onEndCallForEveryone?: () => void;
+  canEndCallForEveryone?: boolean;
 }
 
 export function ControlBar({
@@ -27,7 +35,9 @@ export function ControlBar({
   onToggleVideo,
   onToggleChat,
   onToggleHand,
-  onEndCall
+  onLeaveCall,
+  onEndCallForEveryone,
+  canEndCallForEveryone = false
 }: ControlBarProps) {
   return (
     <div className="relative z-30 p-3 sm:p-4 bg-gradient-to-t from-black/60 to-transparent">
@@ -135,20 +145,45 @@ export function ControlBar({
 
             <div className="w-px h-8 bg-white/20 mx-1 hidden sm:block" />
 
-            {/* End call button */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
-                  onClick={onEndCall}
-                >
-                  <PhoneOff className="w-5 h-5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>End Call</TooltipContent>
-            </Tooltip>
+            {/* Leave / end call button */}
+            {canEndCallForEveryone && onEndCallForEveryone ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
+                  >
+                    <PhoneOff className="w-5 h-5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="center" className="w-52">
+                  <DropdownMenuItem onClick={onLeaveCall}>
+                    Leave call
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={onEndCallForEveryone}
+                  >
+                    End call for everyone
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
+                    onClick={onLeaveCall}
+                  >
+                    <PhoneOff className="w-5 h-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Leave Call</TooltipContent>
+              </Tooltip>
+            )}
           </TooltipProvider>
         </div>
       </div>
