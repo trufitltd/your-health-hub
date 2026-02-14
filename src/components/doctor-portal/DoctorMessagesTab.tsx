@@ -103,16 +103,17 @@ export function DoctorMessagesTab() {
           new Set(rows.map((row) => row.patientId).filter(Boolean)),
         ) as string[];
 
-        let patientMap = new Map<string, { profile_picture_url: string | null }>();
+        let patientMap = new Map<string, { full_name: string | null; profile_picture_url: string | null }>();
         if (patientIds.length > 0) {
           const { data: patients } = await supabase
             .from('patient_registrations')
-            .select('user_id, profile_picture_url')
+            .select('user_id, full_name, profile_picture_url')
             .in('user_id', patientIds);
           patientMap = new Map(
             (patients || []).map((p) => [
               p.user_id as string,
               {
+                full_name: (p.full_name as string | null) ?? null,
                 profile_picture_url: (p.profile_picture_url as string | null) ?? null,
               },
             ]),
@@ -124,6 +125,7 @@ export function DoctorMessagesTab() {
             const patient = row.patientId ? patientMap.get(row.patientId) : null;
             return {
               ...row,
+              patientName: patient?.full_name || row.patientName,
               patientAvatar: patient?.profile_picture_url ?? null,
             };
           })
@@ -303,6 +305,17 @@ export function DoctorMessagesTab() {
                   </span>
                 </div>
               </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="icon">
+                <Phone className="w-5 h-5 text-muted-foreground" />
+              </Button>
+              <Button variant="ghost" size="icon">
+                <Video className="w-5 h-5 text-muted-foreground" />
+              </Button>
+              <Button variant="ghost" size="icon">
+                <MoreVertical className="w-5 h-5 text-muted-foreground" />
+              </Button>
             </div>
           </div>
 
