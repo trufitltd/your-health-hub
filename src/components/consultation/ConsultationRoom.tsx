@@ -107,6 +107,7 @@ export function ConsultationRoom({
   const isCleaningUpRef = useRef(false);
   const isMountedRef = useRef(true);
   const isChatOpenRef = useRef(false);
+  const webrtcServiceRef = useRef<WebRTCService | null>(null);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -547,6 +548,73 @@ export function ConsultationRoom({
   }, [streamInitialized, participantRole, waitingForPatient, isPatientWaiting, isCallStarted, isAdmitted, isVideoEnabled, localVideoAttached]);
 
   // Initialize WebRTC when conditions are met
+  const cleanupAndExit = useCallback(async () => {
+    console.log('[Cleanup] Leaving call and cleaning up local resources...');
+    isCleaningUpRef.current = true;
+
+    const activeWebrtcService = webrtcServiceRef.current ?? webrtcService;
+    if (activeWebrtcService) {
+      activeWebrtcService.destroy();
+      webrtcServiceRef.current = null;
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
+      localStreamRef.current = null;
+    }
+
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch (err) {
+        console.log('Wake lock release error:', err);
+      }
+    }
+
+    if (messageSubscriptionRef.current) {
+      messageSubscriptionRef.current();
+      messageSubscriptionRef.current = null;
+    }
+
+    onEndCall();
+  }, [webrtcService, onEndCall]);
+
+  const handleLeaveCall = useCallback(async () => {
+    try {
+      const activeWebrtcService = webrtcServiceRef.current ?? webrtcService;
+      if (activeWebrtcService) {
+        await activeWebrtcService.sendParticipantLeft();
+      }
+    } catch (err) {
+      console.warn('Failed to send participant_left signal:', err);
+    }
+
+    await cleanupAndExit();
+  }, [webrtcService, cleanupAndExit]);
+
+  const handleEndCallForEveryone = useCallback(async () => {
+    try {
+      if (sessionData) {
+        await consultationService.endSession(sessionData.id, callDuration);
+      }
+    } catch (err) {
+      console.error('[Session] Error ending consultation session for everyone:', err);
+    }
+
+    try {
+      const activeWebrtcService = webrtcServiceRef.current ?? webrtcService;
+      if (activeWebrtcService) {
+        await activeWebrtcService.sendSessionEnded();
+      }
+    } catch (err) {
+      console.warn('Failed to send session_ended signal:', err);
+    }
+
+    await cleanupAndExit();
+  }, [sessionData, callDuration, webrtcService, cleanupAndExit]);
+
   useEffect(() => {
     // For chat consultations, initialize even without local stream
     // For video/audio, require local stream
@@ -641,6 +709,27 @@ export function ConsultationRoom({
           setRemoteVideoPublished(state.videoEnabled);
         });
 
+        webrtc.onParticipantLeft(() => {
+          setHasRemoteStream(false);
+          setConnectionStatus('disconnected');
+          setRemoteAudioPublished(false);
+          setRemoteVideoPublished(false);
+          toast({
+            title: 'Participant left',
+            description: `${participantName} left the call.`
+          });
+        });
+
+        webrtc.onSessionEnded(() => {
+          toast({
+            title: 'Call ended',
+            description: `${participantName} ended the call for everyone.`
+          });
+          cleanupAndExit().catch((err) => {
+            console.error('Failed to cleanup after session_ended signal:', err);
+          });
+        });
+
         webrtc.onAdmitted(async () => {
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
@@ -680,6 +769,7 @@ export function ConsultationRoom({
           webrtc.subscribeToSignalsOnly();
         }
         setWebrtcService(webrtc);
+        webrtcServiceRef.current = webrtc;
         webrtcInitializedRef.current = true;
         
         if (participantRole === 'doctor') {
@@ -709,7 +799,7 @@ export function ConsultationRoom({
     };
 
     initializeWebRTC();
-  }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole, connectionStatus, isAudioEnabled, isVideoEnabled]);
+  }, [sessionData, user, shouldInitializeWebRTC, isAdmitted, participantRole, connectionStatus, isAudioEnabled, isVideoEnabled, participantName, cleanupAndExit]);
 
   // Monitor remote stream for video track changes
   useEffect(() => {
@@ -970,50 +1060,6 @@ export function ConsultationRoom({
     }
   };
 
-  const handleEndCall = useCallback(async () => {
-    console.log('[Cleanup] Ending call and cleaning up...');
-    isCleaningUpRef.current = true;
-    
-    // End the consultation session if we have session data
-    if (sessionData && callDuration > 0) {
-      try {
-        console.log('[Session] Ending consultation session:', sessionData.id);
-        await consultationService.endSession(sessionData.id, callDuration);
-        console.log('[Session] Consultation session ended successfully');
-      } catch (err) {
-        console.error('[Session] Error ending consultation session:', err);
-        // Don't block cleanup if session ending fails
-      }
-    }
-    
-    if (webrtcService) {
-      webrtcService.destroy();
-    }
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        track.stop();
-      });
-      localStreamRef.current = null;
-    }
-
-    if (wakeLockRef.current) {
-      try {
-        await wakeLockRef.current.release();
-      } catch (err) {
-        console.log('Wake lock release error:', err);
-      }
-    }
-
-    // Unsubscribe from messages only during cleanup
-    if (messageSubscriptionRef.current) {
-      messageSubscriptionRef.current();
-      messageSubscriptionRef.current = null;
-    }
-
-    onEndCall();
-  }, [webrtcService, onEndCall, sessionData, callDuration]);
-
   const handleAdmitPatient = async () => {
     try {
       console.log('[Admission] Doctor admitting patient');
@@ -1136,7 +1182,7 @@ export function ConsultationRoom({
 
           <div className="space-y-3">
             <Button
-              onClick={handleEndCall}
+              onClick={handleLeaveCall}
               variant="outline"
               className="border-slate-600 text-slate-300 hover:bg-slate-800 w-full"
             >
@@ -1228,7 +1274,7 @@ export function ConsultationRoom({
           </div>
 
           <Button
-            onClick={handleEndCall}
+            onClick={handleLeaveCall}
             variant="outline"
             className="border-slate-600 text-slate-300 hover:bg-slate-800"
           >
@@ -1649,7 +1695,9 @@ export function ConsultationRoom({
             onToggleVideo={toggleVideo}
             onToggleChat={() => setIsChatOpen(!isChatOpen)}
             onToggleHand={() => setHandRaised(!handRaised)}
-            onEndCall={handleEndCall}
+            onLeaveCall={handleLeaveCall}
+            onEndCallForEveryone={participantRole === 'doctor' ? handleEndCallForEveryone : undefined}
+            canEndCallForEveryone={participantRole === 'doctor'}
           />
         </div>
 
