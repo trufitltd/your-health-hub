@@ -156,6 +156,18 @@ class ConsultationService {
       // Don't throw error here as the session was successfully ended
     }
 
+    // Emit a realtime signal so connected clients (doctor/patient) can react to session end immediately
+    try {
+      await supabase.from('webrtc_signals').insert({
+        session_id: session.id,
+        sender_id: session.patient_id,
+        signal_data: { type: 'session_ended', session_id: session.id, ended_at: new Date().toISOString() }
+      });
+      console.log('[ConsultationService] Emitted session_ended signal for session:', session.id);
+    } catch (err) {
+      console.error('[ConsultationService] Failed to emit session_ended signal:', err);
+    }
+
     return session;
   }
 
