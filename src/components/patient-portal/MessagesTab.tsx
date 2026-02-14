@@ -8,6 +8,7 @@ import {
   Video,
   Check,
   AlertCircle,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -60,52 +61,47 @@ export function MessagesTab() {
       setIsLoadingThreads(true);
       try {
         const { data, error } = await supabase
-          .from('doctor_consultation_notes')
+          .from('consultation_sessions')
           .select(
             `
             id,
-            follow_up_notes,
+            appointment_id,
+            patient_id,
+            doctor_id,
+            consultation_type,
             created_at,
-            consultation_sessions!inner (
+            appointments!inner (
               id,
-              appointment_id,
-              patient_id,
-              doctor_id,
-              consultation_type,
-              appointments!inner (
-                id,
-                status,
-                date,
-                time,
-                specialist_name
-              )
+              status,
+              date,
+              time,
+              specialist_name
             )
           `,
           )
-          .eq('consultation_sessions.patient_id', user.id)
-          .eq('consultation_sessions.appointments.status', 'completed')
-          .not('follow_up_notes', 'is', null)
-          .neq('follow_up_notes', '');
+          .eq('patient_id', user.id)
+          .eq('appointments.status', 'completed');
 
         if (error) {
-          console.error('Failed to load follow-up consultations:', error);
+          console.error('Failed to load consultations:', error);
           if (mounted) setThreads([]);
           return;
         }
 
-        const rows = (data || []).map((row) => {
-          const session = row.consultation_sessions;
+        console.log('Loaded sessions:', data);
+
+        const rows = (data || []).map((session) => {
           const appointment = session?.appointments;
           return {
-            id: row.id,
-            sessionId: session?.id,
-            doctorId: session?.doctor_id,
+            id: session.id,
+            sessionId: session.id,
+            doctorId: session.doctor_id,
             doctorName: appointment?.specialist_name || 'Doctor',
-            followUpNotes: row.follow_up_notes,
+            followUpNotes: '',
             appointmentDate: appointment?.date ?? null,
             appointmentTime: appointment?.time ?? null,
-            consultationType: session?.consultation_type ?? null,
-            lastMessageAt: row.created_at,
+            consultationType: session.consultation_type ?? null,
+            lastMessageAt: session.created_at,
           } as FollowUpThread;
         });
 
@@ -167,6 +163,7 @@ export function MessagesTab() {
       return;
     }
 
+    console.log('Loading messages for session:', selectedSessionId);
     let isMounted = true;
     setIsLoadingMessages(true);
 
@@ -240,12 +237,12 @@ export function MessagesTab() {
   return (
     <div className="grid md:grid-cols-[350px_1fr] gap-6 h-[600px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
       {/* Sidebar */}
-      <div className="flex flex-col border-r border-border bg-muted/10">
+      <div className={`flex flex-col border-r border-border bg-muted/10 ${selectedSessionId ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-4 border-b border-border">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search follow-ups..."
+              placeholder="Search consultations..."
               className="pl-9 bg-background"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -256,17 +253,20 @@ export function MessagesTab() {
         <ScrollArea className="flex-1">
           <div className="flex flex-col">
             {isLoadingThreads ? (
-              <div className="p-4 text-sm text-muted-foreground">Loading follow-ups...</div>
+              <div className="p-4 text-sm text-muted-foreground">Loading consultations...</div>
             ) : filteredThreads.length === 0 ? (
               <div className="p-6 text-sm text-muted-foreground flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5" />
-                <span>No follow-up consultations available yet.</span>
+                <span>No completed consultations yet.</span>
               </div>
             ) : (
               filteredThreads.map((thread) => (
                 <button
                   key={thread.id}
-                  onClick={() => setSelectedSessionId(thread.sessionId)}
+                  onClick={() => {
+                    console.log('Clicked thread:', thread);
+                    setSelectedSessionId(thread.sessionId);
+                  }}
                   className={cn(
                     'flex items-start gap-3 p-4 text-left transition-colors hover:bg-muted/50 border-b border-border/50 last:border-0',
                     selectedSessionId === thread.sessionId &&
@@ -293,14 +293,9 @@ export function MessagesTab() {
                     <p className="text-xs text-muted-foreground truncate mb-1">
                       {thread.specialty || 'Specialty unavailable'}
                     </p>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px]">
-                        Follow-up required
-                      </Badge>
-                      <span className="text-xs text-muted-foreground truncate">
-                        {thread.followUpNotes}
-                      </span>
-                    </div>
+                    <Badge variant="outline" className="text-[10px]">
+                      {thread.consultationType || 'Consultation'}
+                    </Badge>
                   </div>
                 </button>
               ))
@@ -315,6 +310,14 @@ export function MessagesTab() {
           {/* Chat Header */}
           <div className="p-4 border-b border-border flex items-center justify-between">
             <div className="flex items-center gap-3">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="md:hidden"
+                onClick={() => setSelectedSessionId(null)}
+              >
+                <X className="w-5 h-5" />
+              </Button>
               <Avatar>
                 <AvatarImage src={selectedThread.doctorAvatar ?? undefined} />
                 <AvatarFallback className="bg-primary/10 text-primary">
@@ -350,20 +353,13 @@ export function MessagesTab() {
             </div>
           </div>
 
-          <div className="p-4 border-b border-border bg-muted/20">
-            <Card className="p-3 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">Follow-up notes:</span>{' '}
-              {selectedThread.followUpNotes}
-            </Card>
-          </div>
-
           {/* Messages List */}
           <ScrollArea className="flex-1 p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
               <div className="text-sm text-muted-foreground">
-                No follow-up messages yet. Start the conversation below.
+                No messages yet. Start the conversation below.
               </div>
             ) : (
               <div className="space-y-4">
@@ -423,7 +419,7 @@ export function MessagesTab() {
                 <Paperclip className="w-5 h-5 text-muted-foreground" />
               </Button>
               <Input
-                placeholder="Type a follow-up message..."
+                placeholder="Type a message..."
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 className="flex-1 min-h-[44px]"
@@ -439,9 +435,9 @@ export function MessagesTab() {
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
             <Search className="w-8 h-8 text-primary" />
           </div>
-          <h3 className="text-xl font-semibold mb-2">Follow-up Consultations</h3>
+          <h3 className="text-xl font-semibold mb-2">Consultation Messages</h3>
           <p className="text-muted-foreground max-w-sm">
-            Select a completed consultation that requires investigation to start a follow-up message.
+            Select a completed consultation to view your chat history with the doctor.
           </p>
         </div>
       )}
