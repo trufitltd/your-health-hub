@@ -15,29 +15,26 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
 
-interface FollowUpThread {
+interface PatientThread {
   id: string;
   sessionId: string;
-  doctorId: string;
-  doctorName: string;
-  specialty?: string | null;
-  doctorAvatar?: string | null;
-  followUpNotes: string;
+  patientId: string;
+  patientName: string;
+  patientAvatar?: string | null;
   appointmentDate?: string | null;
   appointmentTime?: string | null;
   consultationType?: string | null;
   lastMessageAt?: string | null;
 }
 
-export function MessagesTab() {
+export function DoctorMessagesTab() {
   const { user } = useAuth();
-  const [threads, setThreads] = useState<FollowUpThread[]>([]);
+  const [threads, setThreads] = useState<PatientThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [newMessage, setNewMessage] = useState('');
@@ -51,7 +48,7 @@ export function MessagesTab() {
   useEffect(() => {
     let mounted = true;
 
-    const loadFollowUps = async () => {
+    const loadConsultations = async () => {
       if (!user?.id) {
         setThreads([]);
         setIsLoadingThreads(false);
@@ -75,11 +72,11 @@ export function MessagesTab() {
               status,
               date,
               time,
-              specialist_name
+              patient_name
             )
           `,
           )
-          .eq('patient_id', user.id)
+          .eq('doctor_id', user.id)
           .eq('appointments.status', 'completed');
 
         if (error) {
@@ -88,40 +85,35 @@ export function MessagesTab() {
           return;
         }
 
-        console.log('Loaded sessions:', data);
-
         const rows = (data || []).map((session) => {
           const appointment = session?.appointments;
           return {
             id: session.id,
             sessionId: session.id,
-            doctorId: session.doctor_id,
-            doctorName: appointment?.specialist_name || 'Doctor',
-            followUpNotes: '',
+            patientId: session.patient_id,
+            patientName: appointment?.patient_name || 'Patient',
             appointmentDate: appointment?.date ?? null,
             appointmentTime: appointment?.time ?? null,
             consultationType: session.consultation_type ?? null,
             lastMessageAt: session.created_at,
-          } as FollowUpThread;
+          } as PatientThread;
         });
 
-        const doctorIds = Array.from(
-          new Set(rows.map((row) => row.doctorId).filter(Boolean)),
+        const patientIds = Array.from(
+          new Set(rows.map((row) => row.patientId).filter(Boolean)),
         ) as string[];
 
-        let doctorMap = new Map<string, { name: string; specialty: string | null; avatar_url: string | null }>();
-        if (doctorIds.length > 0) {
-          const { data: doctors } = await supabase
-            .from('doctors')
-            .select('id, name, specialty, avatar_url')
-            .in('id', doctorIds);
-          doctorMap = new Map(
-            (doctors || []).map((doc) => [
-              doc.id as string,
+        let patientMap = new Map<string, { profile_picture_url: string | null }>();
+        if (patientIds.length > 0) {
+          const { data: patients } = await supabase
+            .from('patient_registrations')
+            .select('user_id, profile_picture_url')
+            .in('user_id', patientIds);
+          patientMap = new Map(
+            (patients || []).map((p) => [
+              p.user_id as string,
               {
-                name: doc.name as string,
-                specialty: (doc.specialty as string | null) ?? null,
-                avatar_url: (doc.avatar_url as string | null) ?? null,
+                profile_picture_url: (p.profile_picture_url as string | null) ?? null,
               },
             ]),
           );
@@ -129,12 +121,10 @@ export function MessagesTab() {
 
         const hydrated = rows
           .map((row) => {
-            const doctor = row.doctorId ? doctorMap.get(row.doctorId) : null;
+            const patient = row.patientId ? patientMap.get(row.patientId) : null;
             return {
               ...row,
-              doctorName: doctor?.name || row.doctorName,
-              specialty: doctor?.specialty ?? null,
-              doctorAvatar: doctor?.avatar_url ?? null,
+              patientAvatar: patient?.profile_picture_url ?? null,
             };
           })
           .filter((row) => Boolean(row.sessionId))
@@ -150,7 +140,7 @@ export function MessagesTab() {
       }
     };
 
-    loadFollowUps();
+    loadConsultations();
 
     return () => {
       mounted = false;
@@ -163,7 +153,6 @@ export function MessagesTab() {
       return;
     }
 
-    console.log('Loading messages for session:', selectedSessionId);
     let isMounted = true;
     setIsLoadingMessages(true);
 
@@ -196,9 +185,8 @@ export function MessagesTab() {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return threads;
     return threads.filter((thread) => {
-      const name = thread.doctorName.toLowerCase();
-      const specialty = thread.specialty?.toLowerCase() ?? '';
-      return name.includes(query) || specialty.includes(query);
+      const name = thread.patientName.toLowerCase();
+      return name.includes(query);
     });
   }, [threads, searchQuery]);
 
@@ -207,7 +195,7 @@ export function MessagesTab() {
     if (!newMessage.trim() || !selectedSessionId || !user?.id) return;
 
     const senderName =
-      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Patient';
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
 
     const content = newMessage.trim();
     setNewMessage('');
@@ -215,7 +203,7 @@ export function MessagesTab() {
     const sent = await consultationService.sendMessage(
       selectedSessionId,
       user.id,
-      'patient',
+      'doctor',
       senderName,
       content,
     );
@@ -236,13 +224,12 @@ export function MessagesTab() {
 
   return (
     <div className="grid md:grid-cols-[350px_1fr] gap-6 h-[600px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
-      {/* Sidebar */}
       <div className={`flex flex-col border-r border-border bg-muted/10 ${selectedSessionId ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-4 border-b border-border">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search consultations..."
+              placeholder="Search patients..."
               className="pl-9 bg-background"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -253,7 +240,7 @@ export function MessagesTab() {
         <ScrollArea className="flex-1">
           <div className="flex flex-col">
             {isLoadingThreads ? (
-              <div className="p-4 text-sm text-muted-foreground">Loading consultations...</div>
+              <div className="p-4 text-sm text-muted-foreground">Loading...</div>
             ) : filteredThreads.length === 0 ? (
               <div className="p-6 text-sm text-muted-foreground flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5" />
@@ -263,10 +250,7 @@ export function MessagesTab() {
               filteredThreads.map((thread) => (
                 <button
                   key={thread.id}
-                  onClick={() => {
-                    console.log('Clicked thread:', thread);
-                    setSelectedSessionId(thread.sessionId);
-                  }}
+                  onClick={() => setSelectedSessionId(thread.sessionId)}
                   className={cn(
                     'flex items-start gap-3 p-4 text-left transition-colors hover:bg-muted/50 border-b border-border/50 last:border-0',
                     selectedSessionId === thread.sessionId &&
@@ -274,25 +258,18 @@ export function MessagesTab() {
                   )}
                 >
                   <Avatar>
-                    <AvatarImage src={thread.doctorAvatar ?? undefined} />
+                    <AvatarImage src={thread.patientAvatar ?? undefined} />
                     <AvatarFallback className="bg-primary/10 text-primary">
-                      {thread.doctorName
-                        .split(' ')
-                        .map((n) => n[0])
-                        .join('')
-                        .slice(0, 2)}
+                      {thread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 overflow-hidden">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium truncate">{thread.doctorName}</span>
+                      <span className="font-medium truncate">{thread.patientName}</span>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {formatDate(thread.appointmentDate)}
                       </span>
                     </div>
-                    <p className="text-xs text-muted-foreground truncate mb-1">
-                      {thread.specialty || 'Specialty unavailable'}
-                    </p>
                     <Badge variant="outline" className="text-[10px]">
                       {thread.consultationType || 'Consultation'}
                     </Badge>
@@ -304,35 +281,22 @@ export function MessagesTab() {
         </ScrollArea>
       </div>
 
-      {/* Chat Area */}
       {selectedThread ? (
         <div className="flex flex-col h-full bg-background">
-          {/* Chat Header */}
           <div className="p-4 border-b border-border flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="md:hidden"
-                onClick={() => setSelectedSessionId(null)}
-              >
+              <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setSelectedSessionId(null)}>
                 <X className="w-5 h-5" />
               </Button>
               <Avatar>
-                <AvatarImage src={selectedThread.doctorAvatar ?? undefined} />
+                <AvatarImage src={selectedThread.patientAvatar ?? undefined} />
                 <AvatarFallback className="bg-primary/10 text-primary">
-                  {selectedThread.doctorName
-                    .split(' ')
-                    .map((n) => n[0])
-                    .join('')
-                    .slice(0, 2)}
+                  {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
               <div>
-                <h3 className="font-semibold">{selectedThread.doctorName}</h3>
+                <h3 className="font-semibold">{selectedThread.patientName}</h3>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
-                  <span>•</span>
                   <span>
                     {formatDate(selectedThread.appointmentDate)}
                     {selectedThread.appointmentTime ? ` • ${selectedThread.appointmentTime}` : ''}
@@ -340,69 +304,39 @@ export function MessagesTab() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon">
-                <Phone className="w-5 h-5 text-muted-foreground" />
-              </Button>
-              <Button variant="ghost" size="icon">
-                <Video className="w-5 h-5 text-muted-foreground" />
-              </Button>
-              <Button variant="ghost" size="icon">
-                <MoreVertical className="w-5 h-5 text-muted-foreground" />
-              </Button>
-            </div>
           </div>
 
-          {/* Messages List */}
           <ScrollArea className="flex-1 p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
-              <div className="text-sm text-muted-foreground">
-                No messages yet. Start the conversation below.
-              </div>
+              <div className="text-sm text-muted-foreground">No messages yet.</div>
             ) : (
               <div className="space-y-4">
                 {messages.map((message, index) => {
-                  const isUser = message.sender_role === 'patient';
-                  const showAvatar = !isUser && (index === 0 || messages[index - 1].sender_role === 'patient');
+                  const isDoctor = message.sender_role === 'doctor';
+                  const showAvatar = !isDoctor && (index === 0 || messages[index - 1].sender_role === 'doctor');
                   return (
-                    <div
-                      key={message.id}
-                      className={cn('flex gap-3 max-w-[80%]', isUser ? 'ml-auto flex-row-reverse' : '')}
-                    >
-                      {!isUser && (
+                    <div key={message.id} className={cn('flex gap-3 max-w-[80%]', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
+                      {!isDoctor && (
                         <div className="w-8 flex-shrink-0">
                           {showAvatar && (
                             <Avatar className="w-8 h-8">
-                              <AvatarImage src={selectedThread.doctorAvatar ?? undefined} />
+                              <AvatarImage src={selectedThread.patientAvatar ?? undefined} />
                               <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                                {selectedThread.doctorName
-                                  .split(' ')
-                                  .map((n) => n[0])
-                                  .join('')
-                                  .slice(0, 2)}
+                                {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                               </AvatarFallback>
                             </Avatar>
                           )}
                         </div>
                       )}
-                      <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start')}>
-                        <div
-                          className={cn(
-                            'rounded-2xl px-4 py-2 shadow-sm',
-                            isUser
-                              ? 'bg-primary text-primary-foreground rounded-tr-sm'
-                              : 'bg-muted text-foreground rounded-tl-sm',
-                          )}
-                        >
+                      <div className={cn('flex flex-col', isDoctor ? 'items-end' : 'items-start')}>
+                        <div className={cn('rounded-2xl px-4 py-2 shadow-sm', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
                           <p className="text-sm">{message.content}</p>
                         </div>
                         <div className="flex items-center gap-1 mt-1 px-1">
-                          <span className="text-[10px] text-muted-foreground">
-                            {formatTime(message.created_at)}
-                          </span>
-                          {isUser && <Check className="w-3 h-3 text-muted-foreground" />}
+                          <span className="text-[10px] text-muted-foreground">{formatTime(message.created_at)}</span>
+                          {isDoctor && <Check className="w-3 h-3 text-muted-foreground" />}
                         </div>
                       </div>
                     </div>
@@ -412,18 +346,9 @@ export function MessagesTab() {
             )}
           </ScrollArea>
 
-          {/* Input Area */}
           <div className="p-4 border-t border-border bg-background">
             <form onSubmit={handleSendMessage} className="flex items-end gap-2">
-              <Button type="button" variant="ghost" size="icon" className="flex-shrink-0">
-                <Paperclip className="w-5 h-5 text-muted-foreground" />
-              </Button>
-              <Input
-                placeholder="Type a message..."
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                className="flex-1 min-h-[44px]"
-              />
+              <Input placeholder="Type a message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} className="flex-1 min-h-[44px]" />
               <Button type="submit" disabled={!newMessage.trim()} className="flex-shrink-0">
                 <Send className="w-5 h-5" />
               </Button>
@@ -435,10 +360,8 @@ export function MessagesTab() {
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
             <Search className="w-8 h-8 text-primary" />
           </div>
-          <h3 className="text-xl font-semibold mb-2">Consultation Messages</h3>
-          <p className="text-muted-foreground max-w-sm">
-            Select a completed consultation to view your chat history with the doctor.
-          </p>
+          <h3 className="text-xl font-semibold mb-2">Patient Messages</h3>
+          <p className="text-muted-foreground max-w-sm">Select a completed consultation to view chat history.</p>
         </div>
       )}
     </div>
