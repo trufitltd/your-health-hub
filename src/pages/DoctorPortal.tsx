@@ -329,7 +329,7 @@ const DoctorPortal = () => {
   const pendingRequests = (fetchedAppointments || []).filter(apt => {
     console.log('Checking appointment:', apt.id, 'Status:', apt.status);
     return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
-    }).map(apt => ({
+  }).map(apt => ({
     id: apt.id,
     patient: apt.patient_name || 'Unknown Patient',
     age: apt.patient_age || 'N/A',
@@ -337,6 +337,7 @@ const DoctorPortal = () => {
     requestedTime: apt.time,
     reason: apt.notes || 'No reason provided',
     priority: 'normal',
+    patient_profile_picture: (apt as any).patient_profile_picture || null,
   }));
   
   console.log('Final pending requests:', pendingRequests);
@@ -374,6 +375,8 @@ const DoctorPortal = () => {
       reason: apt.notes || 'No reason provided',
       priority: 'normal',
       status: apt.status,
+      patient_profile_picture: (apt as any).patient_profile_picture || null,
+      consultationType: (apt as any).consultationType || (apt as any).consultation_type || 'Video',
     }));
 
     switch (requestFilter) {
@@ -400,6 +403,7 @@ const DoctorPortal = () => {
             id: apt.patient_id,
             name: apt.patient_name,
             age: apt.patient_age || 'N/A',
+            profile_picture: (apt as any).patient_profile_picture || '',
             lastVisit: apt.date,
             appointments: []
           });
@@ -933,24 +937,32 @@ const DoctorPortal = () => {
                           </div>
                         ) : (
                           pendingRequests.map((request) => (
-                            <div key={request.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <p className="font-medium text-sm">{request.patient}</p>
-                                  {getPriorityBadge(request.priority)}
+                              <div key={request.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                                <div className="flex items-center gap-3">
+                                  <Avatar className="w-10 h-10">
+                                    <AvatarImage src={(request as any).patient_profile_picture || ''} />
+                                    <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                                      {request.patient ? request.patient.split(' ').map(n => n[0]).join('') : 'P'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-medium text-sm">{request.patient}</p>
+                                      {getPriorityBadge(request.priority)}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
+                                  </div>
                                 </div>
-                                <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
+                                <div className="flex gap-2">
+                                  <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
+                                    <XCircle className="w-4 h-4" />
+                                  </Button>
+                                  <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
+                                    <CheckCircle className="w-4 h-4" />
+                                  </Button>
+                                </div>
                               </div>
-                              <div className="flex gap-2">
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
-                                  <XCircle className="w-4 h-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
-                                  <CheckCircle className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          ))
+                            ))
                         )}
                       </div>
                     </CardContent>

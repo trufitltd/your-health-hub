@@ -122,6 +122,42 @@ export function DoctorNotesPanel({
     }
   };
 
+  const handleAddToPatientFolder = async () => {
+    if (!patientId) {
+      toast({ title: 'Error', description: 'No patient selected', variant: 'destructive' });
+      return;
+    }
+
+    const composed = [
+      diagnosis.trim() ? `Diagnosis:\n${diagnosis.trim()}` : null,
+      prescriptions.trim() ? `Prescriptions:\n${prescriptions.trim()}` : null,
+      treatmentPlan.trim() ? `Treatment Plan:\n${treatmentPlan.trim()}` : null,
+      followUpNotes.trim() ? `Follow-up:\n${followUpNotes.trim()}` : null,
+    ].filter(Boolean).join('\n\n');
+
+    if (!composed) {
+      toast({ title: 'Nothing to add', description: 'Add some notes first.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const { data, error } = await supabase.rpc('doctor_append_to_patient_folder', {
+        p_patient_id: patientId,
+        p_note_text: composed
+      });
+
+      if (error) throw error;
+
+      toast({ title: 'Added to Folder', description: 'Notes appended to patient folder.' });
+    } catch (err) {
+      console.error('Error adding to patient folder:', err);
+      toast({ title: 'Error', description: 'Failed to update patient folder.', variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -341,6 +377,14 @@ export function DoctorNotesPanel({
             >
               <Save className="w-4 h-4" />
               {isSaving ? 'Saving...' : 'Save Notes'}
+            </Button>
+            <Button
+              onClick={handleAddToPatientFolder}
+              disabled={isSaving}
+              variant="outline"
+              className="w-full border-slate-600 text-slate-300 hover:bg-slate-800 min-h-[48px] touch-manipulation"
+            >
+              Add to Patient Folder
             </Button>
             <Button
               onClick={onClose}
