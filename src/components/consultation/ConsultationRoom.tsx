@@ -4,7 +4,7 @@ import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
   X, User, AlertCircle, Camera, Users, Maximize2,
   Minimize2, MoreVertical, Hand, Monitor, Settings,
-  PhoneOff, ChevronRight, ChevronLeft, Clock, FileText
+  PhoneOff, ChevronRight, ChevronLeft, Clock, FileText, Bell
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -87,6 +87,7 @@ export function ConsultationRoom({
   const [isNotesOpen, setIsNotesOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [waitingForPatient, setWaitingForPatient] = useState(false);
   const [isCallStarted, setIsCallStarted] = useState(false);
   const [shouldInitializeWebRTC, setShouldInitializeWebRTC] = useState(false);
@@ -105,6 +106,7 @@ export function ConsultationRoom({
   const messageSubscriptionRef = useRef<(() => void) | null>(null);
   const isCleaningUpRef = useRef(false);
   const isMountedRef = useRef(true);
+  const isChatOpenRef = useRef(false);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -462,6 +464,8 @@ export function ConsultationRoom({
                 timestamp: new Date(dbMessage.created_at),
                 type: dbMessage.message_type as 'text' | 'file'
               }]);
+              // Increment unread count if chat panel is closed (use ref to avoid stale closure)
+              setUnreadMessageCount(prev => (!isChatOpenRef.current ? prev + 1 : prev));
             } else if (dbMessage.sender_id === user?.id) {
               console.log('[Message Handler] Skipping own message (expected)');
             } else {
@@ -484,6 +488,18 @@ export function ConsultationRoom({
 
     initializeSession();
   }, [user, appointmentId, participantRole, consultationType, initializeMedia]);
+
+  // Reset unread count when chat panel opens
+  useEffect(() => {
+    if (isChatOpen) {
+      setUnreadMessageCount(0);
+    }
+  }, [isChatOpen]);
+
+  // Keep isChatOpenRef in sync with state
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
 
   // Manage message subscription cleanup on component unmount
   useEffect(() => {
@@ -1628,6 +1644,7 @@ export function ConsultationRoom({
             isChatOpen={isChatOpen}
             handRaised={handRaised}
             messageCount={messages.length}
+            unreadMessageCount={unreadMessageCount}
             onToggleAudio={toggleAudio}
             onToggleVideo={toggleVideo}
             onToggleChat={() => setIsChatOpen(!isChatOpen)}

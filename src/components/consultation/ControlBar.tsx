@@ -1,4 +1,4 @@
-import { Mic, MicOff, Video, VideoOff, MessageSquare, Hand, PhoneOff } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, MessageSquare, Hand, PhoneOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -8,6 +8,7 @@ interface ControlBarProps {
   isChatOpen: boolean;
   handRaised: boolean;
   messageCount: number;
+  unreadMessageCount: number;
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleChat: () => void;
@@ -21,6 +22,7 @@ export function ControlBar({
   isChatOpen,
   handRaised,
   messageCount,
+  unreadMessageCount,
   onToggleAudio,
   onToggleVideo,
   onToggleChat,
@@ -81,10 +83,8 @@ export function ControlBar({
             {/* Chat button - always available */}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${
+                <button
+                  className={`relative w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all flex items-center justify-center ${
                     isChatOpen 
                       ? 'bg-primary text-primary-foreground' 
                       : 'bg-white/10 hover:bg-white/20 text-white'
@@ -92,14 +92,26 @@ export function ControlBar({
                   onClick={onToggleChat}
                 >
                   <MessageSquare className="w-5 h-5" />
-                  {messageCount > 0 && !isChatOpen && (
+                  {/* Show bell icon with unread count when there are unread messages */}
+                  {unreadMessageCount > 0 && !isChatOpen && (
+                    <>
+                      <Bell className="absolute w-3 h-3 text-yellow-400 fill-yellow-400 animate-pulse top-0 right-0" />
+                      <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-red-500 text-[10px] rounded-full flex items-center justify-center text-white font-bold">
+                        {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                      </span>
+                    </>
+                  )}
+                  {/* Show total message count when chat is open or no unread messages */}
+                  {messageCount > 0 && !isChatOpen && unreadMessageCount === 0 && (
                     <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-[10px] rounded-full flex items-center justify-center">
                       {messageCount > 9 ? '9+' : messageCount}
                     </span>
                   )}
-                </Button>
+                </button>
               </TooltipTrigger>
-              <TooltipContent>Chat</TooltipContent>
+              <TooltipContent>
+                {unreadMessageCount > 0 ? `${unreadMessageCount} unread message${unreadMessageCount > 1 ? 's' : ''}` : 'Chat'}
+              </TooltipContent>
             </Tooltip>
 
             {/* Hand raise button */}
