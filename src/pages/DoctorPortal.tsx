@@ -38,6 +38,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
+import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -699,6 +700,7 @@ const DoctorPortal = () => {
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
                     { id: 'reviews', label: 'Reviews', icon: Star },
+                    { id: 'messages', label: 'Messages', icon: MessageSquare },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
@@ -1478,6 +1480,9 @@ const DoctorPortal = () => {
                     </Card>
                   </TabsContent>
 
+                  <TabsContent value="messages" className="space-y-6">
+                    <DoctorMessagesTab />
+                  </TabsContent>
 
                   <TabsContent value="settings" className="space-y-6">
                     <Card>
