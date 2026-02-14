@@ -621,15 +621,6 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="lg:hidden"
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </Button>
-
               {/* Availability Toggle */}
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
@@ -646,6 +637,15 @@ const DoctorPortal = () => {
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
                   {stats.pendingRequests}
                 </span>
+              </Button>
+
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </Button>
 
               <button 
