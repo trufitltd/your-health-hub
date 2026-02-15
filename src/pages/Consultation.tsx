@@ -74,7 +74,13 @@ const Consultation = () => {
             description: role === 'patient' ? 'The doctor has ended the consultation.' : 'The patient has left the consultation.'
           });
           // Navigate back after a brief delay
-          setTimeout(() => navigate(-1), 2000);
+          setTimeout(() => {
+            if (role === 'doctor') {
+              navigate('/doctor-portal');
+            } else {
+              navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
+            }
+          }, 2000);
         } else if (role === 'patient' && newStatusStr === 'active') {
           console.log('Patient being admitted to consultation');
           setIsAdmitted(true);
@@ -151,7 +157,7 @@ const Consultation = () => {
       if (role === 'doctor') {
         navigate('/doctor-portal');
       } else {
-        navigate('/patient-portal');
+        navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
       }
     }, 1500);
   };
