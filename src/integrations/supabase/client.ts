@@ -6,11 +6,10 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    // Persist user session in local storage
     persistSession: true,
-    // Automatically refresh tokens
     autoRefreshToken: true,
-    // Detect session from URL on redirect
     detectSessionInUrl: true,
+    storageKey: 'myedoctor-auth',
+    flowType: 'pkce',
   },
 })
