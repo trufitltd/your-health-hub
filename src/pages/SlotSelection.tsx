@@ -11,7 +11,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
-import { Calendar, Clock, ChevronRight, AlertCircle } from 'lucide-react';
+import { Calendar, Clock, ChevronRight, AlertCircle, CreditCard } from 'lucide-react';
+import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 
 interface LocationState {
   doctorId?: string;
@@ -29,6 +30,9 @@ export default function SlotSelection() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
+  const { initializePayment } = usePaystackPayment();
+
+  const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
   // Scroll to top when page loads
   useEffect(() => {
@@ -169,46 +173,105 @@ export default function SlotSelection() {
       return;
     }
 
-    setIsConfirming(true);
-    try {
-      const { error } = await supabase
-        .from('appointments')
-        .insert([
-          {
-            patient_id: user.id,
-            doctor_id: state.doctorId,
-            date: selectedDate,
-            time: selectedTime,
-            status: 'pending',
-            notes: 'Appointment requested',
-          }
-        ]);
-
-      if (error) {
-        console.error('Booking error:', error);
-        toast({ 
-          title: 'Booking failed', 
-          description: error.message || 'Failed to create appointment. Please try again.' 
-        });
-        return;
-      }
-
+    if (!paystackPublicKey) {
       toast({ 
-        title: 'Appointment booked!', 
-        description: `Your appointment with ${state.doctorName} on ${new Date(selectedDate).toLocaleDateString()} at ${selectedTime} has been requested.` 
+        title: 'Configuration Error', 
+        description: 'Payment gateway not configured. Please contact support.' 
       });
-
-      // Redirect to patient portal
-      navigate('/patient-portal?tab=appointments');
-    } catch (error) {
-      console.error('Booking error:', error);
-      toast({ 
-        title: 'Error', 
-        description: 'An unexpected error occurred. Please try again.' 
-      });
-    } finally {
-      setIsConfirming(false);
+      return;
     }
+
+    // Calculate consultation fee
+    const isSpecialist = state.specialty && !state.specialty.toLowerCase().includes('general');
+    const consultationFee = isSpecialist ? 10000 : 5000;
+    const amountInKobo = consultationFee * 100; // Convert to kobo
+
+    // Generate unique reference
+    const reference = `APT-${Date.now()}-${user.id.substring(0, 8)}`;
+
+    // Fetch user email from profiles table
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('user_id', user.id)
+      .single();
+
+    const userEmail = profile?.email || user.email || '';
+
+    // Initialize Paystack payment
+    initializePayment({
+      email: userEmail,
+      amount: amountInKobo,
+      reference,
+      publicKey: paystackPublicKey,
+      metadata: {
+        custom_fields: [
+          {
+            display_name: 'Doctor',
+            variable_name: 'doctor_name',
+            value: state.doctorName || '',
+          },
+          {
+            display_name: 'Appointment Date',
+            variable_name: 'appointment_date',
+            value: selectedDate,
+          },
+          {
+            display_name: 'Appointment Time',
+            variable_name: 'appointment_time',
+            value: selectedTime,
+          },
+        ],
+      },
+      onSuccess: async (response) => {
+        setIsConfirming(true);
+        try {
+          // Create appointment after successful payment
+          const { error } = await supabase
+            .from('appointments')
+            .insert([
+              {
+                patient_id: user.id,
+                doctor_id: state.doctorId,
+                date: selectedDate,
+                time: selectedTime,
+                status: 'confirmed',
+                notes: `Payment successful. Reference: ${response.reference}`,
+              }
+            ]);
+
+          if (error) {
+            console.error('Booking error:', error);
+            toast({ 
+              title: 'Booking failed', 
+              description: 'Payment successful but failed to create appointment. Please contact support with reference: ' + response.reference
+            });
+            return;
+          }
+
+          toast({ 
+            title: 'Appointment booked!', 
+            description: `Your appointment with ${state.doctorName} on ${new Date(selectedDate).toLocaleDateString()} at ${selectedTime} has been confirmed.` 
+          });
+
+          navigate('/patient-portal?tab=appointments');
+        } catch (error) {
+          console.error('Booking error:', error);
+          toast({ 
+            title: 'Error', 
+            description: 'Payment successful but an error occurred. Please contact support with reference: ' + response.reference
+          });
+        } finally {
+          setIsConfirming(false);
+        }
+      },
+      onClose: () => {
+        toast({ 
+          title: 'Payment cancelled', 
+          description: 'You cancelled the payment process.' 
+        });
+      },
+    });
   };
 
   const formatDate = (dateStr: string) => {
@@ -441,7 +504,8 @@ export default function SlotSelection() {
                 disabled={!selectedDate || !selectedTime || isConfirming}
                 className="gap-2"
               >
-                {isConfirming ? 'Confirming...' : 'Confirm Booking'}
+                <CreditCard className="w-4 h-4" />
+                {isConfirming ? 'Processing...' : 'Pay & Confirm Booking'}
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </motion.div>
