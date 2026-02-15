@@ -20,6 +20,8 @@ export class WebRTCService {
   private onAdmittedCallback?: () => void;
   private onPatientJoinedLobbyCallback?: () => void;
   private onRemoteMediaStateCallback?: (state: { audioEnabled: boolean; videoEnabled: boolean }) => void;
+  private onParticipantLeftCallback?: () => void;
+  private onSessionEndedCallback?: () => void;
   private unsubscribe?: () => void;
   private processedSignals = new Set<string>();
   private candidateQueue: RTCIceCandidate[] = [];
@@ -626,6 +628,20 @@ export class WebRTCService {
         }
         return;
       }
+
+      if (signalData.type === 'participant_left') {
+        if (this.onParticipantLeftCallback) {
+          this.onParticipantLeftCallback();
+        }
+        return;
+      }
+
+      if (signalData.type === 'session_ended') {
+        if (this.onSessionEndedCallback) {
+          this.onSessionEndedCallback();
+        }
+        return;
+      }
       
       // All other signals require peer connection
       if (!this.peerConnection || this.isDestroyed) return;
@@ -943,6 +959,20 @@ export class WebRTCService {
     });
   }
 
+  async sendParticipantLeft() {
+    await this.sendSignal({
+      type: 'participant_left',
+      left_at: new Date().toISOString()
+    });
+  }
+
+  async sendSessionEnded() {
+    await this.sendSignal({
+      type: 'session_ended',
+      ended_at: new Date().toISOString()
+    });
+  }
+
   onStream(callback: (stream: MediaStream) => void) {
     this.onStreamCallback = callback;
   }
@@ -965,6 +995,14 @@ export class WebRTCService {
 
   onRemoteMediaState(callback: (state: { audioEnabled: boolean; videoEnabled: boolean }) => void) {
     this.onRemoteMediaStateCallback = callback;
+  }
+
+  onParticipantLeft(callback: () => void) {
+    this.onParticipantLeftCallback = callback;
+  }
+
+  onSessionEnded(callback: () => void) {
+    this.onSessionEndedCallback = callback;
   }
 
   setLocalMediaEnabled(kind: 'audio' | 'video', enabled: boolean) {
