@@ -207,6 +207,16 @@ export default function SlotSelection() {
       metadata: {
         custom_fields: [
           {
+            display_name: 'Patient ID',
+            variable_name: 'patient_id',
+            value: user.id,
+          },
+          {
+            display_name: 'Doctor ID',
+            variable_name: 'doctor_id',
+            value: state.doctorId || '',
+          },
+          {
             display_name: 'Doctor',
             variable_name: 'doctor_name',
             value: state.doctorName || '',
@@ -224,46 +234,15 @@ export default function SlotSelection() {
         ],
       },
       onSuccess: async (response) => {
-        setIsConfirming(true);
-        try {
-          // Create appointment after successful payment
-          const { error } = await supabase
-            .from('appointments')
-            .insert([
-              {
-                patient_id: user.id,
-                doctor_id: state.doctorId,
-                date: selectedDate,
-                time: selectedTime,
-                status: 'confirmed',
-                notes: `Payment successful. Reference: ${response.reference}`,
-              }
-            ]);
+        toast({ 
+          title: 'Payment successful!', 
+          description: 'Your appointment is being confirmed. Please wait...' 
+        });
 
-          if (error) {
-            console.error('Booking error:', error);
-            toast({ 
-              title: 'Booking failed', 
-              description: 'Payment successful but failed to create appointment. Please contact support with reference: ' + response.reference
-            });
-            return;
-          }
-
-          toast({ 
-            title: 'Appointment booked!', 
-            description: `Your appointment with ${state.doctorName} on ${new Date(selectedDate).toLocaleDateString()} at ${selectedTime} has been confirmed.` 
-          });
-
+        // Redirect to patient portal - webhook will create appointment
+        setTimeout(() => {
           navigate('/patient-portal?tab=appointments');
-        } catch (error) {
-          console.error('Booking error:', error);
-          toast({ 
-            title: 'Error', 
-            description: 'Payment successful but an error occurred. Please contact support with reference: ' + response.reference
-          });
-        } finally {
-          setIsConfirming(false);
-        }
+        }, 2000);
       },
       onClose: () => {
         toast({ 
