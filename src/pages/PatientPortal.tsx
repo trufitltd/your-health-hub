@@ -253,6 +253,67 @@ const PatientPortal = () => {
     }
   }, [searchParams, setSearchParams]);
 
+  // Handle post-consultation review deep-link
+  useEffect(() => {
+    if (appointmentsLoading) return;
+
+    const action = searchParams.get('action');
+    const appointmentId = searchParams.get('appointmentId');
+    if (action !== 'review' || !appointmentId) return;
+    if (lastHandledReviewAppointmentRef.current === appointmentId) return;
+
+    lastHandledReviewAppointmentRef.current = appointmentId;
+    const openReviewFlow = async () => {
+      let appointment = appointments.find((apt) => apt.id === appointmentId) as any;
+
+      // Fallback direct fetch in case local appointments query is stale right after call end.
+      if (!appointment && user?.id) {
+        const { data } = await supabase
+          .from('appointments')
+          .select('*')
+          .eq('id', appointmentId)
+          .eq('patient_id', user.id)
+          .maybeSingle();
+        if (data) {
+          appointment = data;
+        }
+      }
+
+      if (appointment && !appointment.rating) {
+        setSelectedAppointment(appointment);
+        setReviewModalOpen(true);
+        setActiveTab('appointments');
+      } else if (appointment?.rating) {
+        toast({
+          title: 'Review already submitted',
+          description: 'You have already reviewed this consultation.'
+        });
+      } else {
+        toast({
+          title: 'Review unavailable',
+          description: 'Could not find this consultation to review.'
+        });
+      }
+
+      setSearchParams(params => {
+        const next = new URLSearchParams(params);
+        next.delete('action');
+        next.delete('appointmentId');
+        return next;
+      }, { replace: true });
+    };
+
+    openReviewFlow().catch((error) => {
+      console.error('Failed to open review flow:', error);
+      setSearchParams(params => {
+        const next = new URLSearchParams(params);
+        next.delete('action');
+        next.delete('appointmentId');
+        return next;
+      }, { replace: true });
+    });
+  }, [appointments, appointmentsLoading, searchParams, setSearchParams, user?.id]);
+
   const resetBookingState = () => {
     setSpecialistName('');
     setBookingDate('');
@@ -574,15 +635,6 @@ const PatientPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="lg:hidden"
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </Button>
-
               <div className="relative hidden sm:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
@@ -598,6 +650,15 @@ const PatientPortal = () => {
                     {notifications.filter(n => !n.read).length}
                   </span>
                 )}
+              </Button>
+
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </Button>
 
               <button 

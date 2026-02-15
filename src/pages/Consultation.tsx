@@ -74,7 +74,13 @@ const Consultation = () => {
             description: role === 'patient' ? 'The doctor has ended the consultation.' : 'The patient has left the consultation.'
           });
           // Navigate back after a brief delay
-          setTimeout(() => navigate(-1), 2000);
+          setTimeout(() => {
+            if (role === 'doctor') {
+              navigate('/doctor-portal');
+            } else {
+              navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
+            }
+          }, 2000);
         } else if (role === 'patient' && newStatusStr === 'active') {
           console.log('Patient being admitted to consultation');
           setIsAdmitted(true);
@@ -101,7 +107,7 @@ const Consultation = () => {
     };
   }, [appointmentId, navigate, role, participantName]);
 
-  // Auto-transition waiting phase to in-call
+  // Auto-transition waiting phase to in-call (removed - patients go directly to in-call)
   useEffect(() => {
     if (phase === 'waiting') {
       setPhase('in-call');
@@ -116,9 +122,9 @@ const Consultation = () => {
         description: 'You can now admit the patient when they join.'
       });
     } else {
-      setPhase('waiting');
+      setPhase('in-call');
       // Notify doctor that patient is waiting
-      console.log('Patient entering waiting room, updating database...');
+      console.log('Patient entering consultation, updating database...');
       supabase
         .from('consultation_sessions')
         .update({ status: 'waiting' })
@@ -129,10 +135,6 @@ const Consultation = () => {
           } else {
             console.log('Successfully updated consultation status to waiting');
           }
-          toast({
-            title: 'Waiting',
-            description: 'Please wait for the doctor to admit you to the consultation.'
-          });
         });
     }
   };
@@ -155,7 +157,7 @@ const Consultation = () => {
       if (role === 'doctor') {
         navigate('/doctor-portal');
       } else {
-        navigate('/patient-portal');
+        navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
       }
     }, 1500);
   };
