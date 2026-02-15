@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 
 import { Link } from 'react-router-dom';
@@ -230,6 +230,7 @@ const PatientPortal = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
+  const lastHandledReviewAppointmentRef = useRef<string | null>(null);
 
   // Pricing logic (single uniform consultation price)
   const getPricing = (specialty: string) => {
@@ -251,6 +252,67 @@ const PatientPortal = () => {
       }, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  // Handle post-consultation review deep-link
+  useEffect(() => {
+    if (appointmentsLoading) return;
+
+    const action = searchParams.get('action');
+    const appointmentId = searchParams.get('appointmentId');
+    if (action !== 'review' || !appointmentId) return;
+    if (lastHandledReviewAppointmentRef.current === appointmentId) return;
+
+    lastHandledReviewAppointmentRef.current = appointmentId;
+    const openReviewFlow = async () => {
+      let appointment = appointments.find((apt) => apt.id === appointmentId) as any;
+
+      // Fallback direct fetch in case local appointments query is stale right after call end.
+      if (!appointment && user?.id) {
+        const { data } = await supabase
+          .from('appointments')
+          .select('*')
+          .eq('id', appointmentId)
+          .eq('patient_id', user.id)
+          .maybeSingle();
+        if (data) {
+          appointment = data;
+        }
+      }
+
+      if (appointment && !appointment.rating) {
+        setSelectedAppointment(appointment);
+        setReviewModalOpen(true);
+        setActiveTab('appointments');
+      } else if (appointment?.rating) {
+        toast({
+          title: 'Review already submitted',
+          description: 'You have already reviewed this consultation.'
+        });
+      } else {
+        toast({
+          title: 'Review unavailable',
+          description: 'Could not find this consultation to review.'
+        });
+      }
+
+      setSearchParams(params => {
+        const next = new URLSearchParams(params);
+        next.delete('action');
+        next.delete('appointmentId');
+        return next;
+      }, { replace: true });
+    };
+
+    openReviewFlow().catch((error) => {
+      console.error('Failed to open review flow:', error);
+      setSearchParams(params => {
+        const next = new URLSearchParams(params);
+        next.delete('action');
+        next.delete('appointmentId');
+        return next;
+      }, { replace: true });
+    });
+  }, [appointments, appointmentsLoading, searchParams, setSearchParams, user?.id]);
 
   const resetBookingState = () => {
     setSpecialistName('');
