@@ -50,6 +50,7 @@ export default function AuthPage() {
   const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
   const [identificationType, setIdentificationType] = useState('');
   const [identificationNumber, setIdentificationNumber] = useState('');
+  const [consentAgreed, setConsentAgreed] = useState(false);
 
   // Doctor registration fields
   const [hospitalAffiliation, setHospitalAffiliation] = useState('');
@@ -85,6 +86,11 @@ export default function AuthPage() {
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
               !emergencyContactName || !emergencyContactPhone || !identificationType || !identificationNumber) {
             toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
+            setIsLoading(false);
+            return;
+          }
+          if (!consentAgreed) {
+            toast({ title: 'Consent required', description: 'Please agree to the patient consent to continue.' });
             setIsLoading(false);
             return;
           }
@@ -811,6 +817,22 @@ export default function AuthPage() {
                           onChange={(e) => setIdentificationNumber(e.target.value)}
                         />
                       </div>
+                    </div>
+
+                    {/* Patient Consent */}
+                    <div className="p-4 border border-border rounded-lg bg-muted/30">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={consentAgreed}
+                          onChange={(e) => setConsentAgreed(e.target.checked)}
+                          className="mt-1 rounded border-border"
+                          required
+                        />
+                        <span className="text-sm">
+                          <strong>Patient Consent & Agreement:</strong> I Agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions.
+                        </span>
+                      </label>
                     </div>
                   </div>
                 )}
