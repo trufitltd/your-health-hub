@@ -69,7 +69,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
 
   const handleAddSlot = async () => {
     setValidationError(null);
-    if (!editingDay) return;
+    if (!editingDay && editingDay !== 0) return;
     if (!newStart || !newEnd) {
       setValidationError('Please provide both start and end times');
       return;
@@ -108,10 +108,11 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
       });
 
       // Add to local list with returned id and sort
-      setLocalSlots(prev => sortSlots([...prev, { id: created.id, start: newStart, end: newEnd }]));
+      setLocalSlots(prev => sortSlots([...prev, { id: created.id, start: created.start_time, end: created.end_time }]));
       setNewStart('09:00');
       setNewEnd('17:00');
     } catch (err) {
+      console.error('Failed to add slot:', err);
       setValidationError('Failed to add slot');
     }
   };
@@ -129,7 +130,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
   };
 
   const handleSaveEdit = async () => {
-    if (!editingDay) return;
+    if (!editingDay && editingDay !== 0) return;
     setValidationError(null);
     if (!editingStart || !editingEnd) {
       setValidationError('Please provide both start and end times');
@@ -158,7 +159,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
     }
 
     try {
-      // If we have an id, update; otherwise insert a new slot and replace best-effort
+      // If we have an id, update; otherwise insert a new slot
       if (editingSlotId) {
         const updated = await upsertSchedule({
           id: editingSlotId,
@@ -177,11 +178,14 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
           slot_duration_minutes: 30,
           is_available: true,
         });
-        setLocalSlots(prev => sortSlots(prev.map(s => (s.start === newStart && s.end === newEnd) ? { id: created.id, start: created.start_time, end: created.end_time } : s)));
+        setLocalSlots(prev => sortSlots([...prev, { id: created.id, start: created.start_time, end: created.end_time }]));
       }
 
       setEditingSlotId(null);
+      setEditingStart('09:00');
+      setEditingEnd('09:30');
     } catch (err) {
+      console.error('Failed to save slot edit:', err);
       setValidationError('Failed to save slot edit');
     }
   };

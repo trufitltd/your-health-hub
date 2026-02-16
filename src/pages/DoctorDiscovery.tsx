@@ -96,7 +96,7 @@ export default function DoctorDiscovery() {
     return { date, time };
   };
 
-  // Fetch doctors who have an available schedule based on mode
+  // Fetch doctors who have an available schedule based on mode (excluding booked slots)
   const { data: availableDoctorIds = [] } = useQuery({
     queryKey: ['available-doctors', availabilityMode, availabilityFilters],
     queryFn: async () => {
@@ -135,7 +135,8 @@ export default function DoctorDiscovery() {
 
       const doctorSet = new Set<string>();
 
-      for (const { dayIndex, time } of checkTimes) {
+      for (const { date, time, dayIndex } of checkTimes) {
+        // Get doctors with schedules for this day/time
         const { data: schedules, error } = await supabase
           .from('doctor_schedules')
           .select('doctor_id')
@@ -145,7 +146,23 @@ export default function DoctorDiscovery() {
           .gt('end_time', time);
         
         if (error) throw error;
-        (schedules || []).forEach(s => doctorSet.add(s.doctor_id));
+
+        // Check each doctor for existing bookings at this date/time
+        for (const schedule of schedules || []) {
+          const { data: bookings } = await supabase
+            .from('appointments')
+            .select('id')
+            .eq('doctor_id', schedule.doctor_id)
+            .eq('date', date)
+            .eq('time', time)
+            .in('status', ['pending', 'confirmed'])
+            .limit(1);
+
+          // Only add doctor if no booking exists
+          if (!bookings || bookings.length === 0) {
+            doctorSet.add(schedule.doctor_id);
+          }
+        }
       }
 
       return Array.from(doctorSet);

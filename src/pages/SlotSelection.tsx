@@ -182,6 +182,15 @@ export default function SlotSelection() {
       slots.forEach(time => times.add(time));
     });
 
+    // Filter out past times if selected date is today
+    const now = new Date();
+    const isToday = selectedDate === now.toISOString().split('T')[0];
+    
+    if (isToday) {
+      const currentTime = now.toTimeString().slice(0, 5);
+      return Array.from(times).filter(time => time > currentTime).sort();
+    }
+
     return Array.from(times).sort();
   }, [selectedDate, schedules]);
 
@@ -430,14 +439,21 @@ export default function SlotSelection() {
                       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
                         {availableTimes.map(time => {
                           const isBooked = bookedSlots.includes(time);
+                          const isPast = (() => {
+                            const now = new Date();
+                            const slotDateTime = new Date(`${selectedDate}T${time}`);
+                            return slotDateTime < now;
+                          })();
+                          const isDisabled = isBooked || isPast;
+                          
                           return (
                             <motion.button
                               key={time}
-                              whileHover={!isBooked ? { scale: 1.05 } : {}}
-                              onClick={() => !isBooked && setSelectedTime(time)}
-                              disabled={isBooked}
+                              whileHover={!isDisabled ? { scale: 1.05 } : {}}
+                              onClick={() => !isDisabled && setSelectedTime(time)}
+                              disabled={isDisabled}
                               className={`p-3 rounded-lg border-2 transition-all text-center text-sm font-medium ${
-                                isBooked
+                                isDisabled
                                   ? 'border-muted bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'
                                   : selectedTime === time
                                   ? 'border-primary bg-primary text-primary-foreground'
@@ -446,6 +462,7 @@ export default function SlotSelection() {
                             >
                               {time}
                               {isBooked && <span className="block text-[10px] mt-0.5">Booked</span>}
+                              {isPast && !isBooked && <span className="block text-[10px] mt-0.5">Past</span>}
                             </motion.button>
                           );
                         })}
