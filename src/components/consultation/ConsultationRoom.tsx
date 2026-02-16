@@ -4,7 +4,7 @@ import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
   X, User, AlertCircle, Camera, Users, Maximize2,
   Minimize2, MoreVertical, Hand, Monitor, Settings,
-  PhoneOff, ChevronRight, ChevronLeft, Clock, FileText, Bell
+  PhoneOff, ChevronRight, ChevronLeft, Clock, Bell, Stethoscope, FolderOpen
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,6 +13,16 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService } from '@/services/consultationService';
@@ -85,6 +95,7 @@ export function ConsultationRoom({
   const [isPatientWaiting, setIsPatientWaiting] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isNotesOpen, setIsNotesOpen] = useState(false);
+  const [notesPanelView, setNotesPanelView] = useState<'clerking' | 'folder'>('clerking');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
@@ -92,6 +103,9 @@ export function ConsultationRoom({
   const [isCallStarted, setIsCallStarted] = useState(false);
   const [shouldInitializeWebRTC, setShouldInitializeWebRTC] = useState(false);
   const [localVideoAttached, setLocalVideoAttached] = useState(false);
+  const [isEndForEveryoneDialogOpen, setIsEndForEveryoneDialogOpen] = useState(false);
+  const [hasSavedClerking, setHasSavedClerking] = useState(false);
+  const [hasConsultationOccurred, setHasConsultationOccurred] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoPIPRef = useRef<HTMLVideoElement>(null);
@@ -108,6 +122,7 @@ export function ConsultationRoom({
   const isMountedRef = useRef(true);
   const isChatOpenRef = useRef(false);
   const webrtcServiceRef = useRef<WebRTCService | null>(null);
+  const hasHandledRemoteEndRef = useRef(false);
 
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
@@ -581,7 +596,44 @@ export function ConsultationRoom({
     onEndCall();
   }, [webrtcService, onEndCall]);
 
+  const shouldRequireClerkingBeforeExit =
+    participantRole === 'doctor' && hasConsultationOccurred;
+
+  const ensureDoctorHasClerkingBeforeExit = useCallback(async () => {
+    if (!shouldRequireClerkingBeforeExit || !sessionData || !user?.id) {
+      return true;
+    }
+
+    if (hasSavedClerking) {
+      return true;
+    }
+
+    const { data, error } = await supabase
+      .from('doctor_consultation_notes')
+      .select('id')
+      .eq('session_id', sessionData.id)
+      .eq('doctor_id', user.id)
+      .limit(1);
+
+    if (!error && data && data.length > 0) {
+      setHasSavedClerking(true);
+      return true;
+    }
+
+    toast({
+      title: 'Clerking Required',
+      description: 'Please add clerking before leaving or ending this call.'
+    });
+    setNotesPanelView('clerking');
+    setIsChatOpen(false);
+    setIsNotesOpen(true);
+    return false;
+  }, [shouldRequireClerkingBeforeExit, sessionData, user?.id, hasSavedClerking]);
+
   const handleLeaveCall = useCallback(async () => {
+    const canExit = await ensureDoctorHasClerkingBeforeExit();
+    if (!canExit) return;
+
     try {
       const activeWebrtcService = webrtcServiceRef.current ?? webrtcService;
       if (activeWebrtcService) {
@@ -592,9 +644,9 @@ export function ConsultationRoom({
     }
 
     await cleanupAndExit();
-  }, [webrtcService, cleanupAndExit]);
+  }, [webrtcService, cleanupAndExit, ensureDoctorHasClerkingBeforeExit]);
 
-  const handleEndCallForEveryone = useCallback(async () => {
+  const confirmEndCallForEveryone = useCallback(async () => {
     try {
       if (sessionData) {
         await consultationService.endSession(sessionData.id, callDuration);
@@ -614,6 +666,12 @@ export function ConsultationRoom({
 
     await cleanupAndExit();
   }, [sessionData, callDuration, webrtcService, cleanupAndExit]);
+
+  const requestEndCallForEveryone = useCallback(async () => {
+    const canExit = await ensureDoctorHasClerkingBeforeExit();
+    if (!canExit) return;
+    setIsEndForEveryoneDialogOpen(true);
+  }, [ensureDoctorHasClerkingBeforeExit]);
 
   useEffect(() => {
     // For chat consultations, initialize even without local stream
@@ -678,6 +736,9 @@ export function ConsultationRoom({
           setConnectionStatus('connected');
           // Start call timer when media actually flows
           setCallDuration(0);
+          if (participantRole === 'doctor') {
+            setHasConsultationOccurred(true);
+          }
         });
 
         webrtc.onError((error) => {
@@ -721,6 +782,8 @@ export function ConsultationRoom({
         });
 
         webrtc.onSessionEnded(() => {
+          if (hasHandledRemoteEndRef.current) return;
+          hasHandledRemoteEndRef.current = true;
           toast({
             title: 'Call ended',
             description: `${participantName} ended the call for everyone.`
@@ -924,6 +987,44 @@ export function ConsultationRoom({
     }
   }, [connectionStatus]);
 
+  useEffect(() => {
+    if (participantRole === 'doctor' && hasRemoteStream) {
+      setHasConsultationOccurred(true);
+    }
+  }, [participantRole, hasRemoteStream]);
+
+  // Fallback watcher: if session is marked ended (doctor ended for everyone),
+  // force patient out through the standard end-flow so review redirect is triggered.
+  useEffect(() => {
+    if (!sessionData || participantRole !== 'patient') return;
+
+    const channel = supabase
+      .channel(`consultation-room-ended-${sessionData.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'consultation_sessions',
+        filter: `id=eq.${sessionData.id}`
+      }, (payload) => {
+        const status = (payload.new as { status?: string } | null)?.status;
+        if (status === 'ended' && !hasHandledRemoteEndRef.current) {
+          hasHandledRemoteEndRef.current = true;
+          toast({
+            title: 'Call ended',
+            description: 'The doctor ended the call for everyone. Please leave a review.'
+          });
+          cleanupAndExit().catch((err) => {
+            console.error('Failed to cleanup after consultation_sessions ended update:', err);
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [sessionData, participantRole, cleanupAndExit]);
+
   const toggleAudio = () => {
     if (localStreamRef.current) {
       const audioTracks = localStreamRef.current.getAudioTracks();
@@ -1026,6 +1127,20 @@ export function ConsultationRoom({
     }
   };
 
+  const openDoctorNotesView = (view: 'clerking' | 'folder') => {
+    setNotesPanelView(view);
+    setIsChatOpen(false);
+    setIsNotesOpen(true);
+  };
+
+  const toggleDoctorNotesView = (view: 'clerking' | 'folder') => {
+    if (isNotesOpen && notesPanelView === view) {
+      setIsNotesOpen(false);
+      return;
+    }
+    openDoctorNotesView(view);
+  };
+
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !sessionData) return;
 
@@ -1075,6 +1190,7 @@ export function ConsultationRoom({
       // Update local state
       setIsPatientWaiting(false);
       setWaitingForPatient(false);
+      setHasConsultationOccurred(true);
       
       toast({
         title: 'Patient Admitted',
@@ -1342,26 +1458,41 @@ export function ConsultationRoom({
                   {formatDuration(callDuration)}
                 </Badge>
               )}
+              {participantRole === 'doctor' && !isNotesOpen && (
+                <div className="hidden sm:flex items-center gap-2 ml-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className={`text-white border border-white/20 ${
+                      isNotesOpen && notesPanelView === 'clerking'
+                        ? 'bg-primary/70 hover:bg-primary/80'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                    onClick={() => toggleDoctorNotesView('clerking')}
+                  >
+                    <Stethoscope className="w-4 h-4 mr-2" />
+                    {isNotesOpen && notesPanelView === 'clerking' ? 'Close Clerking' : 'Add Clerking'}
+                    {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className={`text-white border border-white/20 ${
+                      isNotesOpen && notesPanelView === 'folder'
+                        ? 'bg-primary/70 hover:bg-primary/80'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                    onClick={() => toggleDoctorNotesView('folder')}
+                  >
+                    <FolderOpen className="w-4 h-4 mr-2" />
+                    {isNotesOpen && notesPanelView === 'folder' ? 'Close Patient Folder' : 'View Patient Folder'}
+                    {isNotesOpen && notesPanelView === 'folder' && <X className="w-4 h-4 ml-2" />}
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <TooltipProvider>
-                {participantRole === 'doctor' && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className={`w-8 h-8 text-white/70 hover:text-white hover:bg-white/10 ${
-                          isNotesOpen ? 'bg-primary/20 text-primary' : ''
-                        }`}
-                        onClick={() => setIsNotesOpen(!isNotesOpen)}
-                      >
-                        <FileText className="w-4 h-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Consultation Notes</TooltipContent>
-                  </Tooltip>
-                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button 
@@ -1378,6 +1509,39 @@ export function ConsultationRoom({
               </TooltipProvider>
             </div>
           </div>
+
+          {participantRole === 'doctor' && !isNotesOpen && (
+            <div className="absolute top-14 left-3 right-3 z-30 flex sm:hidden items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                className={`flex-1 text-white border border-white/20 ${
+                  isNotesOpen && notesPanelView === 'clerking'
+                    ? 'bg-primary/70 hover:bg-primary/80'
+                    : 'bg-black/45 hover:bg-black/60'
+                }`}
+                onClick={() => toggleDoctorNotesView('clerking')}
+              >
+                <Stethoscope className="w-4 h-4 mr-2" />
+                {isNotesOpen && notesPanelView === 'clerking' ? 'Close' : 'Add Clerking'}
+                {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className={`flex-1 text-white border border-white/20 ${
+                  isNotesOpen && notesPanelView === 'folder'
+                    ? 'bg-primary/70 hover:bg-primary/80'
+                    : 'bg-black/45 hover:bg-black/60'
+                }`}
+                onClick={() => toggleDoctorNotesView('folder')}
+              >
+                <FolderOpen className="w-4 h-4 mr-2" />
+                {isNotesOpen && notesPanelView === 'folder' ? 'Close' : 'View Folder'}
+                {isNotesOpen && notesPanelView === 'folder' && <X className="w-4 h-4 ml-2" />}
+              </Button>
+            </div>
+          )}
 
           {/* Admit patient overlay for doctor */}
           {participantRole === 'doctor' && isPatientWaiting && (
@@ -1595,13 +1759,17 @@ export function ConsultationRoom({
                   )}
 
                   {connectionStatus === 'connected' && !remoteAudioPublished && (
-                    <div className="absolute top-4 right-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-white text-xs">
+                    <div className={`absolute right-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-white text-xs ${
+                      participantRole === 'doctor' ? 'top-24 sm:top-4' : 'top-4'
+                    }`}>
                       <MicOff className="w-3 h-3" />
                       <span>Mic off</span>
                     </div>
                   )}
                   {connectionStatus === 'connected' && !remoteVideoPublished && (
-                    <div className="absolute top-12 right-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-white text-xs">
+                    <div className={`absolute right-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-white text-xs ${
+                      participantRole === 'doctor' ? 'top-32 sm:top-12' : 'top-12'
+                    }`}>
                       <VideoOff className="w-3 h-3" />
                       <span>Camera off</span>
                     </div>
@@ -1693,10 +1861,16 @@ export function ConsultationRoom({
             unreadMessageCount={unreadMessageCount}
             onToggleAudio={toggleAudio}
             onToggleVideo={toggleVideo}
-            onToggleChat={() => setIsChatOpen(!isChatOpen)}
+            onToggleChat={() => {
+              const nextOpen = !isChatOpen;
+              setIsChatOpen(nextOpen);
+              if (nextOpen) {
+                setIsNotesOpen(false);
+              }
+            }}
             onToggleHand={() => setHandRaised(!handRaised)}
             onLeaveCall={handleLeaveCall}
-            onEndCallForEveryone={participantRole === 'doctor' ? handleEndCallForEveryone : undefined}
+            onEndCallForEveryone={participantRole === 'doctor' ? requestEndCallForEveryone : undefined}
             canEndCallForEveryone={participantRole === 'doctor'}
           />
         </div>
@@ -1733,10 +1907,48 @@ export function ConsultationRoom({
               sessionId={sessionData.id}
               patientId={patientId!}
               doctorId={user!.id}
+              initialView={notesPanelView}
+              onClerkingSaved={() => setHasSavedClerking(true)}
             />
           </div>
         )}
       </div>
+
+      <AlertDialog open={isEndForEveryoneDialogOpen} onOpenChange={setIsEndForEveryoneDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>End Call For Everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ending call for everyone means that the patient does not need follow up and will not be able to join this appointment again.
+              If the patient needs follow up, use Leave call instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={(e) => {
+                e.preventDefault();
+                setIsEndForEveryoneDialogOpen(false);
+                handleLeaveCall().catch((err) => {
+                  console.error('Failed to leave call from follow-up action:', err);
+                });
+              }}
+            >
+              Needs Follow Up
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                setIsEndForEveryoneDialogOpen(false);
+                confirmEndCallForEveryone().catch((err) => {
+                  console.error('Failed to end call for everyone:', err);
+                });
+              }}
+            >
+              End For Everyone
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
