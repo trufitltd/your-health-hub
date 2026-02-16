@@ -126,42 +126,70 @@ export default function DoctorDiscovery() {
           const dateStr = current.toISOString().split('T')[0];
           const dayIndex = current.getDay();
           checkTimes.push({ date: dateStr, time: availabilityFilters.startTime, dayIndex });
-          checkTimes.push({ date: dateStr, time: endT, dayIndex });
+          if (endT !== availabilityFilters.startTime) {
+            checkTimes.push({ date: dateStr, time: endT, dayIndex });
+          }
           current.setDate(current.getDate() + 1);
         }
       }
 
       if (checkTimes.length === 0) return [];
 
+      // Get active doctors first
+      const { data: activeDoctors, error: doctorError } = await supabase
+        .from('doctors')
+        .select('id')
+        .eq('is_active', true);
+      
+      if (doctorError) throw doctorError;
+      if (!activeDoctors || activeDoctors.length === 0) return [];
+
+      const activeDoctorIds = activeDoctors.map(d => d.id);
       const doctorSet = new Set<string>();
 
-      for (const { date, time, dayIndex } of checkTimes) {
-        // Get doctors with schedules for this day/time
-        const { data: schedules, error } = await supabase
+      // Check each doctor
+      for (const doctorId of activeDoctorIds) {
+        let hasAvailableSlot = false;
+
+        // Get all schedules for this doctor
+        const { data: schedules } = await supabase
           .from('doctor_schedules')
-          .select('doctor_id')
-          .eq('day_of_week', dayIndex)
-          .eq('is_available', true)
-          .lte('start_time', time)
-          .gt('end_time', time);
-        
-        if (error) throw error;
+          .select('day_of_week, start_time, end_time, slot_duration_minutes')
+          .eq('doctor_id', doctorId)
+          .eq('is_available', true);
 
-        // Check each doctor for existing bookings at this date/time
-        for (const schedule of schedules || []) {
-          const { data: bookings } = await supabase
-            .from('appointments')
-            .select('id')
-            .eq('doctor_id', schedule.doctor_id)
-            .eq('date', date)
-            .eq('time', time)
-            .in('status', ['pending', 'confirmed'])
-            .limit(1);
+        if (!schedules || schedules.length === 0) continue;
 
-          // Only add doctor if no booking exists
-          if (!bookings || bookings.length === 0) {
-            doctorSet.add(schedule.doctor_id);
+        // Check each requested time
+        for (const { date, time, dayIndex } of checkTimes) {
+          // Find schedules for this day
+          const daySchedules = schedules.filter(s => s.day_of_week === dayIndex);
+          if (daySchedules.length === 0) continue;
+
+          // Check if time falls within any schedule and generate slots
+          for (const schedule of daySchedules) {
+            if (time >= schedule.start_time && time < schedule.end_time) {
+              // Check if this specific time slot exists in the schedule
+              const { data: booking } = await supabase
+                .from('appointments')
+                .select('id')
+                .eq('doctor_id', doctorId)
+                .eq('date', date)
+                .eq('time', time)
+                .in('status', ['pending', 'confirmed'])
+                .limit(1);
+
+              if (!booking || booking.length === 0) {
+                hasAvailableSlot = true;
+                break;
+              }
+            }
           }
+          if (hasAvailableSlot) break;
+        }
+
+        if (hasAvailableSlot) {
+          doctorSet.add(doctorId);
         }
       }
 
@@ -274,6 +302,14 @@ export default function DoctorDiscovery() {
         (payload) => {
           console.log('Doctor status changed:', payload);
           queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
+          queryClient.invalidateQueries({ queryKey: ['available-doctors'] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'appointments' },
+        (payload) => {
+          console.log('Appointment changed:', payload);
           queryClient.invalidateQueries({ queryKey: ['available-doctors'] });
         }
       )
