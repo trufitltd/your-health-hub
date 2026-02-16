@@ -1,12 +1,6 @@
 import { Mic, MicOff, Video, VideoOff, MessageSquare, Hand, PhoneOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
 
 interface ControlBarProps {
   isAudioEnabled: boolean;
@@ -53,8 +47,8 @@ export function ControlBar({
                       variant={isAudioEnabled ? 'secondary' : 'destructive'}
                       size="icon"
                       className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all ${
-                        isAudioEnabled 
-                          ? 'bg-white/10 hover:bg-white/20 text-white' 
+                        isAudioEnabled
+                          ? 'bg-white/10 hover:bg-white/20 text-white'
                           : 'bg-red-500 hover:bg-red-600'
                       }`}
                       onClick={onToggleAudio}
@@ -73,8 +67,8 @@ export function ControlBar({
                         variant={isVideoEnabled ? 'secondary' : 'destructive'}
                         size="icon"
                         className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all ${
-                          isVideoEnabled 
-                            ? 'bg-white/10 hover:bg-white/20 text-white' 
+                          isVideoEnabled
+                            ? 'bg-white/10 hover:bg-white/20 text-white'
                             : 'bg-red-500 hover:bg-red-600'
                         }`}
                         onClick={onToggleVideo}
@@ -95,8 +89,8 @@ export function ControlBar({
               <TooltipTrigger asChild>
                 <button
                   className={`relative w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all flex items-center justify-center ${
-                    isChatOpen 
-                      ? 'bg-primary text-primary-foreground' 
+                    isChatOpen
+                      ? 'bg-primary text-primary-foreground'
                       : 'bg-white/10 hover:bg-white/20 text-white'
                   }`}
                   onClick={onToggleChat}
@@ -131,8 +125,8 @@ export function ControlBar({
                   variant="ghost"
                   size="icon"
                   className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${
-                    handRaised 
-                      ? 'bg-amber-500 text-white' 
+                    handRaised
+                      ? 'bg-amber-500 text-white'
                       : 'bg-white/10 hover:bg-white/20 text-white'
                   }`}
                   onClick={onToggleHand}
@@ -147,28 +141,19 @@ export function ControlBar({
 
             {/* Leave / end call button */}
             {canEndCallForEveryone && onEndCallForEveryone ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Button
                     variant="destructive"
                     size="icon"
                     className="w-10 h-10 sm:w-14 sm:h-12 rounded-full bg-red-500 hover:bg-red-600"
+                    onClick={onEndCallForEveryone}
                   >
                     <PhoneOff className="w-5 h-5" />
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" align="center" className="w-52">
-                  <DropdownMenuItem onClick={onLeaveCall}>
-                    Leave call
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onClick={onEndCallForEveryone}
-                  >
-                    End call for everyone
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </TooltipTrigger>
+                <TooltipContent>End Call For Everyone</TooltipContent>
+              </Tooltip>
             ) : (
               <Tooltip>
                 <TooltipTrigger asChild>
