@@ -12,6 +12,8 @@ import { Label } from '@/components/ui/label';
 import { Calendar, Clock, AlertCircle } from 'lucide-react';
 import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailableSlots';
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
+import { supabase } from '@/integrations/supabase/client';
+import { useQuery } from '@tanstack/react-query';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -37,6 +39,25 @@ export function SlotSelectionModal({
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+
+  // Fetch booked appointments for selected doctor and date
+  const { data: bookedSlots = [] } = useQuery({
+    queryKey: ['booked-slots', selectedDoctor, selectedDate],
+    queryFn: async () => {
+      if (!selectedDoctor || !selectedDate) return [];
+      
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('time')
+        .eq('doctor_id', selectedDoctor)
+        .eq('date', selectedDate)
+        .in('status', ['pending', 'confirmed']);
+      
+      if (error) throw error;
+      return (data || []).map(apt => apt.time);
+    },
+    enabled: !!selectedDoctor && !!selectedDate,
+  });
 
   // Pricing logic
   const getPricing = (specialty: string) => {
@@ -89,16 +110,13 @@ export function SlotSelectionModal({
     return Array.from(dates).sort();
   }, [selectedDoctor, doctorSchedules]);
 
-  // Get time slots for selected date
-  // Only show times where slots are actually available and the doctor is available that day
+  // Get time slots for selected date, excluding booked slots
   const timeSlots = useMemo(() => {
     if (!selectedDate || !selectedDoctor) return [];
 
     const date = new Date(selectedDate);
     const dayOfWeek = date.getUTCDay();
 
-    // Filter for schedules on this day of week
-    // The available_slots view already includes is_available = true filtering
     const schedules = doctorSchedules.filter(
       (s) => s.day_of_week === dayOfWeek
     );
@@ -236,19 +254,26 @@ export function SlotSelectionModal({
                 </div>
               ) : (
                 <div className="grid grid-cols-4 gap-2">
-                  {timeSlots.map((time) => (
-                    <button
-                      key={time}
-                      onClick={() => setSelectedTime(time)}
-                      className={`p-2 rounded-lg border-2 transition-colors text-xs ${
-                        selectedTime === time
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-primary/50'
-                      }`}
-                    >
-                      {time}
-                    </button>
-                  ))}
+                  {timeSlots.map((time) => {
+                    const isBooked = bookedSlots.includes(time);
+                    return (
+                      <button
+                        key={time}
+                        onClick={() => !isBooked && setSelectedTime(time)}
+                        disabled={isBooked}
+                        className={`p-2 rounded-lg border-2 transition-colors text-xs ${
+                          isBooked
+                            ? 'border-muted bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'
+                            : selectedTime === time
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        {time}
+                        {isBooked && <span className="block text-[9px] mt-0.5">Booked</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

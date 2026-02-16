@@ -103,6 +103,25 @@ export default function SlotSelection() {
     },
   });
 
+  // Fetch booked appointments for selected doctor and date
+  const { data: bookedSlots = [] } = useQuery({
+    queryKey: ['booked-slots', state.doctorId, selectedDate],
+    queryFn: async () => {
+      if (!state.doctorId || !selectedDate) return [];
+      
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('time')
+        .eq('doctor_id', state.doctorId)
+        .eq('date', selectedDate)
+        .in('status', ['pending', 'confirmed']);
+      
+      if (error) throw error;
+      return (data || []).map(apt => apt.time);
+    },
+    enabled: !!state.doctorId && !!selectedDate,
+  });
+
   // Get available dates (next 30 days)
   const availableDates = useMemo(() => {
     if (!schedules.length) {
@@ -140,12 +159,11 @@ export default function SlotSelection() {
     return Array.from(dates).sort();
   }, [schedules]);
 
-  // Get available times for selected date
+  // Get available times for selected date, excluding booked slots
   const availableTimes = useMemo(() => {
     if (!selectedDate || !schedules.length) return [];
 
     const date = new Date(selectedDate);
-    // Get day of week as number (0=Sunday, 1=Monday, etc.)
     const dayIndex = date.getDay();
 
     const daySchedules = schedules.filter(s => 
@@ -410,20 +428,27 @@ export default function SlotSelection() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                        {availableTimes.map(time => (
-                          <motion.button
-                            key={time}
-                            whileHover={{ scale: 1.05 }}
-                            onClick={() => setSelectedTime(time)}
-                            className={`p-3 rounded-lg border-2 transition-all text-center text-sm font-medium ${
-                              selectedTime === time
-                                ? 'border-primary bg-primary text-primary-foreground'
-                                : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
-                            }`}
-                          >
-                            {time}
-                          </motion.button>
-                        ))}
+                        {availableTimes.map(time => {
+                          const isBooked = bookedSlots.includes(time);
+                          return (
+                            <motion.button
+                              key={time}
+                              whileHover={!isBooked ? { scale: 1.05 } : {}}
+                              onClick={() => !isBooked && setSelectedTime(time)}
+                              disabled={isBooked}
+                              className={`p-3 rounded-lg border-2 transition-all text-center text-sm font-medium ${
+                                isBooked
+                                  ? 'border-muted bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'
+                                  : selectedTime === time
+                                  ? 'border-primary bg-primary text-primary-foreground'
+                                  : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
+                              }`}
+                            >
+                              {time}
+                              {isBooked && <span className="block text-[10px] mt-0.5">Booked</span>}
+                            </motion.button>
+                          );
+                        })}
                       </div>
                     )}
                   </CardContent>
