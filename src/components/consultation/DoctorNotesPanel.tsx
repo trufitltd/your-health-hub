@@ -1,32 +1,20 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, FileText, User, Calendar, AlertTriangle, Pill, Download } from 'lucide-react';
+import { X, Save, Stethoscope, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
-import { useHealthRecords } from '@/hooks/useHealthRecords';
 
-interface PatientFolder {
-  id: string;
-  patient_type: 'new' | 'returning';
-  medical_history: string | null;
-  allergies: string | null;
-  current_medications: string | null;
-  previous_diagnoses: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DoctorNotesPanelProps {
+interface ClerkingPanelProps {
   isOpen: boolean;
   onClose: () => void;
   sessionId: string;
   patientId: string;
   doctorId: string;
+  initialView?: 'clerking' | 'folder';
+  onClerkingSaved?: () => void;
 }
 
 export function DoctorNotesPanel({
@@ -34,56 +22,230 @@ export function DoctorNotesPanel({
   onClose,
   sessionId,
   patientId,
-  doctorId
-}: DoctorNotesPanelProps) {
-  const [diagnosis, setDiagnosis] = useState('');
-  const [prescriptions, setPrescriptions] = useState('');
+  doctorId,
+  initialView = 'clerking',
+  onClerkingSaved
+}: ClerkingPanelProps) {
+
+  const storageKey = `clerking-${sessionId}`;
+  const [activeView, setActiveView] = useState<'clerking' | 'folder'>('clerking');
+
+  const [presentingComplaint, setPresentingComplaint] = useState('');
+  const [historyOfPresentingComplaint, setHistoryOfPresentingComplaint] = useState('');
+  const [pastMedicalHistory, setPastMedicalHistory] = useState('');
+  const [pastDrugHistory, setPastDrugHistory] = useState('');
+  const [allergies, setAllergies] = useState('');
+  const [familyAndSocialHistory, setFamilyAndSocialHistory] = useState('');
+  const [clinicalExamination, setClinicalExamination] = useState('');
+  const [assessment, setAssessment] = useState('');
   const [treatmentPlan, setTreatmentPlan] = useState('');
-  const [followUpNotes, setFollowUpNotes] = useState('');
+  const [investigations, setInvestigations] = useState('');
+  const [ePrescription, setEPrescription] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [patientFolder, setPatientFolder] = useState<PatientFolder | null>(null);
-  const [isLoadingFolder, setIsLoadingFolder] = useState(true);
-  const { records: healthRecords, isLoading: recordsLoading } = useHealthRecords(patientId);
+  const [isFolderLoading, setIsFolderLoading] = useState(false);
+  const [folderData, setFolderData] = useState<Record<string, any> | null>(null);
+  const [folderNotes, setFolderNotes] = useState<Array<{
+    id: string;
+    created_at: string;
+    diagnosis: string | null;
+    treatment_plan: string | null;
+    follow_up_notes: string | null;
+  }>>([]);
 
-  // Load patient folder on mount
+  const folderFieldOrder = [
+    'patient_type',
+    'presenting_complaint',
+    'history_of_presenting_complaint',
+    'past_medical_history',
+    'past_drug_history',
+    'allergies',
+    'family_social_history',
+    'clinical_examination',
+    'assessment',
+    'treatment_plan',
+    'investigations',
+    'e_prescription',
+    'medical_history',
+    'current_medications',
+    'previous_diagnoses',
+  ];
+
+  const formatFolderFieldLabel = (field: string) =>
+    field
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+
   useEffect(() => {
-    const loadPatientFolder = async () => {
-      if (!isOpen || !patientId) return;
-      
-      setIsLoadingFolder(true);
-      try {
-        const { data, error } = await supabase
-          .from('patient_folders')
-          .select('*')
-          .eq('patient_id', patientId)
-          .single();
+    if (isOpen) {
+      setActiveView(initialView);
+    }
+  }, [isOpen, initialView]);
 
-        if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-          console.error('Error loading patient folder:', error);
-        } else {
-          setPatientFolder(data);
-        }
+  /* ---------------- AUTO SAVE ---------------- */
+
+  useEffect(() => {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      setPresentingComplaint(parsed.presentingComplaint || '');
+      setHistoryOfPresentingComplaint(parsed.historyOfPresentingComplaint || '');
+      setPastMedicalHistory(parsed.pastMedicalHistory || '');
+      setPastDrugHistory(parsed.pastDrugHistory || '');
+      setAllergies(parsed.allergies || '');
+      setFamilyAndSocialHistory(parsed.familyAndSocialHistory || '');
+      setClinicalExamination(parsed.clinicalExamination || '');
+      setAssessment(parsed.assessment || '');
+      setTreatmentPlan(parsed.treatmentPlan || '');
+      setInvestigations(parsed.investigations || '');
+      setEPrescription(parsed.ePrescription || '');
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          presentingComplaint,
+          historyOfPresentingComplaint,
+          pastMedicalHistory,
+          pastDrugHistory,
+          allergies,
+          familyAndSocialHistory,
+          clinicalExamination,
+          assessment,
+          treatmentPlan,
+          investigations,
+          ePrescription
+        })
+      );
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [
+    presentingComplaint,
+    historyOfPresentingComplaint,
+    pastMedicalHistory,
+    pastDrugHistory,
+    allergies,
+    familyAndSocialHistory,
+    clinicalExamination,
+    assessment,
+    treatmentPlan,
+    investigations,
+    ePrescription,
+    storageKey
+  ]);
+
+  useEffect(() => {
+    if (!isOpen || activeView !== 'folder') return;
+
+    const loadPatientFolder = async () => {
+      setIsFolderLoading(true);
+      try {
+        const [{ data: folder }, { data: notes }] = await Promise.all([
+          supabase
+            .from('patient_folders')
+            .select('*')
+            .eq('patient_id', patientId)
+            .maybeSingle(),
+          supabase
+            .from('doctor_consultation_notes')
+            .select('id, created_at, diagnosis, treatment_plan, follow_up_notes')
+            .eq('patient_id', patientId)
+            .eq('doctor_id', doctorId)
+            .order('created_at', { ascending: false })
+            .limit(10)
+        ]);
+
+        setFolderData((folder as Record<string, any> | null) ?? null);
+        setFolderNotes(
+          (notes || []).map((note) => ({
+            id: note.id as string,
+            created_at: note.created_at as string,
+            diagnosis: (note.diagnosis as string | null) ?? null,
+            treatment_plan: (note.treatment_plan as string | null) ?? null,
+            follow_up_notes: (note.follow_up_notes as string | null) ?? null
+          }))
+        );
       } catch (err) {
-        console.error('Error loading patient folder:', err);
+        console.error('Failed to load patient folder:', err);
+        toast({
+          title: 'Error',
+          description: 'Unable to load patient folder.',
+          variant: 'destructive'
+        });
       } finally {
-        setIsLoadingFolder(false);
+        setIsFolderLoading(false);
       }
     };
 
     loadPatientFolder();
-  }, [isOpen, patientId]);
+  }, [isOpen, activeView, patientId, doctorId]);
 
-  const handleSaveNotes = async () => {
-    if (!diagnosis.trim() && !prescriptions.trim() && !treatmentPlan.trim()) {
+  /* ---------------- SAVE ---------------- */
+
+  const handleSaveClerking = async () => {
+
+    if (
+      !presentingComplaint.trim() &&
+      !historyOfPresentingComplaint.trim() &&
+      !pastMedicalHistory.trim() &&
+      !pastDrugHistory.trim() &&
+      !allergies.trim() &&
+      !familyAndSocialHistory.trim() &&
+      !clinicalExamination.trim() &&
+      !assessment.trim() &&
+      !treatmentPlan.trim() &&
+      !investigations.trim() &&
+      !ePrescription.trim()
+    ) {
       toast({
-        title: 'Empty Notes',
-        description: 'Please add at least one note before saving.',
+        title: 'Empty Clerking',
+        description: 'Please document at least one section.',
         variant: 'destructive'
       });
       return;
     }
 
+    const composedNote = `
+Presenting Complaint:
+${presentingComplaint}
+
+History of Presenting Complaint:
+${historyOfPresentingComplaint}
+
+Past Medical History:
+${pastMedicalHistory}
+
+Past Drug History:
+${pastDrugHistory}
+
+Allergies:
+${allergies}
+
+Family and Social History:
+${familyAndSocialHistory}
+
+Clinical Examination:
+${clinicalExamination}
+
+Assessment:
+${assessment}
+
+Treatment Plan:
+${treatmentPlan}
+
+Investigations:
+${investigations}
+
+E-Prescription:
+${ePrescription}
+`;
+
     setIsSaving(true);
+
     try {
       const { error } = await supabase
         .from('doctor_consultation_notes')
@@ -91,68 +253,45 @@ export function DoctorNotesPanel({
           session_id: sessionId,
           patient_id: patientId,
           doctor_id: doctorId,
-          diagnosis: diagnosis.trim() || null,
-          prescriptions: prescriptions.trim() || null,
+          diagnosis: assessment.trim() || null,
           treatment_plan: treatmentPlan.trim() || null,
-          follow_up_notes: followUpNotes.trim() || null
+          prescriptions: ePrescription.trim() || null,
+          follow_up_notes: composedNote
         });
 
       if (error) throw error;
 
-      toast({
-        title: 'Notes Saved',
-        description: 'Consultation notes have been saved successfully.',
-        duration: 3000
+      await supabase.rpc('doctor_append_to_patient_folder', {
+        p_patient_id: patientId,
+        p_note_text: composedNote,
+        p_presenting_complaint: presentingComplaint.trim() || null,
+        p_history_of_presenting_complaint: historyOfPresentingComplaint.trim() || null,
+        p_past_medical_history: pastMedicalHistory.trim() || null,
+        p_past_drug_history: pastDrugHistory.trim() || null,
+        p_allergies: allergies.trim() || null,
+        p_family_social_history: familyAndSocialHistory.trim() || null,
+        p_clinical_examination: clinicalExamination.trim() || null,
+        p_assessment: assessment.trim() || null,
+        p_treatment_plan: treatmentPlan.trim() || null,
+        p_investigations: investigations.trim() || null,
+        p_e_prescription: ePrescription.trim() || null
       });
 
-      // Clear form
-      setDiagnosis('');
-      setPrescriptions('');
-      setTreatmentPlan('');
-      setFollowUpNotes('');
+      localStorage.removeItem(storageKey);
+
+      toast({
+        title: 'Clerking Saved',
+        description: 'Clinical notes recorded successfully.'
+      });
+      onClerkingSaved?.();
+
     } catch (err) {
-      console.error('Error saving notes:', err);
+      console.error(err);
       toast({
         title: 'Error',
-        description: 'Failed to save consultation notes.',
+        description: 'Failed to save clerking.',
         variant: 'destructive'
       });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleAddToPatientFolder = async () => {
-    if (!patientId) {
-      toast({ title: 'Error', description: 'No patient selected', variant: 'destructive' });
-      return;
-    }
-
-    const composed = [
-      diagnosis.trim() ? `Diagnosis:\n${diagnosis.trim()}` : null,
-      prescriptions.trim() ? `Prescriptions:\n${prescriptions.trim()}` : null,
-      treatmentPlan.trim() ? `Treatment Plan:\n${treatmentPlan.trim()}` : null,
-      followUpNotes.trim() ? `Follow-up:\n${followUpNotes.trim()}` : null,
-    ].filter(Boolean).join('\n\n');
-
-    if (!composed) {
-      toast({ title: 'Nothing to add', description: 'Add some notes first.', variant: 'destructive' });
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const { data, error } = await supabase.rpc('doctor_append_to_patient_folder', {
-        p_patient_id: patientId,
-        p_note_text: composed
-      });
-
-      if (error) throw error;
-
-      toast({ title: 'Added to Folder', description: 'Notes appended to patient folder.' });
-    } catch (err) {
-      console.error('Error adding to patient folder:', err);
-      toast({ title: 'Error', description: 'Failed to update patient folder.', variant: 'destructive' });
     } finally {
       setIsSaving(false);
     }
@@ -166,234 +305,240 @@ export function DoctorNotesPanel({
           animate={{ width: 'auto', opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="w-full sm:w-80 md:w-96 h-full max-h-screen flex flex-col bg-[#252542] border-r border-white/10 overflow-hidden"
+          className="relative w-full sm:w-[36rem] md:w-[44rem] h-full flex flex-col bg-[#252542] border-r border-white/10"
         >
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Close sidebar"
+            className="absolute top-3 right-3 z-50 sm:hidden text-white bg-black/40 border border-white/20 hover:bg-black/60 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-white/10">
             <h3 className="font-semibold text-white flex items-center gap-2">
-              <FileText className="w-4 h-4" />
-              Consultation Notes
+              <Stethoscope className="w-4 h-4" />
+              Clerking
             </h3>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              className="w-8 h-8 text-white/70 hover:text-white"
+
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={onClose}
+              aria-label="Close sidebar"
+              className="text-white hover:bg-white/10 hover:text-white"
             >
               <X className="w-4 h-4" />
             </Button>
           </div>
 
-          {/* Content */}
-          <ScrollArea className="flex-1 p-4">
-            <div className="space-y-6">
-              {/* Patient Medical History Section */}
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <User className="w-4 h-4 text-primary" />
-                  <h4 className="font-medium text-white">Patient Medical History</h4>
-                  {patientFolder && (
-                    <Badge variant={patientFolder.patient_type === 'new' ? 'default' : 'secondary'} className="text-xs">
-                      {patientFolder.patient_type === 'new' ? 'New Patient' : 'Returning Patient'}
-                    </Badge>
-                  )}
-                </div>
-                
-                {isLoadingFolder ? (
-                  <div className="text-slate-400 text-sm">Loading patient information...</div>
-                ) : patientFolder ? (
-                  <div className="space-y-3 text-sm">
-                    {patientFolder.medical_history && (
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <FileText className="w-3 h-3 text-slate-400" />
-                          <span className="text-slate-300 font-medium">Medical History:</span>
-                        </div>
-                        <p className="text-slate-400 bg-[#1a1a2e] p-2 rounded text-xs">
-                          {patientFolder.medical_history}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {patientFolder.allergies && (
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <AlertTriangle className="w-3 h-3 text-red-400" />
-                          <span className="text-slate-300 font-medium">Allergies:</span>
-                        </div>
-                        <p className="text-red-200 bg-red-900/20 p-2 rounded text-xs">
-                          {patientFolder.allergies}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {patientFolder.current_medications && (
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <Pill className="w-3 h-3 text-blue-400" />
-                          <span className="text-slate-300 font-medium">Current Medications:</span>
-                        </div>
-                        <p className="text-blue-200 bg-blue-900/20 p-2 rounded text-xs">
-                          {patientFolder.current_medications}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {patientFolder.previous_diagnoses && (
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <Calendar className="w-3 h-3 text-slate-400" />
-                          <span className="text-slate-300 font-medium">Previous Diagnoses:</span>
-                        </div>
-                        <p className="text-slate-400 bg-[#1a1a2e] p-2 rounded text-xs">
-                          {patientFolder.previous_diagnoses}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {!patientFolder.medical_history && !patientFolder.allergies && 
-                     !patientFolder.current_medications && !patientFolder.previous_diagnoses && (
-                      <p className="text-slate-500 text-xs italic">No medical history available</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-slate-500 text-xs italic">No patient folder found</p>
-                )}
-              </div>
-              
-              <Separator className="bg-white/10" />
-              
-              {/* Health Records Section */}
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <FileText className="w-4 h-4 text-primary" />
-                  <h4 className="font-medium text-white">Patient Health Records</h4>
-                </div>
-                
-                {recordsLoading ? (
-                  <div className="text-slate-400 text-sm">Loading health records...</div>
-                ) : healthRecords.length === 0 ? (
-                  <p className="text-slate-500 text-xs italic">No health records uploaded</p>
-                ) : (
-                  <div className="space-y-2">
-                    {healthRecords.map((record) => (
-                      <div key={record.id} className="flex items-center justify-between p-2 rounded bg-[#1a1a2e] hover:bg-[#1f1f3a] transition-colors">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-white truncate">{record.file_name}</p>
-                          <p className="text-xs text-slate-400">
-                            {new Date(record.uploaded_at).toLocaleDateString()}
-                            {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
-                          </p>
-                          {record.notes && (
-                            <p className="text-xs text-slate-500 mt-1">{record.notes}</p>
-                          )}
-                        </div>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-primary hover:text-primary/80 flex-shrink-0"
-                          onClick={() => window.open(record.file_url, '_blank')}
-                        >
-                          <Download className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              
-              <Separator className="bg-white/10" />
-              
-              {/* Consultation Notes Section */}
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <FileText className="w-4 h-4 text-primary" />
-                  <h4 className="font-medium text-white">Consultation Notes</h4>
-                </div>
-                
+          {/* View switcher */}
+          <div className="p-3 flex gap-2 border-b border-white/10">
+            <Button
+              size="sm"
+              variant={activeView === 'clerking' ? 'default' : 'outline'}
+              onClick={() => setActiveView('clerking')}
+              className="flex-1"
+            >
+              Add Clerking
+            </Button>
+            <Button
+              size="sm"
+              variant={activeView === 'folder' ? 'default' : 'outline'}
+              onClick={() => setActiveView('folder')}
+              className="flex-1"
+            >
+              <FolderOpen className="w-3 h-3 mr-1" />
+              View Patient Folder
+            </Button>
+          </div>
+
+          {activeView === 'clerking' ? (
+            <>
+              <ScrollArea className="flex-1 p-4">
                 <div className="space-y-4">
-                  {/* Diagnosis */}
+
                   <div>
-                    <label className="text-sm font-medium text-white mb-2 block">
-                      Diagnosis
-                    </label>
+                    <label className="text-xs text-slate-400">Presenting Complaint</label>
                     <Textarea
-                      placeholder="Enter patient diagnosis..."
-                      value={diagnosis}
-                      onChange={(e) => setDiagnosis(e.target.value)}
-                      className="bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary resize-none h-20"
+                      placeholder="Enter presenting complaint..."
+                      value={presentingComplaint}
+                      onChange={(e) => setPresentingComplaint(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
                     />
                   </div>
 
-                  {/* Prescriptions */}
                   <div>
-                    <label className="text-sm font-medium text-white mb-2 block">
-                      Prescriptions
-                    </label>
+                    <label className="text-xs text-slate-400">History of Presenting Complaint</label>
                     <Textarea
-                      placeholder="Enter prescriptions..."
-                      value={prescriptions}
-                      onChange={(e) => setPrescriptions(e.target.value)}
-                      className="bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary resize-none h-20"
+                      placeholder="Enter history of presenting complaint..."
+                      value={historyOfPresentingComplaint}
+                      onChange={(e) => setHistoryOfPresentingComplaint(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
                     />
                   </div>
 
-                  {/* Treatment Plan */}
                   <div>
-                    <label className="text-sm font-medium text-white mb-2 block">
-                      Treatment Plan
-                    </label>
+                    <label className="text-xs text-slate-400">Past Medical History</label>
+                    <Textarea
+                      placeholder="Enter past medical history..."
+                      value={pastMedicalHistory}
+                      onChange={(e) => setPastMedicalHistory(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Past Drug History</label>
+                    <Textarea
+                      placeholder="Enter past drug history..."
+                      value={pastDrugHistory}
+                      onChange={(e) => setPastDrugHistory(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Allergies</label>
+                    <Textarea
+                      placeholder="Enter allergies..."
+                      value={allergies}
+                      onChange={(e) => setAllergies(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Family and Social History</label>
+                    <Textarea
+                      placeholder="Enter family and social history..."
+                      value={familyAndSocialHistory}
+                      onChange={(e) => setFamilyAndSocialHistory(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Clinical Examination</label>
+                    <Textarea
+                      placeholder="Enter clinical examination..."
+                      value={clinicalExamination}
+                      onChange={(e) => setClinicalExamination(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Assessment</label>
+                    <Textarea
+                      placeholder="Enter assessment..."
+                      value={assessment}
+                      onChange={(e) => setAssessment(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">Treatment Plan</label>
                     <Textarea
                       placeholder="Enter treatment plan..."
                       value={treatmentPlan}
                       onChange={(e) => setTreatmentPlan(e.target.value)}
-                      className="bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary resize-none h-20"
+                      className="bg-[#1a1a2e] text-white mt-1"
                     />
                   </div>
 
-                  {/* Follow-up Notes */}
                   <div>
-                    <label className="text-sm font-medium text-white mb-2 block">
-                      Follow-up Notes
-                    </label>
+                    <label className="text-xs text-slate-400">Investigations</label>
                     <Textarea
-                      placeholder="Enter follow-up instructions..."
-                      value={followUpNotes}
-                      onChange={(e) => setFollowUpNotes(e.target.value)}
-                      className="bg-[#1a1a2e] border-white/10 text-white placeholder-slate-500 focus:ring-primary resize-none h-20"
+                      placeholder="Enter investigations..."
+                      value={investigations}
+                      onChange={(e) => setInvestigations(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
                     />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-400">E-Prescription</label>
+                    <Textarea
+                      placeholder="Enter e-prescription..."
+                      value={ePrescription}
+                      onChange={(e) => setEPrescription(e.target.value)}
+                      className="bg-[#1a1a2e] text-white mt-1"
+                    />
+                  </div>
+
+                </div>
+              </ScrollArea>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-white/10">
+                <Button
+                  onClick={handleSaveClerking}
+                  disabled={isSaving}
+                  className="w-full bg-green-600 hover:bg-green-700"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {isSaving ? 'Saving...' : 'Save Clerking'}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <ScrollArea className="flex-1 p-4">
+              {isFolderLoading ? (
+                <p className="text-sm text-slate-400">Loading patient folder...</p>
+              ) : (
+                <div className="space-y-5">
+                  {folderData ? (
+                    <div className="space-y-3">
+                      {folderFieldOrder.map((field) => (
+                        <div key={field}>
+                          <h4 className="text-sm font-semibold text-white mb-2">{formatFolderFieldLabel(field)}</h4>
+                          <div className="rounded-md border border-white/10 bg-[#1a1a2e] p-3 text-sm text-slate-200 whitespace-pre-wrap">
+                            {folderData[field] || `No ${formatFolderFieldLabel(field).toLowerCase()} available yet.`}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400">No patient folder found yet.</p>
+                  )}
+
+                  <div>
+                    <h4 className="text-sm font-semibold text-white mb-2">Recent Clerking Entries</h4>
+                    {folderNotes.length === 0 ? (
+                      <p className="text-sm text-slate-400">No clerking entries yet.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {folderNotes.map((note) => (
+                          <div key={note.id} className="rounded-md border border-white/10 bg-[#1a1a2e] p-3">
+                            <p className="text-[11px] text-slate-400 mb-2">
+                              {new Date(note.created_at).toLocaleString()}
+                            </p>
+                            <p className="text-xs text-slate-300">
+                              <span className="text-slate-400">Assessment: </span>
+                              {note.diagnosis || 'Not recorded'}
+                            </p>
+                            <p className="text-xs text-slate-300 mt-1 whitespace-pre-wrap">
+                              <span className="text-slate-400">Plan: </span>
+                              {note.treatment_plan || 'Not recorded'}
+                            </p>
+                            <p className="text-xs text-slate-300 mt-1 whitespace-pre-wrap">
+                              <span className="text-slate-400">Full Clerking Note: </span>
+                              {note.follow_up_notes || 'Not recorded'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            </div>
-          </ScrollArea>
-
-          {/* Footer */}
-          <div className="p-4 border-t border-white/10 space-y-2 flex-shrink-0 bg-[#252542]">
-            <Button
-              onClick={handleSaveNotes}
-              disabled={isSaving}
-              className="w-full bg-green-600 hover:bg-green-700 text-white gap-2 min-h-[48px] touch-manipulation"
-            >
-              <Save className="w-4 h-4" />
-              {isSaving ? 'Saving...' : 'Save Notes'}
-            </Button>
-            <Button
-              onClick={handleAddToPatientFolder}
-              disabled={isSaving}
-              variant="outline"
-              className="w-full border-slate-600 text-slate-300 hover:bg-slate-800 min-h-[48px] touch-manipulation"
-            >
-              Add to Patient Folder
-            </Button>
-            <Button
-              onClick={onClose}
-              variant="outline"
-              className="w-full border-slate-600 text-slate-300 hover:bg-slate-800 min-h-[48px] touch-manipulation"
-            >
-              Close
-            </Button>
-          </div>
+              )}
+            </ScrollArea>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
