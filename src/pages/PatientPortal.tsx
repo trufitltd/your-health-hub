@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 
 import { Link } from 'react-router-dom';
@@ -231,6 +231,7 @@ const PatientPortal = () => {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'all'>('confirmed');
+  const lastHandledReviewAppointmentRef = useRef<string | null>(null);
 
   // Pricing logic (single uniform consultation price)
   const getPricing = (specialty: string) => {
