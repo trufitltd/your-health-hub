@@ -135,6 +135,15 @@ export function SlotSelectionModal({
       slots.forEach((time) => times.add(time));
     });
 
+    // Filter out past times if selected date is today
+    const now = new Date();
+    const isToday = selectedDate === now.toISOString().split('T')[0];
+    
+    if (isToday) {
+      const currentTime = now.toTimeString().slice(0, 5);
+      return Array.from(times).filter(time => time > currentTime).sort();
+    }
+
     return Array.from(times).sort();
   }, [selectedDate, selectedDoctor, doctorSchedules]);
 
@@ -256,13 +265,20 @@ export function SlotSelectionModal({
                 <div className="grid grid-cols-4 gap-2">
                   {timeSlots.map((time) => {
                     const isBooked = bookedSlots.includes(time);
+                    const isPast = (() => {
+                      const now = new Date();
+                      const slotDateTime = new Date(`${selectedDate}T${time}`);
+                      return slotDateTime < now;
+                    })();
+                    const isDisabled = isBooked || isPast;
+                    
                     return (
                       <button
                         key={time}
-                        onClick={() => !isBooked && setSelectedTime(time)}
-                        disabled={isBooked}
+                        onClick={() => !isDisabled && setSelectedTime(time)}
+                        disabled={isDisabled}
                         className={`p-2 rounded-lg border-2 transition-colors text-xs ${
-                          isBooked
+                          isDisabled
                             ? 'border-muted bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'
                             : selectedTime === time
                             ? 'border-primary bg-primary/5'
@@ -271,6 +287,7 @@ export function SlotSelectionModal({
                       >
                         {time}
                         {isBooked && <span className="block text-[9px] mt-0.5">Booked</span>}
+                        {isPast && !isBooked && <span className="block text-[9px] mt-0.5">Past</span>}
                       </button>
                     );
                   })}
