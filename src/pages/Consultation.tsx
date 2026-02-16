@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ConsultationRoom } from '@/components/consultation/ConsultationRoom';
 import { PreConsultationCheck } from '@/components/consultation/PreConsultationCheck';
@@ -18,6 +18,13 @@ const Consultation = () => {
   const [phase, setPhase] = useState<ConsultationPhase>('loading');
   const [isAdmitted, setIsAdmitted] = useState(false);
   const [patientWaiting, setPatientWaiting] = useState(false);
+  const patientRedirectedToReviewRef = useRef(false);
+
+  const redirectPatientToReview = useCallback(() => {
+    if (role !== 'patient' || !appointmentId || patientRedirectedToReviewRef.current) return;
+    patientRedirectedToReviewRef.current = true;
+    navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
+  }, [role, appointmentId, navigate]);
 
   // Consultations are uniform; default type is video-enabled internally
   // (no URL type parameter expected anymore)
@@ -71,16 +78,18 @@ const Consultation = () => {
           setPhase('ended');
           toast({
             title: 'Consultation Ended',
-            description: role === 'patient' ? 'The doctor has ended the consultation.' : 'The patient has left the consultation.'
+            description: role === 'patient'
+              ? 'The doctor has ended the consultation. Please leave a review.'
+              : 'The patient has left the consultation.'
           });
           // Navigate back after a brief delay
           setTimeout(() => {
             if (role === 'doctor') {
               navigate('/doctor-portal');
             } else {
-              navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
+              redirectPatientToReview();
             }
-          }, 2000);
+          }, role === 'doctor' ? 2000 : 400);
         } else if (role === 'patient' && newStatusStr === 'active') {
           console.log('Patient being admitted to consultation');
           setIsAdmitted(true);
@@ -105,7 +114,36 @@ const Consultation = () => {
       console.log('Unsubscribing from consultation updates');
       channel.unsubscribe();
     };
-  }, [appointmentId, navigate, role, participantName]);
+  }, [appointmentId, navigate, role, participantName, redirectPatientToReview]);
+
+  // Fallback: if doctor ends for everyone, appointment becomes completed.
+  // Redirect patient to review immediately from that status change.
+  useEffect(() => {
+    if (!appointmentId || role !== 'patient') return;
+
+    const channel = supabase
+      .channel(`appointment_${appointmentId}_status`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'appointments',
+        filter: `id=eq.${appointmentId}`
+      }, (payload) => {
+        const nextStatus = (payload.new as { status?: string } | null)?.status;
+        if (nextStatus === 'completed') {
+          toast({
+            title: 'Consultation Complete',
+            description: 'Please leave a review.'
+          });
+          redirectPatientToReview();
+        }
+      })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [appointmentId, role, redirectPatientToReview]);
 
   // Auto-transition waiting phase to in-call (removed - patients go directly to in-call)
   useEffect(() => {
@@ -149,7 +187,9 @@ const Consultation = () => {
     setPhase('ended');
     toast({
       title: 'Consultation Ended',
-      description: 'Thank you for using MyEdoctor.'
+      description: role === 'doctor'
+        ? 'Thank you for using MyEdoctor.'
+        : 'Please leave a review for this consultation.'
     });
 
     // Redirect based on role
@@ -157,9 +197,9 @@ const Consultation = () => {
       if (role === 'doctor') {
         navigate('/doctor-portal');
       } else {
-        navigate(`/patient-portal?action=review&appointmentId=${appointmentId}`);
+        redirectPatientToReview();
       }
-    }, 1500);
+    }, role === 'doctor' ? 1500 : 300);
   };
 
   if (phase === 'loading') {
