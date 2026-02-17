@@ -81,6 +81,14 @@ export default function AuthPage() {
           return;
         }
 
+        const normalizedPhone = phoneNumber.trim();
+        const phoneDigits = normalizedPhone.replace(/\D/g, '');
+        if (!normalizedPhone || normalizedPhone === '+234' || phoneDigits.length < 13) {
+          toast({ title: 'Phone number required', description: 'Please enter a valid phone number (e.g., +2348012345678).' });
+          setIsLoading(false);
+          return;
+        }
+
         // Validate patient registration fields if role is patient
         if (role === 'patient') {
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
@@ -629,15 +637,15 @@ export default function AuthPage() {
 
                 {mode !== 'login' && (
                   <div>
-                    <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number (Optional)' : 'Phone Number'}</Label>
+                    <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number *' : 'Phone Number'}</Label>
                     <div className="relative mt-1.5">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                       <Input
                         id="phoneNumber"
                         type="tel"
-                        placeholder="+234 (For data collection purposes)"
+                        placeholder="+2348012345678"
                         className="pl-10 h-12"
-                        required={mode !== 'register'}
+                        required={mode === 'register'}
                         value={phoneNumber}
                         onChange={(e) => {
                           let value = e.target.value;
@@ -830,7 +838,7 @@ export default function AuthPage() {
                           required
                         />
                         <span className="text-sm">
-                          <strong>Patient Consent & Agreement:</strong> I Agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions.
+                          <strong>Patient Consent:</strong> I Agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions.
                         </span>
                       </label>
                     </div>
