@@ -457,7 +457,7 @@ export default function DoctorDiscovery() {
             animate={{ opacity: 1 }}
           >
             {/* Header */}
-            <div className="mb-6">
+            <div className="mb-6 mt-16">
               <h1 className="text-4xl font-bold mb-2">Find a Doctor</h1>
               <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
             </div>
