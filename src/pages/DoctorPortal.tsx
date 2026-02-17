@@ -37,6 +37,7 @@ import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
+import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -58,6 +59,15 @@ const DoctorPortal = () => {
     prescriptions: string | null;
     follow_up_notes: string | null;
   }>>([]);
+  const [patientHealthRecords, setPatientHealthRecords] = useState<Array<{
+    id: string;
+    file_name: string;
+    file_url: string;
+    file_type: string | null;
+    file_size: number | null;
+    uploaded_at: string;
+    notes: string | null;
+  }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
@@ -72,6 +82,7 @@ const DoctorPortal = () => {
   }, [user?.id, role]);
   
   useTrackUserPresence(user?.id, 'doctor');
+  useRealtimeMessageNotifications(user?.id, 'doctor');
   
   // Subscribe to patient presence
   const { presenceMap: patientPresenceMap } = usePatientPresence();
@@ -237,9 +248,14 @@ const DoctorPortal = () => {
     setIsLoadingPatientFolder(true);
     setPatientFolder(null);
     setPatientFolderNotes([]);
+    setPatientHealthRecords([]);
 
     try {
-      const [{ data: folder, error: folderError }, { data: notes, error: notesError }] = await Promise.all([
+      const [
+        { data: folder, error: folderError },
+        { data: notes, error: notesError },
+        { data: healthRecords, error: healthRecordsError }
+      ] = await Promise.all([
         supabase
           .from('patient_folders')
           .select('*')
@@ -251,11 +267,17 @@ const DoctorPortal = () => {
           .eq('patient_id', apt.patient_id)
           .eq('doctor_id', user?.id)
           .order('created_at', { ascending: false })
-          .limit(10)
+          .limit(10),
+        supabase
+          .from('health_records')
+          .select('id, file_name, file_url, file_type, file_size, uploaded_at, notes')
+          .eq('patient_id', apt.patient_id)
+          .order('uploaded_at', { ascending: false })
       ]);
 
       if (folderError) throw folderError;
       if (notesError) throw notesError;
+      if (healthRecordsError) throw healthRecordsError;
 
       setPatientFolder((folder as Record<string, any> | null) ?? null);
       const typedNotes = ((notes as any) ?? []) as Array<{
@@ -268,6 +290,7 @@ const DoctorPortal = () => {
         follow_up_notes: string | null;
       }>;
       setPatientFolderNotes(typedNotes);
+      setPatientHealthRecords((healthRecords as any) ?? []);
 
       const idsFromFolder = patientFolderFieldOrder.flatMap((field) =>
         extractDoctorIdsFromEntries((folder as Record<string, any> | null)?.[field])
@@ -1860,6 +1883,38 @@ const DoctorPortal = () => {
                               <span className="font-medium">Full Clerking Note:</span>{' '}
                               {formatFolderEntryText(note.follow_up_notes, 'Not recorded')}
                             </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Uploaded Health Records</label>
+                    <div className="mt-2 space-y-2">
+                      {patientHealthRecords.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No uploaded health records found.</p>
+                      ) : (
+                        patientHealthRecords.map((record) => (
+                          <div key={record.id} className="p-3 rounded-lg bg-muted/30">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{record.file_name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(record.uploaded_at).toLocaleString()}
+                                  {record.file_size ? ` • ${(record.file_size / 1024).toFixed(1)} KB` : ''}
+                                </p>
+                                {record.notes && (
+                                  <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => window.open(record.file_url, '_blank')}
+                              >
+                                View
+                              </Button>
+                            </div>
                           </div>
                         ))
                       )}

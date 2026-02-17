@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
 
 interface FollowUpThread {
@@ -44,7 +45,9 @@ export function MessagesTab() {
   const [isLoadingThreads, setIsLoadingThreads] = useState(true);
   const [messages, setMessages] = useState<ConsultationMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
 
@@ -223,6 +226,49 @@ export function MessagesTab() {
     setMessages((prev) => [...prev, sent]);
   };
 
+  const handleAttachDocument = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selectedSessionId || !user?.id) return;
+
+    const senderName =
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Patient';
+
+    setIsUploadingAttachment(true);
+    try {
+      const fileName = `${Date.now()}-${file.name}`;
+      const filePath = `${user.id}/consultation-attachments/${selectedSessionId}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('patient-files')
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('patient-files')
+        .getPublicUrl(filePath);
+
+      const sent = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'patient',
+        senderName,
+        file.name,
+        'file',
+        publicUrlData.publicUrl,
+      );
+
+      setMessages((prev) => [...prev, sent]);
+      toast({ title: 'Attachment sent' });
+    } catch (error) {
+      console.error('Failed to upload attachment:', error);
+      toast({ title: 'Upload failed', description: 'Could not send attachment.', variant: 'destructive' });
+    } finally {
+      setIsUploadingAttachment(false);
+    }
+  };
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -306,7 +352,7 @@ export function MessagesTab() {
 
       {/* Chat Area */}
       {selectedThread ? (
-        <div className="flex flex-col h-full bg-background">
+        <div className="flex flex-col h-full min-h-0 bg-background">
           {/* Chat Header */}
           <div className="p-4 border-b border-border flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -354,7 +400,7 @@ export function MessagesTab() {
           </div>
 
           {/* Messages List */}
-          <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+          <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -396,7 +442,21 @@ export function MessagesTab() {
                               : 'bg-muted text-foreground rounded-tl-sm',
                           )}
                         >
-                          <p className="text-sm">{message.content}</p>
+                          {message.message_type === 'file' && message.file_url ? (
+                            <a
+                              href={message.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(
+                                'text-sm underline underline-offset-2',
+                                isUser ? 'text-primary-foreground' : 'text-primary'
+                              )}
+                            >
+                              {message.content || 'Open attachment'}
+                            </a>
+                          ) : (
+                            <p className="text-sm">{message.content}</p>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 mt-1 px-1">
                           <span className="text-[10px] text-muted-foreground">
@@ -413,18 +473,32 @@ export function MessagesTab() {
           </ScrollArea>
 
           {/* Input Area */}
-          <div className="p-4 border-t border-border bg-background">
+          <div className="sticky bottom-0 p-4 border-t border-border bg-background">
             <form onSubmit={handleSendMessage} className="flex items-end gap-2">
-              <Button type="button" variant="ghost" size="icon" className="flex-shrink-0">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleAttachDocument}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="flex-shrink-0"
+                disabled={isUploadingAttachment}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
                 <Paperclip className="w-5 h-5 text-muted-foreground" />
               </Button>
               <Input
-                placeholder="Type a message..."
+                placeholder={isUploadingAttachment ? 'Uploading attachment...' : 'Type a message...'}
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 className="flex-1 min-h-[44px]"
+                disabled={isUploadingAttachment}
               />
-              <Button type="submit" disabled={!newMessage.trim()} className="flex-shrink-0">
+              <Button type="submit" disabled={!newMessage.trim() || isUploadingAttachment} className="flex-shrink-0">
                 <Send className="w-5 h-5" />
               </Button>
             </form>
