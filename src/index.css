@@ -250,3 +250,91 @@
 .animate-fade-in {
   animation: fade-in 0.3s ease-out forwards;
 }
+
+/* Patient portal FullCalendar theme alignment */
+.patient-portal-calendar .fc {
+  --fc-border-color: hsl(var(--border));
+  --fc-page-bg-color: hsl(var(--card));
+  --fc-neutral-bg-color: hsl(var(--muted) / 0.35);
+  --fc-list-event-hover-bg-color: hsl(var(--muted) / 0.5);
+  --fc-today-bg-color: hsl(var(--primary-light));
+  --fc-now-indicator-color: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.patient-portal-calendar .fc .fc-toolbar-title {
+  color: hsl(var(--foreground));
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.patient-portal-calendar .fc .fc-button-primary {
+  background-color: hsl(var(--secondary));
+  border-color: hsl(var(--border));
+  color: hsl(var(--secondary-foreground));
+  box-shadow: none;
+}
+
+.patient-portal-calendar .fc .fc-button-primary:hover,
+.patient-portal-calendar .fc .fc-button-primary:focus {
+  background-color: hsl(var(--muted));
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+.patient-portal-calendar .fc .fc-button-primary:disabled {
+  background-color: hsl(var(--muted) / 0.6);
+  border-color: hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+.patient-portal-calendar .fc .fc-button-primary.fc-button-active {
+  background-color: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.patient-portal-calendar .fc .fc-daygrid-day-number,
+.patient-portal-calendar .fc .fc-col-header-cell-cushion,
+.patient-portal-calendar .fc .fc-timegrid-axis-cushion,
+.patient-portal-calendar .fc .fc-timegrid-slot-label-cushion {
+  color: hsl(var(--foreground));
+}
+
+.patient-portal-calendar .fc .fc-timegrid-slot-label-cushion,
+.patient-portal-calendar .fc .fc-daygrid-day-number {
+  font-size: 0.8rem;
+}
+
+.patient-portal-calendar .fc .fc-timegrid-now-indicator-line {
+  border-color: hsl(var(--accent));
+}
+
+.patient-portal-calendar .fc .fc-timegrid-now-indicator-arrow {
+  border-top-color: hsl(var(--accent));
+  border-bottom-color: hsl(var(--accent));
+}
+
+.patient-portal-calendar .fc .fc-daygrid-event,
+.patient-portal-calendar .fc .fc-timegrid-event {
+  border-width: 1px;
+  border-radius: 0.45rem;
+  font-weight: 600;
+  box-shadow: 0 1px 2px hsl(200 25% 15% / 0.14);
+  cursor: pointer;
+}
+
+.patient-portal-calendar .fc .fc-daygrid-event .fc-event-time,
+.patient-portal-calendar .fc .fc-daygrid-event .fc-event-title {
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.patient-portal-calendar .fc .fc-daygrid-event .fc-event-title {
+  font-weight: 700;
+}
+
+.patient-portal-calendar .fc .fc-daygrid-day-frame,
+.patient-portal-calendar .fc .fc-timegrid-col-frame {
+  cursor: pointer;
+}

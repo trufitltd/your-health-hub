@@ -1,5 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import type { DateClickArg, EventClickArg, EventInput, DayCellMountArg, EventMountArg } from '@fullcalendar/core';
 
 import { Link } from 'react-router-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -49,6 +54,39 @@ const formatDateKey = (date: Date) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+const APPOINTMENT_STATUS_CALENDAR_STYLES = {
+  pending: {
+    dot: '#d97706',
+    bg: '#d97706',
+    text: '#ffffff'
+  },
+  confirmed: {
+    dot: '#0f8f76',
+    bg: '#0f8f76',
+    text: '#ffffff'
+  },
+  completed: {
+    dot: '#16a34a',
+    bg: '#16a34a',
+    text: '#ffffff'
+  },
+  rejected: {
+    dot: '#dc2626',
+    bg: '#dc2626',
+    text: '#ffffff'
+  },
+  cancelled: {
+    dot: '#6b7280',
+    bg: '#6b7280',
+    text: '#ffffff'
+  },
+  default: {
+    dot: '#334155',
+    bg: '#334155',
+    text: '#ffffff'
+  }
+} as const;
 
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -239,11 +277,11 @@ const PatientPortal = () => {
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'all'>('confirmed');
   const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+  const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
+  const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
+  const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
+  const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
 
   // Pricing logic (single uniform consultation price)
@@ -638,39 +676,8 @@ const PatientPortal = () => {
       return;
     }
 
-    const firstAppointmentDate = new Date(`${filteredAppointmentsByStatus[0].date}T00:00:00`);
-    if (Number.isNaN(firstAppointmentDate.getTime())) return;
-
-    setCalendarMonth(new Date(firstAppointmentDate.getFullYear(), firstAppointmentDate.getMonth(), 1));
     setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
   }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
-
-  const appointmentStatusCalendarStyles = {
-    pending: {
-      dot: 'bg-warning',
-      item: 'border-l-warning bg-warning/10 text-foreground'
-    },
-    confirmed: {
-      dot: 'bg-primary',
-      item: 'border-l-primary bg-primary/10 text-primary'
-    },
-    completed: {
-      dot: 'bg-success',
-      item: 'border-l-success bg-success/10 text-success'
-    },
-    rejected: {
-      dot: 'bg-destructive',
-      item: 'border-l-destructive bg-destructive/10 text-destructive'
-    },
-    cancelled: {
-      dot: 'bg-muted-foreground',
-      item: 'border-l-muted-foreground bg-muted text-muted-foreground'
-    },
-    default: {
-      dot: 'bg-muted-foreground',
-      item: 'border-l-border bg-muted/40 text-foreground'
-    }
-  } as const;
 
   const appointmentsByDate = useMemo(() => {
     return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
@@ -681,37 +688,6 @@ const PatientPortal = () => {
       return acc;
     }, {});
   }, [filteredAppointmentsByStatus]);
-
-  const calendarDays = useMemo(() => {
-    const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const startDay = firstDay.getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-    const days: Array<{ key: string | null; day: number | null; isToday: boolean }> = [];
-    const todayKey = formatDateKey(new Date());
-
-    for (let i = 0; i < startDay; i += 1) {
-      days.push({ key: null, day: null, isToday: false });
-    }
-
-    for (let day = 1; day <= daysInMonth; day += 1) {
-      const date = new Date(year, month, day);
-      const key = formatDateKey(date);
-      days.push({
-        key,
-        day,
-        isToday: key === todayKey
-      });
-    }
-
-    while (days.length % 7 !== 0) {
-      days.push({ key: null, day: null, isToday: false });
-    }
-
-    return days;
-  }, [calendarMonth]);
 
   const calendarStatusLegend = useMemo(() => {
     const seen = new Set<string>();
@@ -724,10 +700,91 @@ const PatientPortal = () => {
       .map((apt) => apt.status);
   }, [filteredAppointmentsByStatus]);
 
-  const selectedCalendarDayAppointments = useMemo(() => {
-    if (!selectedCalendarDate) return [];
-    return [...(appointmentsByDate[selectedCalendarDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
-  }, [appointmentsByDate, selectedCalendarDate]);
+  const calendarDialogDayAppointments = useMemo(() => {
+    if (!calendarDialogDate) return [];
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+  }, [appointmentsByDate, calendarDialogDate]);
+
+  const calendarFocusedAppointment = useMemo(() => {
+    if (!calendarFocusedAppointmentId) return null;
+    return filteredAppointmentsByStatus.find((apt) => apt.id === calendarFocusedAppointmentId) || null;
+  }, [calendarFocusedAppointmentId, filteredAppointmentsByStatus]);
+
+  const normalizeTime = (time: string) => {
+    const trimmed = time.trim();
+    if (/^\d{2}:\d{2}$/.test(trimmed)) return `${trimmed}:00`;
+    if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+
+    const twelveHour = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHour) {
+      const hourValue = parseInt(twelveHour[1], 10);
+      const minuteValue = twelveHour[2];
+      const period = twelveHour[3].toUpperCase();
+      const normalizedHour = period === 'PM' ? (hourValue % 12) + 12 : hourValue % 12;
+      return `${String(normalizedHour).padStart(2, '0')}:${minuteValue}:00`;
+    }
+
+    return '00:00:00';
+  };
+
+  const fullCalendarEvents = useMemo<EventInput[]>(() => {
+    return filteredAppointmentsByStatus.map((apt) => {
+      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      const doctorName = getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name);
+      return {
+        id: apt.id,
+        title: doctorName,
+        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        allDay: false,
+        backgroundColor: styles.bg,
+        borderColor: styles.dot,
+        textColor: styles.text,
+        extendedProps: {
+          status: apt.status,
+          appointmentDate: apt.date
+        }
+      };
+    });
+  }, [filteredAppointmentsByStatus]);
+
+  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+  const handleCalendarDayClick = (dateStr: string) => {
+    const dayKey = dateStr.slice(0, 10);
+    setSelectedCalendarDate(dayKey);
+    setCalendarDialogDate(dayKey);
+    setCalendarEventDialogOpen(false);
+    setCalendarDayDialogOpen(true);
+  };
+
+  const handleCalendarEventClick = (arg: EventClickArg) => {
+    const eventDate = arg.event.start ? formatDateKey(arg.event.start) : arg.event.startStr.slice(0, 10);
+    setSelectedCalendarDate(eventDate);
+    setCalendarDialogDate(eventDate);
+    setCalendarDayDialogOpen(false);
+    setCalendarFocusedAppointmentId(arg.event.id || null);
+    setCalendarEventDialogOpen(true);
+  };
+
+  const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
+    const dateLabel = arg.date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    arg.el.setAttribute('title', `View appointments for ${dateLabel}`);
+    arg.el.style.cursor = 'pointer';
+  };
+
+  const handleCalendarEventMount = (arg: EventMountArg) => {
+    const eventTime = arg.event.start
+      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : '';
+    const eventStatus = String(arg.event.extendedProps.status || '').trim();
+    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
+    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    arg.el.style.cursor = 'pointer';
+  };
 
   const renderAppointmentsCalendar = (emptyTitle: string, emptyDescription?: string) => {
     if (filteredAppointmentsByStatus.length === 0) {
@@ -742,46 +799,24 @@ const PatientPortal = () => {
       );
     }
 
-    const selectedDayLabel = selectedCalendarDate
-      ? new Date(`${selectedCalendarDate}T00:00:00`).toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          year: 'numeric'
-        })
+    const calendarDialogDateLabel = calendarDialogDate
+      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric'
+      })
       : null;
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <h3 className="text-lg font-semibold">
-            {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </h3>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-
         {calendarStatusLegend.length > 0 && (
           <div className="flex flex-wrap gap-3">
             {calendarStatusLegend.map((status) => {
-              const styles = appointmentStatusCalendarStyles[status as keyof typeof appointmentStatusCalendarStyles] || appointmentStatusCalendarStyles.default;
+              const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className={`w-2.5 h-2.5 rounded-full ${styles.dot}`} />
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
                   <span className="capitalize">{status}</span>
                 </div>
               );
@@ -789,114 +824,160 @@ const PatientPortal = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-7 gap-2">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-            <div key={day} className="text-xs font-medium text-muted-foreground px-2 py-1 text-center">
-              {day}
-            </div>
-          ))}
-
-          {calendarDays.map((day, index) => {
-            if (!day.key) {
-              return <div key={`empty-${index}`} className="min-h-[120px] rounded-lg border border-transparent bg-muted/20" />;
-            }
-
-            const dayAppointments = (appointmentsByDate[day.key] || []).sort((a, b) => a.time.localeCompare(b.time));
-            const isSelected = selectedCalendarDate === day.key;
-
-            return (
-              <button
-                key={day.key}
-                type="button"
-                onClick={() => setSelectedCalendarDate(day.key)}
-                className={`text-left min-h-[120px] rounded-lg border p-2 transition-colors ${
-                  isSelected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className={`text-sm font-medium ${day.isToday ? 'text-primary' : ''}`}>{day.day}</span>
-                  {dayAppointments.length > 0 && (
-                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                      {dayAppointments.length}
-                    </Badge>
-                  )}
-                </div>
-
-                <div className="space-y-1">
-                  {dayAppointments.slice(0, 2).map((apt) => {
-                    const styles = appointmentStatusCalendarStyles[apt.status as keyof typeof appointmentStatusCalendarStyles] || appointmentStatusCalendarStyles.default;
-                    return (
-                      <div key={apt.id} className={`rounded px-2 py-1 text-[11px] border-l-2 ${styles.item}`}>
-                        <p className="font-medium leading-tight">{apt.time}</p>
-                        <p className="truncate leading-tight">{getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                      </div>
-                    );
-                  })}
-                  {dayAppointments.length > 2 && (
-                    <p className="text-[11px] text-muted-foreground">+{dayAppointments.length - 2} more</p>
-                  )}
-                </div>
-              </button>
-            );
-          })}
+        <div className="patient-portal-calendar rounded-xl border border-border bg-card p-2 md:p-4">
+          <FullCalendar
+            key={calendarRenderKey}
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            initialView="dayGridMonth"
+            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            headerToolbar={{
+              left: 'prev,next today',
+              center: 'title',
+              right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            }}
+            events={fullCalendarEvents}
+            dayMaxEvents={2}
+            eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
+            slotMinTime="06:00:00"
+            slotMaxTime="23:00:00"
+            slotDuration="00:30:00"
+            allDaySlot={false}
+            nowIndicator
+            height="auto"
+            dayCellDidMount={handleCalendarDayCellMount}
+            eventDidMount={handleCalendarEventMount}
+            dateClick={(arg: DateClickArg) => {
+              handleCalendarDayClick(arg.dateStr);
+            }}
+            eventClick={(arg: EventClickArg) => {
+              handleCalendarEventClick(arg);
+            }}
+          />
         </div>
 
-        {selectedDayLabel && (
-          <div className="rounded-xl border p-4 space-y-3">
-            <h4 className="font-semibold">{selectedDayLabel}</h4>
-            {selectedCalendarDayAppointments.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No appointments on this date.</p>
-            ) : (
-              selectedCalendarDayAppointments.map((apt) => (
-                <div key={apt.id} className="rounded-lg border p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">{apt.time}</span>
-                      {getStatusBadge(apt.status)}
+        <Dialog open={calendarDayDialogOpen} onOpenChange={setCalendarDayDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>
+                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+              </DialogTitle>
+              <DialogDescription>
+                Review appointments for the selected day.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              {calendarDialogDayAppointments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+              ) : (
+                calendarDialogDayAppointments.map((apt) => (
+                  <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm font-medium">{apt.time}</span>
+                        {getStatusBadge(apt.status)}
+                      </div>
+                      <p className="text-sm font-semibold mt-1 truncate">
+                        {getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
                     </div>
-                    <p className="text-sm font-medium">
-                      {getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{apt.notes || 'No notes'}</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCalendarFocusedAppointmentId(apt.id);
+                        setCalendarDayDialogOpen(false);
+                        setCalendarEventDialogOpen(true);
+                      }}
+                    >
+                      View
+                    </Button>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {apt.status === 'confirmed' && (
-                      <JoinConsultationButton
-                        appointmentId={apt.id}
-                        participantName={getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                        status={apt.status}
-                        variant="default"
-                        size="sm"
-                      />
-                    )}
-                    {apt.status === 'completed' && !(apt as any).rating && (
+                ))
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={calendarEventDialogOpen && !!calendarFocusedAppointment}
+          onOpenChange={(open) => {
+            setCalendarEventDialogOpen(open);
+            if (!open) setCalendarFocusedAppointmentId(null);
+          }}
+        >
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Appointment Details</DialogTitle>
+              <DialogDescription>Manage the selected appointment.</DialogDescription>
+            </DialogHeader>
+            {calendarFocusedAppointment && (
+              <div className="space-y-4">
+                <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+                  <p className="text-sm font-semibold">
+                    {getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>•</span>
+                    <span>{calendarFocusedAppointment.time}</span>
+                  </div>
+                  <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
+                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 justify-end">
+                  {calendarFocusedAppointment.status === 'confirmed' && (
+                    <JoinConsultationButton
+                      appointmentId={calendarFocusedAppointment.id}
+                      participantName={getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
+                      status={calendarFocusedAppointment.status}
+                      variant="default"
+                      size="sm"
+                    />
+                  )}
+                  {calendarFocusedAppointment.status === 'completed' && !(calendarFocusedAppointment as any).rating && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setSelectedAppointment(calendarFocusedAppointment);
+                        setReviewModalOpen(true);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      Leave Review
+                    </Button>
+                  )}
+                  {calendarFocusedAppointment.status === 'pending' && (
+                    <>
                       <Button
                         size="sm"
+                        variant="outline"
                         onClick={() => {
-                          setSelectedAppointment(apt);
-                          setReviewModalOpen(true);
+                          initReschedule(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Leave Review
+                        Reschedule
                       </Button>
-                    )}
-                    {apt.status === 'pending' && (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                          Reschedule
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as { id?: string }).id ?? null)}>
-                          Cancel
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  )}
                 </div>
-              ))
+              </div>
             )}
-          </div>
-        )}
+          </DialogContent>
+        </Dialog>
       </div>
     );
   };
