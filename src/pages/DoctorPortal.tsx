@@ -16,6 +16,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -684,6 +690,11 @@ const DoctorPortal = () => {
     return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/');
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -728,19 +739,35 @@ const DoctorPortal = () => {
                 </span>
               </Button>
 
-              <button 
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="hidden lg:flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-              >
-                <Avatar className="w-9 h-9 flex-shrink-0">
-                  <AvatarImage src={profilePicture} />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0 hidden sm:block">
-                  <p className="text-sm font-medium truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                  <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
-                </div>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="hidden lg:flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
+                    <Avatar className="w-9 h-9 flex-shrink-0">
+                      <AvatarImage src={profilePicture} />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">{displayInitials}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0 hidden sm:block text-left">
+                      <p className="text-sm font-medium truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
+                      <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setActiveTab('settings');
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <Settings className="w-4 h-4 mr-2" />
+                    Profile Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSignOut}>
+                    <LogOut className="w-4 h-4 mr-2" />
+                    Sign Out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </div>
@@ -806,10 +833,7 @@ const DoctorPortal = () => {
 
                 <div className="mt-6 pt-6 border-t border-border">
                   <Button 
-                    onClick={async () => {
-                      await signOut();
-                      navigate('/');
-                    }}
+                    onClick={handleSignOut}
                     variant="ghost" 
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >

@@ -36,6 +36,12 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ReviewModal } from '@/components/ReviewModal';
 import { PatientRegistration } from '@/components/PatientRegistration';
 import { MessagesTab } from '@/components/patient-portal/MessagesTab';
@@ -1027,19 +1033,35 @@ const PatientPortal = () => {
                 {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </Button>
 
-              <button 
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="hidden lg:flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              >
-                <Avatar className="w-9 h-9">
-                  <AvatarImage key={profilePictureKey} src={profilePicture} />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
-                </Avatar>
-                <div className="hidden sm:block">
-                  <p className="text-sm font-medium">{displayName}</p>
-                  <p className="text-xs text-muted-foreground">Patient</p>
-                </div>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="hidden lg:flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity">
+                    <Avatar className="w-9 h-9">
+                      <AvatarImage key={profilePictureKey} src={profilePicture} />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">{initials}</AvatarFallback>
+                    </Avatar>
+                    <div className="hidden sm:block text-left">
+                      <p className="text-sm font-medium">{displayName}</p>
+                      <p className="text-xs text-muted-foreground">Patient</p>
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setActiveTab('settings');
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <Settings className="w-4 h-4 mr-2" />
+                    Profile Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSignOut}>
+                    <LogOut className="w-4 h-4 mr-2" />
+                    Sign Out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </div>
