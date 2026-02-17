@@ -78,6 +78,7 @@ export default function AuthPage() {
   };
   const selectedDoctorSpecialty = specialty === 'others' ? otherSpecialty : specialty;
   const specialistRequiresRate = !!selectedDoctorSpecialty && !isGeneralPracticeSpecialty(selectedDoctorSpecialty);
+  const generalPractitionerSelected = !!selectedDoctorSpecialty && isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const parsedConsultationRate = parseConsultationRate(consultationRate);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1083,6 +1084,15 @@ export default function AuthPage() {
                           {parsedConsultationRate && (
                             <> You keep ₦{(parsedConsultationRate * 0.7).toLocaleString()} and MyE-Doctor gets ₦{(parsedConsultationRate * 0.3).toLocaleString()}.</>
                           )}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* General Practitioner Fixed Rate */}
+                    {generalPractitionerSelected && (
+                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+                        <p className="text-xs text-foreground">
+                          General Practitioner consultations are fixed at <strong>₦5,000</strong> per session. You receive <strong>60%</strong> (₦3,000) and MyE-Doctor receives <strong>40%</strong> (₦2,000).
                         </p>
                       </div>
                     )}
