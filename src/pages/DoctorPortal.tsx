@@ -45,8 +45,6 @@ const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [viewNotesOpen, setViewNotesOpen] = useState(false);
-  const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
   const [viewFolderOpen, setViewFolderOpen] = useState(false);
   const [selectedAppointmentForFolder, setSelectedAppointmentForFolder] = useState<any>(null);
   const [isLoadingPatientFolder, setIsLoadingPatientFolder] = useState(false);
@@ -54,11 +52,13 @@ const DoctorPortal = () => {
   const [patientFolderNotes, setPatientFolderNotes] = useState<Array<{
     id: string;
     created_at: string;
+    doctor_id: string | null;
     diagnosis: string | null;
     treatment_plan: string | null;
     prescriptions: string | null;
     follow_up_notes: string | null;
   }>>([]);
+  const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
@@ -197,6 +197,40 @@ const DoctorPortal = () => {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
 
+  const entryHeaderRegex = /---\s*Entry:\s*(.+?)\s+by doctor:([0-9a-fA-F-]{36})/g;
+
+  const extractDoctorIdsFromEntries = (value: unknown): string[] => {
+    if (typeof value !== 'string' || !value.includes('by doctor:')) return [];
+
+    const ids: string[] = [];
+    let match: RegExpExecArray | null = entryHeaderRegex.exec(value);
+    while (match) {
+      ids.push(match[2]);
+      match = entryHeaderRegex.exec(value);
+    }
+    entryHeaderRegex.lastIndex = 0;
+    return ids;
+  };
+
+  const formatEntryTimestamp = (rawTimestamp: string): string => {
+    const date = new Date(rawTimestamp.trim());
+    if (Number.isNaN(date.getTime())) return rawTimestamp.trim();
+    return date.toLocaleString();
+  };
+
+  const formatFolderEntryText = (value: unknown, fallback: string): string => {
+    if (value === null || value === undefined || value === '') return fallback;
+    if (typeof value !== 'string') return String(value);
+
+    const formatted = value.replace(entryHeaderRegex, (_match, timestamp, doctorId) => {
+      const doctorName = doctorNamesById[doctorId];
+      const doctorLabel = doctorName ? `Dr. ${doctorName}` : `Doctor ${doctorId.slice(0, 8)}`;
+      return `\nEntry: ${formatEntryTimestamp(String(timestamp))} by ${doctorLabel}`;
+    });
+    entryHeaderRegex.lastIndex = 0;
+    return formatted.trim();
+  };
+
   const handleViewPatientFolder = async (apt: any) => {
     setSelectedAppointmentForFolder(apt);
     setViewFolderOpen(true);
@@ -213,7 +247,7 @@ const DoctorPortal = () => {
           .maybeSingle(),
         supabase
           .from('doctor_consultation_notes')
-          .select('id, created_at, diagnosis, treatment_plan, prescriptions, follow_up_notes')
+          .select('id, created_at, doctor_id, diagnosis, treatment_plan, prescriptions, follow_up_notes')
           .eq('patient_id', apt.patient_id)
           .eq('doctor_id', user?.id)
           .order('created_at', { ascending: false })
@@ -224,7 +258,51 @@ const DoctorPortal = () => {
       if (notesError) throw notesError;
 
       setPatientFolder((folder as Record<string, any> | null) ?? null);
-      setPatientFolderNotes((notes as any) ?? []);
+      const typedNotes = ((notes as any) ?? []) as Array<{
+        id: string;
+        created_at: string;
+        doctor_id: string | null;
+        diagnosis: string | null;
+        treatment_plan: string | null;
+        prescriptions: string | null;
+        follow_up_notes: string | null;
+      }>;
+      setPatientFolderNotes(typedNotes);
+
+      const idsFromFolder = patientFolderFieldOrder.flatMap((field) =>
+        extractDoctorIdsFromEntries((folder as Record<string, any> | null)?.[field])
+      );
+      const idsFromNotes = typedNotes.flatMap((note) => [
+        ...(note.doctor_id ? [note.doctor_id] : []),
+        ...extractDoctorIdsFromEntries(note.follow_up_notes),
+      ]);
+      const uniqueDoctorIds = Array.from(new Set([...idsFromFolder, ...idsFromNotes]));
+
+      if (uniqueDoctorIds.length > 0) {
+        const map: Record<string, string> = {};
+        if (user?.id && doctorRegistration?.full_name) {
+          map[user.id] = doctorRegistration.full_name;
+        }
+
+        const { data: doctorRows, error: doctorError } = await supabase
+          .from('doctor_registrations')
+          .select('user_id, full_name')
+          .in('user_id', uniqueDoctorIds);
+
+        if (doctorError) {
+          console.warn('Could not load doctor names for folder entries:', doctorError);
+        } else {
+          (doctorRows || []).forEach((doctor: any) => {
+            if (doctor.user_id && doctor.full_name) {
+              map[doctor.user_id] = doctor.full_name;
+            }
+          });
+        }
+
+        setDoctorNamesById(map);
+      } else {
+        setDoctorNamesById({});
+      }
     } catch (error) {
       console.error('Failed to load patient folder:', error);
       toast({
@@ -1148,6 +1226,11 @@ const DoctorPortal = () => {
                                 </div>
                               </div>
                               <div className="flex gap-2">
+                                {apt.patient_id && (
+                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                    View Folder
+                                  </Button>
+                                )}
                                 <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
                                   Decline
                                 </Button>
@@ -1244,7 +1327,14 @@ const DoctorPortal = () => {
                                   <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                 </div>
                               </div>
-                              <Badge variant="destructive">Rejected</Badge>
+                              <div className="flex gap-2">
+                                {apt.patient_id && (
+                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                    View Folder
+                                  </Button>
+                                )}
+                                <Badge variant="destructive">Rejected</Badge>
+                              </div>
                             </div>
                           ))
                         )}
@@ -1287,12 +1377,11 @@ const DoctorPortal = () => {
                                   )}
                                 </div>
                               </div>
-                              <Button size="sm" variant="outline" onClick={() => {
-                                setSelectedAppointmentForNotes(apt);
-                                setViewNotesOpen(true);
-                              }}>
-                                View Notes
-                              </Button>
+                              {apt.patient_id && (
+                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                  View Folder
+                                </Button>
+                              )}
                             </div>
                           ))
                         )}
@@ -1341,12 +1430,9 @@ const DoctorPortal = () => {
                                   size="sm"
                                 />
                               )}
-                              {apt.status === 'completed' && (
-                                <Button size="sm" variant="outline" onClick={() => {
-                                  setSelectedAppointmentForNotes(apt);
-                                  setViewNotesOpen(true);
-                                }}>
-                                  View Notes
+                              {apt.patient_id && (
+                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                  View Folder
                                 </Button>
                               )}
                               {apt.status === 'pending' && (
@@ -1746,7 +1832,10 @@ const DoctorPortal = () => {
                           <label className="text-sm font-medium">{formatFolderFieldLabel(field)}</label>
                           <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[60px]">
                             <p className="text-sm whitespace-pre-wrap">
-                              {patientFolder[field] || `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`}
+                              {formatFolderEntryText(
+                                patientFolder[field],
+                                `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`
+                              )}
                             </p>
                           </div>
                         </div>
@@ -1767,7 +1856,10 @@ const DoctorPortal = () => {
                             <p className="text-sm"><span className="font-medium">Assessment:</span> {note.diagnosis || 'Not recorded'}</p>
                             <p className="text-sm"><span className="font-medium">Plan:</span> {note.treatment_plan || 'Not recorded'}</p>
                             <p className="text-sm"><span className="font-medium">E-Prescription:</span> {note.prescriptions || 'Not recorded'}</p>
-                            <p className="text-sm whitespace-pre-wrap"><span className="font-medium">Full Clerking Note:</span> {note.follow_up_notes || 'Not recorded'}</p>
+                            <p className="text-sm whitespace-pre-wrap">
+                              <span className="font-medium">Full Clerking Note:</span>{' '}
+                              {formatFolderEntryText(note.follow_up_notes, 'Not recorded')}
+                            </p>
                           </div>
                         ))
                       )}
@@ -1792,40 +1884,6 @@ const DoctorPortal = () => {
           </DialogContent>
         </Dialog>
         
-        {/* View Notes Modal */}
-        <Dialog open={viewNotesOpen} onOpenChange={setViewNotesOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>Consultation Notes</DialogTitle>
-              <DialogDescription>
-                Notes from consultation with {selectedAppointmentForNotes?.patient_name}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-muted/50">
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="font-medium">Patient:</span> {selectedAppointmentForNotes?.patient_name}</div>
-                  <div><span className="font-medium">Date:</span> {selectedAppointmentForNotes?.date}</div>
-                  <div><span className="font-medium">Time:</span> {selectedAppointmentForNotes?.time}</div>
-                  <div><span className="font-medium">Type:</span> {selectedAppointmentForNotes?.type}</div>
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Consultation Notes:</label>
-                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[100px]">
-                  <p className="text-sm">
-                    {selectedAppointmentForNotes?.notes || 'No notes available for this consultation.'}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setViewNotesOpen(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
     </div>
   );
 };
