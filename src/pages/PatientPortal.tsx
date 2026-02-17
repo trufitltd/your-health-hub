@@ -41,6 +41,7 @@ import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 const PatientPortal = () => {
@@ -57,6 +58,7 @@ const PatientPortal = () => {
   
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
+  useRealtimeMessageNotifications(user?.id, 'patient');
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
