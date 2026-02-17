@@ -33,7 +33,7 @@ const features = [
 
 const stats = [
   { value: '50+', label: 'Certified Doctors' },
-  { value: '10K+', label: 'Happy Patients' },
+  { value: '1000+', label: 'Happy Patients' },
   { value: '15+', label: 'Specialties' },
   { value: '99%', label: 'Satisfaction Rate' },
 ];
@@ -66,7 +66,7 @@ const Index = () => {
             >
               <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-light text-primary text-sm font-medium mb-6">
                 <Star className="w-4 h-4 fill-primary" />
-                Trusted by 10,000+ patients
+                Trusted by 1000+ patients
               </span>
               <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6">
                 -Your Doctor,{' '}
