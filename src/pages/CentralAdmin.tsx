@@ -56,6 +56,7 @@ interface Doctor {
   total_consultations: number;
   rating: number;
   total_reviews: number;
+  rate_per_consultation?: number | null;
 }
 
 interface VerificationNotes {
@@ -449,6 +450,7 @@ const CentralAdmin = () => {
           p_phone: doctor.phone_number,
           p_avatar_url: doctor.profile_picture_url,
           p_is_active: true,
+          p_rate_per_consultation: doctor.rate_per_consultation ?? null,
         });
 
       if (doctorInsertError) {

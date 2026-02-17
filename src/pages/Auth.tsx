@@ -60,6 +60,25 @@ export default function AuthPage() {
   const [medicalLicense, setMedicalLicense] = useState<File | null>(null);
   const [doctorIdType, setDoctorIdType] = useState('');
   const [doctorIdNumber, setDoctorIdNumber] = useState('');
+  const [doctorExperience, setDoctorExperience] = useState('');
+  const [consultationRate, setConsultationRate] = useState('');
+  const [doctorConsentAgreed, setDoctorConsentAgreed] = useState(false);
+
+  const isGeneralPracticeSpecialty = (value: string) => {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'general_practitioner' || normalized === 'general practitioner' || normalized === 'general practice';
+  };
+  const parseConsultationRate = (value: string): number | null => {
+    const normalized = value.replace(/,/g, '').trim();
+    if (!normalized) return null;
+    if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  };
+  const selectedDoctorSpecialty = specialty === 'others' ? otherSpecialty : specialty;
+  const specialistRequiresRate = !!selectedDoctorSpecialty && !isGeneralPracticeSpecialty(selectedDoctorSpecialty);
+  const parsedConsultationRate = parseConsultationRate(consultationRate);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,13 +117,28 @@ export default function AuthPage() {
         // Validate doctor registration fields if role is doctor
         if (role === 'doctor') {
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
-              !hospitalAffiliation || !specialty || !medicalLicense || !doctorIdType || !doctorIdNumber) {
+              !hospitalAffiliation || !specialty || !medicalLicense || !doctorIdType || !doctorIdNumber || !doctorExperience) {
             toast({ title: 'Missing information', description: 'Please fill in all required fields and upload medical license.' });
             setIsLoading(false);
             return;
           }
           if (specialty === 'others' && !otherSpecialty) {
             toast({ title: 'Specialty required', description: 'Please specify your specialty.' });
+            setIsLoading(false);
+            return;
+          }
+
+          const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
+          const parsedRate = parseConsultationRate(consultationRate);
+
+          if (specialistRequiresRate && !parsedRate) {
+            toast({ title: 'Consultation rate required', description: 'Please enter a valid consultation rate for specialist registration.' });
+            setIsLoading(false);
+            return;
+          }
+
+          if (!doctorConsentAgreed) {
+            toast({ title: 'Consent required', description: 'Please agree to the doctor consent and revenue sharing terms.' });
             setIsLoading(false);
             return;
           }
@@ -160,6 +194,8 @@ export default function AuthPage() {
               }
             }
 
+            const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
+            const parsedRate = parseConsultationRate(consultationRate);
             const doctorPayload = {
               user_id: data.user.id,
               full_name: name,
@@ -172,7 +208,11 @@ export default function AuthPage() {
               country,
               marital_status: maritalStatus,
               hospital_affiliation: hospitalAffiliation,
-              specialty: specialty === 'others' ? otherSpecialty : specialty,
+              specialty: resolvedSpecialty,
+              experience: doctorExperience,
+              rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '') || !parsedRate
+                ? null
+                : parsedRate,
               profile_picture_url: profilePictureUrl,
               medical_license_url: medicalLicenseUrl,
               identification_type: doctorIdType,
@@ -241,6 +281,9 @@ export default function AuthPage() {
           hospitalAffiliation,
           specialty,
           otherSpecialty,
+          doctorExperience,
+          consultationRate,
+          doctorConsentAgreed,
           profilePicture,
           medicalLicense,
           doctorIdType,
@@ -357,6 +400,10 @@ export default function AuthPage() {
                 }
               }
 
+              const resolvedSpecialty = pendingUserData.specialty === 'others'
+                ? pendingUserData.otherSpecialty
+                : pendingUserData.specialty;
+              const parsedRate = parseConsultationRate(String(pendingUserData.consultationRate || ''));
               const doctorPayload = {
                 user_id: data.user.id,
                 full_name: pendingUserData.name,
@@ -369,7 +416,11 @@ export default function AuthPage() {
                 country: pendingUserData.country,
                 marital_status: pendingUserData.maritalStatus,
                 hospital_affiliation: pendingUserData.hospitalAffiliation,
-                specialty: pendingUserData.specialty === 'others' ? pendingUserData.otherSpecialty : pendingUserData.specialty,
+                specialty: resolvedSpecialty,
+                experience: pendingUserData.doctorExperience,
+                rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
+                  ? null
+                  : parsedRate,
                 profile_picture_url: profilePictureUrl,
                 medical_license_url: medicalLicenseUrl,
                 identification_type: pendingUserData.doctorIdType,
@@ -390,6 +441,7 @@ export default function AuthPage() {
                 .update({
                   name: doctorPayload.full_name,
                   specialty: doctorPayload.specialty,
+                  rate_per_consultation: doctorPayload.rate_per_consultation,
                   phone: pendingUserData.phoneNumber,
                   avatar_url: profilePictureUrl || null,
                 })
@@ -997,6 +1049,44 @@ export default function AuthPage() {
                       </div>
                     )}
 
+                    {/* Experience */}
+                    <div>
+                      <Label htmlFor="doctorExperience">Years of Experience *</Label>
+                      <Input
+                        id="doctorExperience"
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 7"
+                        className="h-12"
+                        required
+                        value={doctorExperience}
+                        onChange={(e) => setDoctorExperience(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Specialist Rate */}
+                    {specialistRequiresRate && (
+                      <div className="space-y-2">
+                        <Label htmlFor="consultationRate">Consultation Rate (NGN) *</Label>
+                        <Input
+                          id="consultationRate"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="Enter your rate per consultation"
+                          className="h-12"
+                          required
+                          value={consultationRate}
+                          onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
+                          {parsedConsultationRate && (
+                            <> You keep ₦{(parsedConsultationRate * 0.7).toLocaleString()} and MyE-Doctor gets ₦{(parsedConsultationRate * 0.3).toLocaleString()}.</>
+                          )}
+                        </p>
+                      </div>
+                    )}
+
                     {/* Medical License */}
                     <div>
                       <Label htmlFor="medicalLicense">Medical License / Registration Certificate *</Label>
@@ -1038,6 +1128,22 @@ export default function AuthPage() {
                           onChange={(e) => setDoctorIdNumber(e.target.value)}
                         />
                       </div>
+                    </div>
+
+                    {/* Doctor Consent */}
+                    <div className="p-4 border border-border rounded-lg bg-muted/30">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={doctorConsentAgreed}
+                          onChange={(e) => setDoctorConsentAgreed(e.target.checked)}
+                          className="mt-1 rounded border-border"
+                          required
+                        />
+                        <span className="text-sm">
+                          <strong>Doctor Consent & Agreement:</strong> I agree to provide virtual medical consultations through My E-Doctor in accordance with applicable laws and professional standards. I commit to maintaining patient confidentiality and securely handling all health information. I acknowledge the limitations of telemedicine and will exercise appropriate clinical judgment while delivering care through this platform. I further confirm that I have read, understood, and agree to MyE-Doctor’s Terms and Conditions.
+                        </span>
+                      </label>
                     </div>
                   </div>
                 )}
