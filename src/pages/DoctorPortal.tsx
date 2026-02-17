@@ -966,7 +966,7 @@ const DoctorPortal = () => {
                   <div className="flex-1">
                     <h3 className="font-semibold text-success mb-1">Account Approved ✓</h3>
                     <p className="text-sm text-muted-foreground">
-                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients.
+                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.
                     </p>
                   </div>
                 </div>
