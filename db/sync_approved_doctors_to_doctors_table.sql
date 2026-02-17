@@ -6,6 +6,7 @@ UPDATE doctors d
 SET 
   name = dr.full_name,
   specialty = dr.specialty,
+  rate_per_consultation = dr.rate_per_consultation,
   bio = dr.bio,
   phone = dr.phone_number,
   avatar_url = dr.profile_picture_url,
@@ -20,6 +21,7 @@ INSERT INTO doctors (
   id,
   name,
   specialty,
+  rate_per_consultation,
   bio,
   phone,
   email,
@@ -32,6 +34,7 @@ SELECT
   dr.id,
   dr.full_name,
   dr.specialty,
+  dr.rate_per_consultation,
   dr.bio,
   dr.phone_number,
   dr.email,
