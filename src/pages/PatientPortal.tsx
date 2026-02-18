@@ -47,6 +47,8 @@ import logoImage from '@/assets/MyE-DoctorLogo.png';
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
@@ -59,6 +61,58 @@ const PatientPortal = () => {
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
   useRealtimeMessageNotifications(user?.id, 'patient');
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`patient-unread-messages-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
+        async (payload) => {
+          const message = payload.new as {
+            session_id?: string;
+            sender_id?: string;
+            sender_role?: string;
+          } | null;
+
+          if (!message?.session_id || !message.sender_id) return;
+          if (message.sender_id === user.id) return;
+          if (message.sender_role !== 'doctor') return;
+          if (activeTab === 'messages') return;
+
+          let session = sessionParticipantsCacheRef.current.get(message.session_id);
+          if (!session) {
+            const { data } = await supabase
+              .from('consultation_sessions')
+              .select('patient_id, doctor_id')
+              .eq('id', message.session_id)
+              .maybeSingle();
+            if (!data) return;
+            session = {
+              patient_id: data.patient_id ?? null,
+              doctor_id: data.doctor_id ?? null,
+            };
+            sessionParticipantsCacheRef.current.set(message.session_id, session);
+          }
+
+          if (session.patient_id !== user.id) return;
+          setUnreadMessagesCount((prev) => prev + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'messages' && unreadMessagesCount > 0) {
+      setUnreadMessagesCount(0);
+    }
+  }, [activeTab, unreadMessagesCount]);
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
@@ -707,7 +761,7 @@ const PatientPortal = () => {
                     { id: 'overview', label: 'Overview', icon: Activity },
                     { id: 'appointments', label: 'Appointments', icon: Calendar },
                     { id: 'prescriptions', label: 'Prescriptions', icon: Pill },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare },
+                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'records', label: 'Health Records', icon: FileText },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
@@ -717,13 +771,23 @@ const PatientPortal = () => {
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
-                      className={`w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
+                      className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                         }`}
                     >
-                      <item.icon className="w-5 h-5" />
-                      {item.label}
+                      <div className="flex items-center gap-3">
+                        <item.icon className="w-5 h-5" />
+                        {item.label}
+                      </div>
+                      {item.badge && (
+                        <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
+                          ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
+                          : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
+                          }`}>
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </nav>

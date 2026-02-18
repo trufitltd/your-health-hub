@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -70,6 +70,8 @@ const DoctorPortal = () => {
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -83,6 +85,58 @@ const DoctorPortal = () => {
   
   useTrackUserPresence(user?.id, 'doctor');
   useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`doctor-unread-messages-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
+        async (payload) => {
+          const message = payload.new as {
+            session_id?: string;
+            sender_id?: string;
+            sender_role?: string;
+          } | null;
+
+          if (!message?.session_id || !message.sender_id) return;
+          if (message.sender_id === user.id) return;
+          if (message.sender_role !== 'patient') return;
+          if (activeTab === 'messages') return;
+
+          let session = sessionParticipantsCacheRef.current.get(message.session_id);
+          if (!session) {
+            const { data } = await supabase
+              .from('consultation_sessions')
+              .select('patient_id, doctor_id')
+              .eq('id', message.session_id)
+              .maybeSingle();
+            if (!data) return;
+            session = {
+              patient_id: data.patient_id ?? null,
+              doctor_id: data.doctor_id ?? null,
+            };
+            sessionParticipantsCacheRef.current.set(message.session_id, session);
+          }
+
+          if (session.doctor_id !== user.id) return;
+          setUnreadMessagesCount((prev) => prev + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'messages' && unreadMessagesCount > 0) {
+      setUnreadMessagesCount(0);
+    }
+  }, [activeTab, unreadMessagesCount]);
   
   // Subscribe to patient presence
   const { presenceMap: patientPresenceMap } = usePatientPresence();
@@ -802,19 +856,10 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="lg:hidden"
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </Button>
-
               {/* Availability Toggle */}
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+              <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
-                <span className="text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
+                <span className="hidden sm:inline text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
                 <Switch
                   checked={isAvailable}
                   onCheckedChange={handleAvailabilityToggle}
@@ -842,6 +887,15 @@ const DoctorPortal = () => {
                   <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
                 </div>
               </button>
+
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </Button>
             </div>
           </div>
         </div>
@@ -875,7 +929,7 @@ const DoctorPortal = () => {
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
                     { id: 'reviews', label: 'Reviews', icon: Star },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare },
+                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
@@ -895,8 +949,8 @@ const DoctorPortal = () => {
                       </div>
                       {item.badge && (
                         <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
-                          ? 'bg-primary-foreground text-primary'
-                          : 'bg-accent text-accent-foreground'
+                          ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
+                          : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
                           }`}>
                           {item.badge}
                         </span>
