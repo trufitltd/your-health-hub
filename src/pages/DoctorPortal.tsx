@@ -71,10 +71,31 @@ const DoctorPortal = () => {
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const unreadReviewsCount = unreadReviewIds.length;
+  const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
+
+  const getSeenReviewIds = () => {
+    if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
+    try {
+      const raw = window.localStorage.getItem(reviewSeenStorageKey);
+      if (!raw) return new Set<string>();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set<string>();
+      return new Set<string>(parsed.filter((v) => typeof v === 'string'));
+    } catch {
+      return new Set<string>();
+    }
+  };
+
+  const persistSeenReviewIds = (ids: Set<string>) => {
+    if (!reviewSeenStorageKey || typeof window === 'undefined') return;
+    window.localStorage.setItem(reviewSeenStorageKey, JSON.stringify(Array.from(ids)));
+  };
 
   // Track doctor presence
   useEffect(() => {
@@ -85,6 +106,72 @@ const DoctorPortal = () => {
   
   useTrackUserPresence(user?.id, 'doctor');
   useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  useEffect(() => {
+    if (!user?.id || !reviewSeenStorageKey) return;
+
+    const loadUnreadReviews = async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('doctor_id', user.id)
+        .eq('status', 'completed')
+        .not('rating', 'is', null)
+        .order('date', { ascending: false });
+
+      if (error) {
+        console.error('Failed to load doctor review notifications:', error);
+        return;
+      }
+
+      const seenIds = getSeenReviewIds();
+      const unseenIds = (data || [])
+        .map((row) => row.id as string)
+        .filter((id) => !seenIds.has(id));
+      setUnreadReviewIds(unseenIds);
+    };
+
+    loadUnreadReviews();
+  }, [user?.id, reviewSeenStorageKey]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`doctor-review-notify-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'appointments', filter: `doctor_id=eq.${user.id}` },
+        (payload) => {
+          const updated = payload.new as {
+            id?: string;
+            rating?: number | null;
+            review_comment?: string | null;
+            patient_name?: string | null;
+          } | null;
+
+          if (!updated?.id || updated.rating === null || updated.rating === undefined) return;
+
+          setUnreadReviewIds((prev) => {
+            if (prev.includes(updated.id as string)) return prev;
+
+            const seenIds = getSeenReviewIds();
+            if (seenIds.has(updated.id as string)) return prev;
+
+            toast({
+              title: 'New patient review',
+              description: `${updated.patient_name || 'A patient'} rated you ${updated.rating}/5`,
+            });
+            return [...prev, updated.id as string];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -137,6 +224,14 @@ const DoctorPortal = () => {
       setUnreadMessagesCount(0);
     }
   }, [activeTab, unreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'reviews' || unreadReviewIds.length === 0) return;
+    const seenIds = getSeenReviewIds();
+    unreadReviewIds.forEach((id) => seenIds.add(id));
+    persistSeenReviewIds(seenIds);
+    setUnreadReviewIds([]);
+  }, [activeTab, unreadReviewIds]);
   
   // Subscribe to patient presence
   const { presenceMap: patientPresenceMap } = usePatientPresence();
@@ -636,7 +731,8 @@ const DoctorPortal = () => {
             name: apt.patient_name,
             age: apt.patient_age || 'N/A',
             lastVisit: apt.date,
-            appointments: []
+            appointments: [],
+            latestAppointment: null as any
           });
         }
         const patient = patientsMap.get(apt.patient_id);
@@ -645,6 +741,15 @@ const DoctorPortal = () => {
           time: apt.time,
           status: apt.status
         });
+
+        const appointmentDateTime = new Date(`${apt.date}T${apt.time}`).getTime();
+        const latestDateTime = patient.latestAppointment
+          ? new Date(`${patient.latestAppointment.date}T${patient.latestAppointment.time}`).getTime()
+          : 0;
+        if (!patient.latestAppointment || appointmentDateTime > latestDateTime) {
+          patient.latestAppointment = apt;
+          patient.lastVisit = apt.date;
+        }
       }
     });
 
@@ -655,10 +760,10 @@ const DoctorPortal = () => {
         const dateB = new Date(`${b.date}T${b.time}`).getTime();
         return dateB - dateA;
       });
-      if (patient.appointments.length > 0) {
-        patient.lastVisit = patient.appointments[0].date;
-      }
-    });
+	      if (patient.appointments.length > 0 && !patient.lastVisit) {
+	        patient.lastVisit = patient.appointments[0].date;
+	      }
+	    });
 
     return Array.from(patientsMap.values());
   }, [fetchedAppointments]);
@@ -867,10 +972,15 @@ const DoctorPortal = () => {
                 />
               </div>
 
-              <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('appointments')}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative"
+                onClick={() => setActiveTab(unreadReviewsCount > 0 ? 'reviews' : 'appointments')}
+              >
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                  {stats.pendingRequests}
+                  {stats.pendingRequests + unreadReviewsCount}
                 </span>
               </Button>
 
@@ -928,7 +1038,7 @@ const DoctorPortal = () => {
                     { id: 'patients', label: 'My Patients', icon: Users },
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
-                    { id: 'reviews', label: 'Reviews', icon: Star },
+                    { id: 'reviews', label: 'Reviews', icon: Star, badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? '99+' : unreadReviewsCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
@@ -1577,10 +1687,24 @@ const DoctorPortal = () => {
                                 <p className="text-sm font-medium">{patient.appointments.length}</p>
                               </div>
                               <div className="flex flex-col sm:flex-row gap-2">
-                                <Button size="sm" variant="outline" className="w-full sm:w-auto">
-                                  View Profile
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => patient.latestAppointment && handleViewPatientFolder(patient.latestAppointment)}
+                                  disabled={!patient.latestAppointment}
+                                >
+                                  View Folder
                                 </Button>
-                                <Button size="sm" variant="ghost" className="w-full sm:w-auto">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => {
+                                    setActiveTab('messages');
+                                    setSidebarOpen(false);
+                                  }}
+                                >
                                   <MessageSquare className="w-4 h-4 mr-2" />
                                   Message
                                 </Button>
