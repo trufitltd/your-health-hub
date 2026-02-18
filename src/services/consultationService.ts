@@ -341,8 +341,18 @@ class ConsultationService {
   ): () => void {
     console.log('[ConsultationService] Subscribing to messages for session:', sessionId);
 
+    const existingChannel = this.subscriptions.get(`messages:${sessionId}`);
+    if (existingChannel) {
+      console.warn('[ConsultationService] Existing message subscription found, removing before re-subscribing');
+      supabase.removeChannel(existingChannel).catch((error) => {
+        console.warn('[ConsultationService] Failed to remove existing message channel:', error);
+      });
+      this.subscriptions.delete(`messages:${sessionId}`);
+    }
+
+    const channelTopic = `consultation-${sessionId}-${crypto.randomUUID()}`;
     const channel = supabase
-      .channel(`consultation:${sessionId}`)
+      .channel(channelTopic)
       .on(
         'postgres_changes',
         {
@@ -396,7 +406,7 @@ class ConsultationService {
         }
       )
       .subscribe((status) => {
-        console.log('[ConsultationService] Realtime subscription status:', status);
+        console.log('[ConsultationService] Realtime subscription status:', status, 'topic:', channelTopic);
         if (status === 'SUBSCRIBED') {
           console.log('[ConsultationService] Successfully subscribed to messages');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
