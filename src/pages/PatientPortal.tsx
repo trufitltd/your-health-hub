@@ -44,6 +44,20 @@ import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
+interface PatientPrescription {
+  id: string;
+  noteId: string;
+  medication: string;
+  dosage: string;
+  rawText: string;
+  doctor: string;
+  doctorId: string | null;
+  sessionId: string | null;
+  date: string;
+  refillsRemaining: number;
+  status: 'active' | 'past';
+}
+
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -53,6 +67,9 @@ const PatientPortal = () => {
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
+  const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
+  const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
+  const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
   
   // Track patient presence
@@ -157,6 +174,8 @@ const PatientPortal = () => {
           prescriptions,
           created_at,
           consultation_sessions!inner(
+            id,
+            doctor_id,
             appointments!inner(specialist_name)
           )
         `)
@@ -170,26 +189,31 @@ const PatientPortal = () => {
       }
 
       // Parse prescriptions and format them
-      const formatted: any[] = [];
+      const formatted: PatientPrescription[] = [];
       (notes || []).forEach((note: any) => {
         if (note.prescriptions) {
           try {
             // Try to parse as JSON if it's structured
-            const parsed = typeof note.prescriptions === 'string' 
-              ? note.prescriptions.split('\n').filter((line: string) => line.trim())
+            const parsed = typeof note.prescriptions === 'string'
+              ? note.prescriptions.split(/\r?\n/).filter((line: string) => line.trim())
               : [note.prescriptions];
             
             parsed.forEach((line: string) => {
               // Simple parsing: expect format like "Medication - Dosage" or just the text
               const parts = line.split('-').map((p: string) => p.trim());
+              const daysSincePrescription = Math.floor((Date.now() - new Date(note.created_at).getTime()) / (1000 * 60 * 60 * 24));
               formatted.push({
-                id: `${note.id}-${formatted.length}`,
+                id: `${note.id}-${formatted.length}-${line.trim().toLowerCase()}`,
+                noteId: note.id,
                 medication: parts[0] || line,
                 dosage: parts[1] || 'As prescribed',
+                rawText: line.trim(),
                 doctor: note.consultation_sessions?.appointments?.specialist_name || 'Dr. Unknown',
+                doctorId: note.consultation_sessions?.doctor_id ?? null,
+                sessionId: note.consultation_sessions?.id ?? null,
                 date: note.created_at,
-                refillsRemaining: 3, // Default value
-                status: 'active'
+                refillsRemaining: daysSincePrescription > 90 ? 0 : 3,
+                status: daysSincePrescription > 90 ? 'past' : 'active'
               });
             });
           } catch (err) {
@@ -227,6 +251,87 @@ const PatientPortal = () => {
       toast({ title: 'Success', description: 'Health record deleted successfully!' });
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to delete health record.' });
+    }
+  };
+
+  const handleViewPrescriptionDetails = (prescription: PatientPrescription) => {
+    setSelectedPrescription(prescription);
+    setPrescriptionDetailsOpen(true);
+  };
+
+  const handleDownloadPrescription = (prescription: PatientPrescription) => {
+    try {
+      const content = [
+        'MYE-DOCTOR PRESCRIPTION',
+        `Patient: ${displayName}`,
+        `Prescribed by: ${prescription.doctor}`,
+        `Date: ${new Date(prescription.date).toLocaleString()}`,
+        '',
+        `Medication: ${prescription.medication}`,
+        `Dosage: ${prescription.dosage}`,
+        `Instructions: ${prescription.rawText}`,
+        '',
+        `Status: ${prescription.status}`,
+      ].join('\n');
+
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeMedication = prescription.medication.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      link.href = url;
+      link.download = `prescription-${safeMedication || 'medication'}-${new Date(prescription.date).toISOString().split('T')[0]}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: 'Downloaded', description: 'Prescription downloaded successfully.' });
+    } catch (error) {
+      console.error('Failed to download prescription:', error);
+      toast({ title: 'Error', description: 'Failed to download prescription.', variant: 'destructive' });
+    }
+  };
+
+  const handleRequestPrescriptionRefill = async (prescription: PatientPrescription) => {
+    if (!user?.id) return;
+    if (!prescription.sessionId || !prescription.doctorId) {
+      toast({
+        title: 'Refill unavailable',
+        description: 'This prescription is missing doctor/session details.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsRequestingRefillId(prescription.id);
+    try {
+      const content = `Prescription refill request: ${prescription.medication} (${prescription.dosage}). Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
+      const { error } = await supabase.from('consultation_messages').insert({
+        session_id: prescription.sessionId,
+        sender_id: user.id,
+        sender_role: 'patient',
+        sender_name: displayName,
+        message_type: 'text',
+        content,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: 'Refill requested',
+        description: 'Your refill request has been sent to your doctor.',
+      });
+      setActiveTab('messages');
+      setSidebarOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['messages', prescription.sessionId] });
+    } catch (error) {
+      console.error('Failed to request refill:', error);
+      toast({
+        title: 'Request failed',
+        description: 'Could not send refill request. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRequestingRefillId(null);
     }
   };
 
@@ -1412,7 +1517,7 @@ const PatientPortal = () => {
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {fetchedPrescriptions.map((prescription) => (
+                        {fetchedPrescriptions.map((prescription: PatientPrescription) => (
                           <div key={prescription.id} className={`p-4 rounded-xl border ${prescription.status === 'active' ? 'border-success/30 bg-success/5' : 'border-border'}`}>
                             <div className="flex items-start justify-between">
                               <div className="flex items-start gap-3">
@@ -1436,16 +1541,20 @@ const PatientPortal = () => {
                                 )}
                               </div>
                             </div>
-                            {prescription.status === 'active' && (
-                              <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
-                                <Button size="sm" variant="outline">
-                                  View Details
+                            <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
+                                View Details
+                              </Button>
+                              {prescription.status === 'active' && (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleRequestPrescriptionRefill(prescription)}
+                                  disabled={isRequestingRefillId === prescription.id}
+                                >
+                                  {isRequestingRefillId === prescription.id ? 'Sending...' : 'Request Refill'}
                                 </Button>
-                                <Button size="sm">
-                                  Request Refill
-                                </Button>
-                              </div>
-                          )}
+                              )}
+                            </div>
                         </div>
                       ))}
                     </div>
@@ -1657,6 +1766,70 @@ const PatientPortal = () => {
         appointmentId={selectedAppointment?.id || ''}
         doctorName={selectedAppointment ? getDoctorNameById(selectedAppointment.doctor_id, selectedAppointment.specialist_name) : ''}
       />
+
+      {/* Prescription Details Dialog */}
+      <Dialog open={prescriptionDetailsOpen} onOpenChange={setPrescriptionDetailsOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Prescription Details</DialogTitle>
+            <DialogDescription>
+              Review your prescription details and actions.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedPrescription && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/40 border border-border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="font-medium">Medication:</span> {selectedPrescription.medication}
+                  </div>
+                  <div>
+                    <span className="font-medium">Dosage:</span> {selectedPrescription.dosage}
+                  </div>
+                  <div>
+                    <span className="font-medium">Doctor:</span> {selectedPrescription.doctor}
+                  </div>
+                  <div>
+                    <span className="font-medium">Date:</span> {new Date(selectedPrescription.date).toLocaleDateString()}
+                  </div>
+                  <div>
+                    <span className="font-medium">Status:</span> {selectedPrescription.status}
+                  </div>
+                  <div>
+                    <span className="font-medium">Refills remaining:</span> {selectedPrescription.refillsRemaining}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">Instructions</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[72px]">
+                  <p className="text-sm whitespace-pre-wrap">{selectedPrescription.rawText}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {selectedPrescription && (
+              <>
+                <Button variant="outline" onClick={() => handleDownloadPrescription(selectedPrescription)}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </Button>
+                <Button
+                  onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
+                  disabled={isRequestingRefillId === selectedPrescription.id}
+                >
+                  {isRequestingRefillId === selectedPrescription.id ? 'Sending...' : 'Request Refill'}
+                </Button>
+              </>
+            )}
+            <Button variant="ghost" onClick={() => setPrescriptionDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Consultation Details Dialog */}
       <Dialog open={consultationDetailsOpen} onOpenChange={setConsultationDetailsOpen}>
