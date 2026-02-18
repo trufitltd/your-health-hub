@@ -47,6 +47,9 @@ export function DoctorMessagesTab() {
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
+  const appendMessageIfMissing = (message: ConsultationMessage) => {
+    setMessages((prev) => (prev.some((existing) => existing.id === message.id) ? prev : [...prev, message]));
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -171,7 +174,7 @@ export function DoctorMessagesTab() {
       });
 
     const unsubscribe = consultationService.subscribeToMessages(selectedSessionId, (message) => {
-      setMessages((prev) => [...prev, message]);
+      appendMessageIfMissing(message);
     });
 
     return () => {
@@ -213,7 +216,7 @@ export function DoctorMessagesTab() {
       content,
     );
 
-    setMessages((prev) => [...prev, sent]);
+    appendMessageIfMissing(sent);
   };
 
   const handleAttachDocument = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,7 +252,7 @@ export function DoctorMessagesTab() {
         publicUrlData.publicUrl,
       );
 
-      setMessages((prev) => [...prev, sent]);
+      appendMessageIfMissing(sent);
       toast({ title: 'Attachment sent' });
     } catch (error) {
       console.error('Failed to upload attachment:', error);
