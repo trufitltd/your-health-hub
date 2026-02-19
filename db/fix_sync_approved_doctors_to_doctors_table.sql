@@ -13,6 +13,7 @@ INSERT INTO doctors (
   id,
   name,
   specialty,
+  rate_per_consultation,
   bio,
   phone,
   email,
@@ -25,6 +26,7 @@ SELECT
   dr.user_id,
   dr.full_name,
   dr.specialty,
+  dr.rate_per_consultation,
   dr.bio,
   dr.phone_number,
   dr.email,
@@ -38,6 +40,7 @@ WHERE dr.verification_status = 'approved'
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   specialty = EXCLUDED.specialty,
+  rate_per_consultation = EXCLUDED.rate_per_consultation,
   bio = EXCLUDED.bio,
   phone = EXCLUDED.phone,
   email = EXCLUDED.email,

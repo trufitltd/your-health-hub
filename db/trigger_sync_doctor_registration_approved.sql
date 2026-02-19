@@ -11,11 +11,12 @@ BEGIN
   IF (TG_OP = 'INSERT' AND NEW.verification_status = 'approved') THEN
     -- Upsert into public.doctors using the correct user_id as id
     INSERT INTO public.doctors (
-      id, name, specialty, bio, phone, email, avatar_url, is_active, created_at, updated_at
+      id, name, specialty, rate_per_consultation, bio, phone, email, avatar_url, is_active, created_at, updated_at
     ) VALUES (
       NEW.user_id,
       NEW.full_name,
       NEW.specialty,
+      NEW.rate_per_consultation,
       NEW.bio,
       NEW.phone_number,
       NEW.email,
@@ -27,6 +28,7 @@ BEGIN
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
       specialty = EXCLUDED.specialty,
+      rate_per_consultation = EXCLUDED.rate_per_consultation,
       bio = EXCLUDED.bio,
       phone = EXCLUDED.phone,
       email = EXCLUDED.email,
@@ -44,11 +46,12 @@ BEGIN
   -- Handle UPDATE transitions to 'approved'
   ELSIF (TG_OP = 'UPDATE' AND NEW.verification_status = 'approved' AND (OLD.verification_status IS DISTINCT FROM NEW.verification_status)) THEN
     INSERT INTO public.doctors (
-      id, name, specialty, bio, phone, email, avatar_url, is_active, created_at, updated_at
+      id, name, specialty, rate_per_consultation, bio, phone, email, avatar_url, is_active, created_at, updated_at
     ) VALUES (
       NEW.user_id,
       NEW.full_name,
       NEW.specialty,
+      NEW.rate_per_consultation,
       NEW.bio,
       NEW.phone_number,
       NEW.email,
@@ -60,6 +63,7 @@ BEGIN
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
       specialty = EXCLUDED.specialty,
+      rate_per_consultation = EXCLUDED.rate_per_consultation,
       bio = EXCLUDED.bio,
       phone = EXCLUDED.phone,
       email = EXCLUDED.email,
