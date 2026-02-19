@@ -36,7 +36,11 @@ interface FollowUpThread {
   lastMessageAt?: string | null;
 }
 
-export function MessagesTab() {
+interface MessagesTabProps {
+  focusSessionId?: string | null;
+}
+
+export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
   const { user } = useAuth();
   const [threads, setThreads] = useState<FollowUpThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -162,6 +166,92 @@ export function MessagesTab() {
       mounted = false;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!focusSessionId) return;
+    setSelectedSessionId(focusSessionId);
+  }, [focusSessionId]);
+
+  useEffect(() => {
+    if (!focusSessionId || !user?.id) return;
+    if (threads.some((thread) => thread.sessionId === focusSessionId)) return;
+
+    let isMounted = true;
+    const loadFocusedSessionThread = async () => {
+      try {
+        const { data: session, error } = await supabase
+          .from('consultation_sessions')
+          .select(`
+            id,
+            doctor_id,
+            consultation_type,
+            created_at,
+            appointments(
+              date,
+              time,
+              specialist_name
+            )
+          `)
+          .eq('id', focusSessionId)
+          .eq('patient_id', user.id)
+          .maybeSingle();
+
+        if (error || !session || !isMounted) return;
+
+        const doctorId = (session as { doctor_id?: string | null }).doctor_id ?? '';
+        let doctorName =
+          (session as { appointments?: { specialist_name?: string | null } | Array<{ specialist_name?: string | null }> }).appointments &&
+          Array.isArray((session as any).appointments)
+            ? (((session as any).appointments[0]?.specialist_name as string | undefined) || 'Doctor')
+            : (((session as any).appointments?.specialist_name as string | undefined) || 'Doctor');
+        let doctorAvatar: string | null = null;
+        let specialty: string | null = null;
+
+        if (doctorId) {
+          const { data: doctorRow } = await supabase
+            .from('doctors')
+            .select('name, specialty, avatar_url')
+            .eq('id', doctorId)
+            .maybeSingle();
+          if (doctorRow) {
+            doctorName = (doctorRow.name as string | null) || doctorName;
+            doctorAvatar = (doctorRow.avatar_url as string | null) ?? null;
+            specialty = (doctorRow.specialty as string | null) ?? null;
+          }
+        }
+
+        const appointmentObj = Array.isArray((session as any).appointments)
+          ? (session as any).appointments[0]
+          : (session as any).appointments;
+
+        const thread: FollowUpThread = {
+          id: session.id as string,
+          sessionId: session.id as string,
+          doctorId,
+          doctorName,
+          specialty,
+          doctorAvatar,
+          followUpNotes: '',
+          appointmentDate: appointmentObj?.date ?? null,
+          appointmentTime: appointmentObj?.time ?? null,
+          consultationType: (session as { consultation_type?: string | null }).consultation_type ?? null,
+          lastMessageAt: (session as { created_at?: string | null }).created_at ?? null,
+        };
+
+        setThreads((prev) => {
+          if (prev.some((item) => item.sessionId === thread.sessionId)) return prev;
+          return [thread, ...prev];
+        });
+      } catch (err) {
+        console.error('Failed to load focused session thread:', err);
+      }
+    };
+
+    loadFocusedSessionThread();
+    return () => {
+      isMounted = false;
+    };
+  }, [focusSessionId, user?.id, threads]);
 
   useEffect(() => {
     if (!selectedSessionId) {
