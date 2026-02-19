@@ -462,7 +462,7 @@ export function DoctorMessagesTab() {
 
       {selectedThread ? (
         <div className="flex flex-col h-full min-h-0 bg-background">
-          <div className="p-4 border-b border-border flex items-center justify-between">
+          <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setSelectedSessionId(null)}>
                 <X className="w-5 h-5" />
@@ -473,9 +473,9 @@ export function DoctorMessagesTab() {
                   {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
-              <div>
+              <div className="min-w-0">
                 <h3 className="font-semibold">{selectedThread.patientName}</h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>
                     {formatDate(selectedThread.appointmentDate)}
                     {selectedThread.appointmentTime ? ` • ${selectedThread.appointmentTime}` : ''}
@@ -483,7 +483,7 @@ export function DoctorMessagesTab() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="hidden sm:flex items-center gap-1">
               <Button variant="ghost" size="icon">
                 <Phone className="w-5 h-5 text-muted-foreground" />
               </Button>
@@ -496,7 +496,7 @@ export function DoctorMessagesTab() {
             </div>
           </div>
 
-          <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
+          <ScrollArea className="flex-1 min-h-0 p-3 sm:p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -508,7 +508,7 @@ export function DoctorMessagesTab() {
                   const showAvatar = !isDoctor && (index === 0 || messages[index - 1].sender_role === 'doctor');
                   const refillRequest = parseRefillRequest(message);
                   return (
-                    <div key={message.id} className={cn('flex gap-3 max-w-[80%]', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
+                    <div key={message.id} className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
                       {!isDoctor && (
                         <div className="w-8 flex-shrink-0">
                           {showAvatar && (
@@ -522,21 +522,21 @@ export function DoctorMessagesTab() {
                         </div>
                       )}
                       <div className={cn('flex flex-col', isDoctor ? 'items-end' : 'items-start')}>
-                        <div className={cn('rounded-2xl px-4 py-2 shadow-sm', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
+                        <div className={cn('rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
                           {message.message_type === 'file' && message.file_url ? (
                             <a
                               href={message.file_url}
                               target="_blank"
                               rel="noopener noreferrer"
                               className={cn(
-                                'text-sm underline underline-offset-2',
+                                'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
                                 isDoctor ? 'text-primary-foreground' : 'text-primary'
                               )}
                             >
                               {message.content || 'Open attachment'}
                             </a>
                           ) : (
-                            <p className="text-sm">{message.content}</p>
+                            <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
                           )}
                         </div>
                         {refillRequest && !isDoctor && (
