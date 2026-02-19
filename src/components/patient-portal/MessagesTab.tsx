@@ -447,7 +447,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
       {selectedThread ? (
         <div className="flex flex-col h-full min-h-0 bg-background">
           {/* Chat Header */}
-          <div className="p-4 border-b border-border flex items-center justify-between">
+          <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <Button 
                 variant="ghost" 
@@ -467,9 +467,9 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                     .slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
-              <div>
+              <div className="min-w-0">
                 <h3 className="font-semibold">{selectedThread.doctorName}</h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
                   <span>•</span>
                   <span>
@@ -479,7 +479,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="hidden sm:flex items-center gap-1">
               <Button variant="ghost" size="icon">
                 <Phone className="w-5 h-5 text-muted-foreground" />
               </Button>
@@ -493,7 +493,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
           </div>
 
           {/* Messages List */}
-          <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
+          <ScrollArea className="flex-1 min-h-0 p-3 sm:p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -508,7 +508,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                   return (
                     <div
                       key={message.id}
-                      className={cn('flex gap-3 max-w-[80%]', isUser ? 'ml-auto flex-row-reverse' : '')}
+                      className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isUser ? 'ml-auto flex-row-reverse' : '')}
                     >
                       {!isUser && (
                         <div className="w-8 flex-shrink-0">
@@ -529,7 +529,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                       <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start')}>
                         <div
                           className={cn(
-                            'rounded-2xl px-4 py-2 shadow-sm',
+                            'rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full',
                             isUser
                               ? 'bg-primary text-primary-foreground rounded-tr-sm'
                               : 'bg-muted text-foreground rounded-tl-sm',
@@ -541,14 +541,14 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                               target="_blank"
                               rel="noopener noreferrer"
                               className={cn(
-                                'text-sm underline underline-offset-2',
+                                'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
                                 isUser ? 'text-primary-foreground' : 'text-primary'
                               )}
                             >
                               {message.content || 'Open attachment'}
                             </a>
                           ) : (
-                            <p className="text-sm">{message.content}</p>
+                            <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
                           )}
                         </div>
                         <div className="flex items-center gap-1 mt-1 px-1">
