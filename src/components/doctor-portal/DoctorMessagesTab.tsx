@@ -15,9 +15,19 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
 
 interface PatientThread {
@@ -41,9 +51,20 @@ export function DoctorMessagesTab() {
   const [isLoadingThreads, setIsLoadingThreads] = useState(true);
   const [messages, setMessages] = useState<ConsultationMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [disapproveDialogOpen, setDisapproveDialogOpen] = useState(false);
+  const [selectedRefillMessage, setSelectedRefillMessage] = useState<ConsultationMessage | null>(null);
+  const [replacementPrescription, setReplacementPrescription] = useState('');
+  const [disapprovalReason, setDisapprovalReason] = useState('');
+  const [isSubmittingRefillAction, setIsSubmittingRefillAction] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
+  const appendMessageIfMissing = (message: ConsultationMessage) => {
+    setMessages((prev) => (prev.some((existing) => existing.id === message.id) ? prev : [...prev, message]));
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -168,7 +189,7 @@ export function DoctorMessagesTab() {
       });
 
     const unsubscribe = consultationService.subscribeToMessages(selectedSessionId, (message) => {
-      setMessages((prev) => [...prev, message]);
+      appendMessageIfMissing(message);
     });
 
     return () => {
@@ -210,7 +231,50 @@ export function DoctorMessagesTab() {
       content,
     );
 
-    setMessages((prev) => [...prev, sent]);
+    appendMessageIfMissing(sent);
+  };
+
+  const handleAttachDocument = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selectedSessionId || !user?.id) return;
+
+    const senderName =
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
+
+    setIsUploadingAttachment(true);
+    try {
+      const fileName = `${Date.now()}-${file.name}`;
+      const filePath = `${user.id}/consultation-attachments/${selectedSessionId}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('doctor-files')
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('doctor-files')
+        .getPublicUrl(filePath);
+
+      const sent = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'doctor',
+        senderName,
+        file.name,
+        'file',
+        publicUrlData.publicUrl,
+      );
+
+      appendMessageIfMissing(sent);
+      toast({ title: 'Attachment sent' });
+    } catch (error) {
+      console.error('Failed to upload attachment:', error);
+      toast({ title: 'Upload failed', description: 'Could not send attachment.', variant: 'destructive' });
+    } finally {
+      setIsUploadingAttachment(false);
+    }
   };
 
   const formatTime = (dateString: string) => {
@@ -222,6 +286,119 @@ export function DoctorMessagesTab() {
     if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleDateString();
+  };
+
+  const parseRefillRequest = (message: ConsultationMessage) => {
+    if (message.sender_role !== 'patient' || !message.content) return null;
+    const content = message.content.trim();
+    if (!content.startsWith('Prescription refill request:')) return null;
+
+    const match = content.match(/^Prescription refill request:\s*(.+?)\s*\((.+?)\)\./i);
+    if (!match) {
+      return { medication: 'Medication', dosage: 'As prescribed' };
+    }
+
+    return {
+      medication: match[1]?.trim() || 'Medication',
+      dosage: match[2]?.trim() || 'As prescribed',
+    };
+  };
+
+  const handleOpenApproveDialog = (message: ConsultationMessage) => {
+    const parsed = parseRefillRequest(message);
+    if (!parsed) return;
+    setSelectedRefillMessage(message);
+    setReplacementPrescription(`${parsed.medication} - ${parsed.dosage}`);
+    setApproveDialogOpen(true);
+  };
+
+  const handleOpenDisapproveDialog = (message: ConsultationMessage) => {
+    const parsed = parseRefillRequest(message);
+    if (!parsed) return;
+    setSelectedRefillMessage(message);
+    setDisapprovalReason('');
+    setDisapproveDialogOpen(true);
+  };
+
+  const handleApproveRefill = async () => {
+    if (!selectedSessionId || !selectedThread || !user?.id || !selectedRefillMessage) return;
+    const parsed = parseRefillRequest(selectedRefillMessage);
+    if (!parsed) return;
+    if (!replacementPrescription.trim()) {
+      toast({ title: 'Enter prescription', description: 'Please provide the renewed prescription.', variant: 'destructive' });
+      return;
+    }
+
+    const senderName =
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
+
+    setIsSubmittingRefillAction(true);
+    try {
+      const { error: noteError } = await supabase.from('doctor_consultation_notes').insert({
+        session_id: selectedSessionId,
+        patient_id: selectedThread.patientId,
+        doctor_id: user.id,
+        diagnosis: null,
+        treatment_plan: null,
+        prescriptions: replacementPrescription.trim(),
+        follow_up_notes: `Prescription refill approved on ${new Date().toLocaleString()}.`,
+      });
+      if (noteError) throw noteError;
+
+      const sent = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'doctor',
+        senderName,
+        `Refill approved for ${parsed.medication}. New prescription: ${replacementPrescription.trim()}`,
+      );
+      appendMessageIfMissing(sent);
+
+      toast({ title: 'Refill approved', description: 'Prescription has been renewed and sent to patient.' });
+      setApproveDialogOpen(false);
+      setSelectedRefillMessage(null);
+      setReplacementPrescription('');
+    } catch (error) {
+      console.error('Failed to approve refill request:', error);
+      toast({ title: 'Action failed', description: 'Could not approve refill request.', variant: 'destructive' });
+    } finally {
+      setIsSubmittingRefillAction(false);
+    }
+  };
+
+  const handleDisapproveRefill = async () => {
+    if (!selectedSessionId || !user?.id || !selectedRefillMessage) return;
+    const parsed = parseRefillRequest(selectedRefillMessage);
+    if (!parsed) return;
+    if (!disapprovalReason.trim()) {
+      toast({ title: 'Reason required', description: 'Please provide reason for disapproval.', variant: 'destructive' });
+      return;
+    }
+
+    const senderName =
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
+
+    setIsSubmittingRefillAction(true);
+    try {
+      const sent = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'doctor',
+        senderName,
+        `Refill request for ${parsed.medication} was not approved. Reason: ${disapprovalReason.trim()}`,
+      );
+      appendMessageIfMissing(sent);
+
+      toast({ title: 'Refill disapproved', description: 'Patient has been notified with your reason.' });
+      setDisapproveDialogOpen(false);
+      setSelectedRefillMessage(null);
+      setDisapprovalReason('');
+    } catch (error) {
+      console.error('Failed to disapprove refill request:', error);
+      toast({ title: 'Action failed', description: 'Could not disapprove refill request.', variant: 'destructive' });
+    } finally {
+      setIsSubmittingRefillAction(false);
+    }
   };
 
   return (
@@ -284,8 +461,8 @@ export function DoctorMessagesTab() {
       </div>
 
       {selectedThread ? (
-        <div className="flex flex-col h-full bg-background">
-          <div className="p-4 border-b border-border flex items-center justify-between">
+        <div className="flex flex-col h-full min-h-0 bg-background">
+          <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setSelectedSessionId(null)}>
                 <X className="w-5 h-5" />
@@ -296,9 +473,9 @@ export function DoctorMessagesTab() {
                   {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
-              <div>
+              <div className="min-w-0">
                 <h3 className="font-semibold">{selectedThread.patientName}</h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>
                     {formatDate(selectedThread.appointmentDate)}
                     {selectedThread.appointmentTime ? ` • ${selectedThread.appointmentTime}` : ''}
@@ -306,7 +483,7 @@ export function DoctorMessagesTab() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="hidden sm:flex items-center gap-1">
               <Button variant="ghost" size="icon">
                 <Phone className="w-5 h-5 text-muted-foreground" />
               </Button>
@@ -319,7 +496,7 @@ export function DoctorMessagesTab() {
             </div>
           </div>
 
-          <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+          <ScrollArea className="flex-1 min-h-0 p-3 sm:p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -329,8 +506,9 @@ export function DoctorMessagesTab() {
                 {messages.map((message, index) => {
                   const isDoctor = message.sender_role === 'doctor';
                   const showAvatar = !isDoctor && (index === 0 || messages[index - 1].sender_role === 'doctor');
+                  const refillRequest = parseRefillRequest(message);
                   return (
-                    <div key={message.id} className={cn('flex gap-3 max-w-[80%]', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
+                    <div key={message.id} className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
                       {!isDoctor && (
                         <div className="w-8 flex-shrink-0">
                           {showAvatar && (
@@ -344,9 +522,33 @@ export function DoctorMessagesTab() {
                         </div>
                       )}
                       <div className={cn('flex flex-col', isDoctor ? 'items-end' : 'items-start')}>
-                        <div className={cn('rounded-2xl px-4 py-2 shadow-sm', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
-                          <p className="text-sm">{message.content}</p>
+                        <div className={cn('rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
+                          {message.message_type === 'file' && message.file_url ? (
+                            <a
+                              href={message.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(
+                                'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
+                                isDoctor ? 'text-primary-foreground' : 'text-primary'
+                              )}
+                            >
+                              {message.content || 'Open attachment'}
+                            </a>
+                          ) : (
+                            <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
+                          )}
                         </div>
+                        {refillRequest && !isDoctor && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => handleOpenApproveDialog(message)}>
+                              Approve & Write Prescription
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => handleOpenDisapproveDialog(message)}>
+                              Disapprove
+                            </Button>
+                          </div>
+                        )}
                         <div className="flex items-center gap-1 mt-1 px-1">
                           <span className="text-[10px] text-muted-foreground">{formatTime(message.created_at)}</span>
                           {isDoctor && <Check className="w-3 h-3 text-muted-foreground" />}
@@ -359,10 +561,32 @@ export function DoctorMessagesTab() {
             )}
           </ScrollArea>
 
-          <div className="p-4 border-t border-border bg-background">
+          <div className="sticky bottom-0 p-4 border-t border-border bg-background">
             <form onSubmit={handleSendMessage} className="flex items-end gap-2">
-              <Input placeholder="Type a message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} className="flex-1 min-h-[44px]" />
-              <Button type="submit" disabled={!newMessage.trim()} className="flex-shrink-0">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleAttachDocument}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="flex-shrink-0"
+                disabled={isUploadingAttachment}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
+                <Paperclip className="w-5 h-5 text-muted-foreground" />
+              </Button>
+              <Input
+                placeholder={isUploadingAttachment ? 'Uploading attachment...' : 'Type a message...'}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                className="flex-1 min-h-[44px]"
+                disabled={isUploadingAttachment}
+              />
+              <Button type="submit" disabled={!newMessage.trim() || isUploadingAttachment} className="flex-shrink-0">
                 <Send className="w-5 h-5" />
               </Button>
             </form>
@@ -377,6 +601,52 @@ export function DoctorMessagesTab() {
           <p className="text-muted-foreground max-w-sm">Select a completed consultation to view chat history.</p>
         </div>
       )}
+
+      <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Refill Request</DialogTitle>
+            <DialogDescription>Write the renewed prescription to send to this patient.</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={replacementPrescription}
+            onChange={(e) => setReplacementPrescription(e.target.value)}
+            placeholder="Medication - dosage/instructions"
+            rows={5}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleApproveRefill} disabled={isSubmittingRefillAction}>
+              {isSubmittingRefillAction ? 'Saving...' : 'Approve & Send'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={disapproveDialogOpen} onOpenChange={setDisapproveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disapprove Refill Request</DialogTitle>
+            <DialogDescription>Provide a clear reason that will be sent to the patient.</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={disapprovalReason}
+            onChange={(e) => setDisapprovalReason(e.target.value)}
+            placeholder="Reason for disapproval"
+            rows={4}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDisapproveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDisapproveRefill} disabled={isSubmittingRefillAction}>
+              {isSubmittingRefillAction ? 'Sending...' : 'Send Disapproval'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

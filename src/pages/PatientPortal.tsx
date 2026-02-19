@@ -52,6 +52,7 @@ import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 
 const formatDateKey = (date: Date) => {
@@ -94,13 +95,33 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
   }
 } as const;
 
+interface PatientPrescription {
+  id: string;
+  noteId: string;
+  medication: string;
+  dosage: string;
+  rawText: string;
+  doctor: string;
+  doctorId: string | null;
+  sessionId: string | null;
+  date: string;
+  refillsRemaining: number;
+  status: 'active' | 'past';
+}
+
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
+  const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
+  const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
+  const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
+  const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
   
   // Track patient presence
@@ -108,6 +129,59 @@ const PatientPortal = () => {
   
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
+  useRealtimeMessageNotifications(user?.id, 'patient');
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`patient-unread-messages-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
+        async (payload) => {
+          const message = payload.new as {
+            session_id?: string;
+            sender_id?: string;
+            sender_role?: string;
+          } | null;
+
+          if (!message?.session_id || !message.sender_id) return;
+          if (message.sender_id === user.id) return;
+          if (message.sender_role !== 'doctor') return;
+          if (activeTab === 'messages') return;
+
+          let session = sessionParticipantsCacheRef.current.get(message.session_id);
+          if (!session) {
+            const { data } = await supabase
+              .from('consultation_sessions')
+              .select('patient_id, doctor_id')
+              .eq('id', message.session_id)
+              .maybeSingle();
+            if (!data) return;
+            session = {
+              patient_id: data.patient_id ?? null,
+              doctor_id: data.doctor_id ?? null,
+            };
+            sessionParticipantsCacheRef.current.set(message.session_id, session);
+          }
+
+          if (session.patient_id !== user.id) return;
+          setUnreadMessagesCount((prev) => prev + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'messages' && unreadMessagesCount > 0) {
+      setUnreadMessagesCount(0);
+    }
+  }, [activeTab, unreadMessagesCount]);
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
@@ -117,12 +191,17 @@ const PatientPortal = () => {
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
     phone: '',
     age: '',
     bloodType: '',
+  });
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: '',
   });
 
   // Initialize form data when patientRegistration loads
@@ -152,6 +231,8 @@ const PatientPortal = () => {
           prescriptions,
           created_at,
           consultation_sessions!inner(
+            id,
+            doctor_id,
             appointments!inner(specialist_name)
           )
         `)
@@ -164,27 +245,59 @@ const PatientPortal = () => {
         return [];
       }
 
+      const doctorIds = Array.from(
+        new Set(
+          (notes || [])
+            .map((note: any) => note.consultation_sessions?.doctor_id)
+            .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+        )
+      );
+
+      const doctorNameMap = new Map<string, string>();
+      if (doctorIds.length > 0) {
+        const { data: doctorRows } = await supabase
+          .from('doctors')
+          .select('id, name')
+          .in('id', doctorIds);
+
+        (doctorRows || []).forEach((doctor: any) => {
+          if (doctor.id && doctor.name) {
+            doctorNameMap.set(doctor.id, doctor.name);
+          }
+        });
+      }
+
       // Parse prescriptions and format them
-      const formatted: any[] = [];
+      const formatted: PatientPrescription[] = [];
       (notes || []).forEach((note: any) => {
         if (note.prescriptions) {
           try {
             // Try to parse as JSON if it's structured
-            const parsed = typeof note.prescriptions === 'string' 
-              ? note.prescriptions.split('\n').filter((line: string) => line.trim())
+            const parsed = typeof note.prescriptions === 'string'
+              ? note.prescriptions.split(/\r?\n/).filter((line: string) => line.trim())
               : [note.prescriptions];
             
             parsed.forEach((line: string) => {
               // Simple parsing: expect format like "Medication - Dosage" or just the text
               const parts = line.split('-').map((p: string) => p.trim());
+              const daysSincePrescription = Math.floor((Date.now() - new Date(note.created_at).getTime()) / (1000 * 60 * 60 * 24));
+              const doctorId = note.consultation_sessions?.doctor_id ?? null;
+              const resolvedDoctorName =
+                (doctorId ? doctorNameMap.get(doctorId) : null) ||
+                note.consultation_sessions?.appointments?.specialist_name ||
+                'Doctor';
               formatted.push({
-                id: `${note.id}-${formatted.length}`,
+                id: `${note.id}-${formatted.length}-${line.trim().toLowerCase()}`,
+                noteId: note.id,
                 medication: parts[0] || line,
                 dosage: parts[1] || 'As prescribed',
-                doctor: note.consultation_sessions?.appointments?.specialist_name || 'Dr. Unknown',
+                rawText: line.trim(),
+                doctor: resolvedDoctorName,
+                doctorId,
+                sessionId: note.consultation_sessions?.id ?? null,
                 date: note.created_at,
-                refillsRemaining: 3, // Default value
-                status: 'active'
+                refillsRemaining: daysSincePrescription > 90 ? 0 : 3,
+                status: daysSincePrescription > 90 ? 'past' : 'active'
               });
             });
           } catch (err) {
@@ -222,6 +335,89 @@ const PatientPortal = () => {
       toast({ title: 'Success', description: 'Health record deleted successfully!' });
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to delete health record.' });
+    }
+  };
+
+  const handleViewPrescriptionDetails = (prescription: PatientPrescription) => {
+    setSelectedPrescription(prescription);
+    setPrescriptionDetailsOpen(true);
+  };
+
+  const handleDownloadPrescription = (prescription: PatientPrescription) => {
+    try {
+      const content = [
+        'MYE-DOCTOR PRESCRIPTION',
+        `Patient: ${displayName}`,
+        `Prescribed by: ${prescription.doctor}`,
+        `Date: ${new Date(prescription.date).toLocaleString()}`,
+        '',
+        `Medication: ${prescription.medication}`,
+        `Dosage: ${prescription.dosage}`,
+        `Instructions: ${prescription.rawText}`,
+        '',
+        `Status: ${prescription.status}`,
+      ].join('\n');
+
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeMedication = prescription.medication.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      link.href = url;
+      link.download = `prescription-${safeMedication || 'medication'}-${new Date(prescription.date).toISOString().split('T')[0]}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: 'Downloaded', description: 'Prescription downloaded successfully.' });
+    } catch (error) {
+      console.error('Failed to download prescription:', error);
+      toast({ title: 'Error', description: 'Failed to download prescription.', variant: 'destructive' });
+    }
+  };
+
+  const handleRequestPrescriptionRefill = async (prescription: PatientPrescription) => {
+    if (!user?.id) return;
+    if (!prescription.sessionId || !prescription.doctorId) {
+      toast({
+        title: 'Refill unavailable',
+        description: 'This prescription is missing doctor/session details.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsRequestingRefillId(prescription.id);
+    try {
+      const content = `Prescription refill request: ${prescription.medication} (${prescription.dosage}). Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
+      const { error } = await supabase.from('consultation_messages').insert({
+        session_id: prescription.sessionId,
+        sender_id: user.id,
+        sender_role: 'patient',
+        sender_name: displayName,
+        message_type: 'text',
+        content,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: 'Refill requested',
+        description: 'Your refill request has been sent to your doctor.',
+      });
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(prescription.sessionId), 0);
+      setActiveTab('messages');
+      setSidebarOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['messages', prescription.sessionId] });
+    } catch (error) {
+      console.error('Failed to request refill:', error);
+      toast({
+        title: 'Request failed',
+        description: 'Could not send refill request. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRequestingRefillId(null);
     }
   };
 
@@ -603,6 +799,41 @@ const PatientPortal = () => {
       toast({ title: 'Error', description: 'Failed to update profile.' });
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    const newPassword = passwordFormData.newPassword.trim();
+    const confirmPassword = passwordFormData.confirmPassword.trim();
+
+    if (!newPassword || !confirmPassword) {
+      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      setPasswordFormData({ newPassword: '', confirmPassword: '' });
+      toast({ title: 'Success', description: 'Password changed successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to change password.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -1092,7 +1323,7 @@ const PatientPortal = () => {
                     { id: 'overview', label: 'Overview', icon: Activity },
                     { id: 'appointments', label: 'Appointments', icon: Calendar },
                     { id: 'prescriptions', label: 'Prescriptions', icon: Pill },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare },
+                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'records', label: 'Health Records', icon: FileText },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
@@ -1102,13 +1333,23 @@ const PatientPortal = () => {
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
-                      className={`w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
+                      className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${activeTab === item.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                         }`}
                     >
-                      <item.icon className="w-5 h-5" />
-                      {item.label}
+                      <div className="flex items-center gap-3">
+                        <item.icon className="w-5 h-5" />
+                        {item.label}
+                      </div>
+                      {item.badge && (
+                        <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
+                          ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
+                          : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
+                          }`}>
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </nav>
@@ -1785,7 +2026,7 @@ const PatientPortal = () => {
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {fetchedPrescriptions.map((prescription) => (
+                        {fetchedPrescriptions.map((prescription: PatientPrescription) => (
                           <div key={prescription.id} className={`p-4 rounded-xl border ${prescription.status === 'active' ? 'border-success/30 bg-success/5' : 'border-border'}`}>
                             <div className="flex items-start justify-between">
                               <div className="flex items-start gap-3">
@@ -1809,16 +2050,20 @@ const PatientPortal = () => {
                                 )}
                               </div>
                             </div>
-                            {prescription.status === 'active' && (
-                              <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
-                                <Button size="sm" variant="outline">
-                                  View Details
+                            <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
+                                View Details
+                              </Button>
+                              {prescription.status === 'active' && (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleRequestPrescriptionRefill(prescription)}
+                                  disabled={isRequestingRefillId === prescription.id}
+                                >
+                                  {isRequestingRefillId === prescription.id ? 'Sending...' : 'Request Refill'}
                                 </Button>
-                                <Button size="sm">
-                                  Request Refill
-                                </Button>
-                              </div>
-                          )}
+                              )}
+                            </div>
                         </div>
                       ))}
                     </div>
@@ -1829,7 +2074,7 @@ const PatientPortal = () => {
 
               {/* Messages Tab */}
               <TabsContent value="messages" className="space-y-6">
-                <MessagesTab />
+                <MessagesTab focusSessionId={messagesFocusSessionId} />
               </TabsContent>
 
               {/* Records Tab */}
@@ -2017,6 +2262,40 @@ const PatientPortal = () => {
                     </div>
                   </CardContent>
                 </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Change Password</CardTitle>
+                    <CardDescription>Update your account password</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-w-md">
+                      <div>
+                        <label className="text-sm font-medium">New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.newPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="At least 8 characters"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Confirm New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.confirmPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="Re-enter new password"
+                        />
+                      </div>
+                      <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+                        {isChangingPassword ? 'Updating...' : 'Update Password'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
             </Tabs>
           </main>
@@ -2030,6 +2309,70 @@ const PatientPortal = () => {
         appointmentId={selectedAppointment?.id || ''}
         doctorName={selectedAppointment ? getDoctorNameById(selectedAppointment.doctor_id, selectedAppointment.specialist_name) : ''}
       />
+
+      {/* Prescription Details Dialog */}
+      <Dialog open={prescriptionDetailsOpen} onOpenChange={setPrescriptionDetailsOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Prescription Details</DialogTitle>
+            <DialogDescription>
+              Review your prescription details and actions.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedPrescription && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/40 border border-border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="font-medium">Medication:</span> {selectedPrescription.medication}
+                  </div>
+                  <div>
+                    <span className="font-medium">Dosage:</span> {selectedPrescription.dosage}
+                  </div>
+                  <div>
+                    <span className="font-medium">Doctor:</span> {selectedPrescription.doctor}
+                  </div>
+                  <div>
+                    <span className="font-medium">Date:</span> {new Date(selectedPrescription.date).toLocaleDateString()}
+                  </div>
+                  <div>
+                    <span className="font-medium">Status:</span> {selectedPrescription.status}
+                  </div>
+                  <div>
+                    <span className="font-medium">Refills remaining:</span> {selectedPrescription.refillsRemaining}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">Instructions</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[72px]">
+                  <p className="text-sm whitespace-pre-wrap">{selectedPrescription.rawText}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {selectedPrescription && (
+              <>
+                <Button variant="outline" onClick={() => handleDownloadPrescription(selectedPrescription)}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </Button>
+                <Button
+                  onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
+                  disabled={isRequestingRefillId === selectedPrescription.id}
+                >
+                  {isRequestingRefillId === selectedPrescription.id ? 'Sending...' : 'Request Refill'}
+                </Button>
+              </>
+            )}
+            <Button variant="ghost" onClick={() => setPrescriptionDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Consultation Details Dialog */}
       <Dialog open={consultationDetailsOpen} onOpenChange={setConsultationDetailsOpen}>

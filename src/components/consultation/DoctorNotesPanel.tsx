@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Save, Stethoscope, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -42,6 +42,7 @@ export function DoctorNotesPanel({
   const [investigations, setInvestigations] = useState('');
   const [ePrescription, setEPrescription] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const lastSavedSignatureRef = useRef<string | null>(null);
   const [isFolderLoading, setIsFolderLoading] = useState(false);
   const [folderData, setFolderData] = useState<Record<string, any> | null>(null);
   const [folderNotes, setFolderNotes] = useState<Array<{
@@ -187,6 +188,7 @@ export function DoctorNotesPanel({
   /* ---------------- SAVE ---------------- */
 
   const handleSaveClerking = async () => {
+    if (isSaving) return;
 
     if (
       !presentingComplaint.trim() &&
@@ -243,6 +245,30 @@ ${investigations}
 E-Prescription:
 ${ePrescription}
 `;
+    const payloadSignature = JSON.stringify({
+      sessionId,
+      patientId,
+      doctorId,
+      presentingComplaint: presentingComplaint.trim(),
+      historyOfPresentingComplaint: historyOfPresentingComplaint.trim(),
+      pastMedicalHistory: pastMedicalHistory.trim(),
+      pastDrugHistory: pastDrugHistory.trim(),
+      allergies: allergies.trim(),
+      familyAndSocialHistory: familyAndSocialHistory.trim(),
+      clinicalExamination: clinicalExamination.trim(),
+      assessment: assessment.trim(),
+      treatmentPlan: treatmentPlan.trim(),
+      investigations: investigations.trim(),
+      ePrescription: ePrescription.trim()
+    });
+
+    if (payloadSignature === lastSavedSignatureRef.current) {
+      toast({
+        title: 'Already Saved',
+        description: 'This clerking content was just saved.'
+      });
+      return;
+    }
 
     setIsSaving(true);
 
@@ -276,6 +302,7 @@ ${ePrescription}
         p_investigations: investigations.trim() || null,
         p_e_prescription: ePrescription.trim() || null
       });
+      lastSavedSignatureRef.current = payloadSignature;
 
       localStorage.removeItem(storageKey);
 
@@ -286,6 +313,7 @@ ${ePrescription}
       onClerkingSaved?.();
 
     } catch (err) {
+      lastSavedSignatureRef.current = null;
       console.error(err);
       toast({
         title: 'Error',
