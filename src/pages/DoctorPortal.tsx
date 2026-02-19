@@ -388,7 +388,27 @@ const DoctorPortal = () => {
       return `\nEntry: ${formatEntryTimestamp(String(timestamp))} by ${doctorLabel}`;
     });
     entryHeaderRegex.lastIndex = 0;
-    return formatted.trim();
+
+    // Some legacy clerking writes can repeat the same "Entry:" header across
+    // multiple lines of one note. Collapse duplicate consecutive headers so
+    // multiline content remains a single entry block in the UI.
+    const lines = formatted
+      .split('\n')
+      .map((line) => line.trimEnd());
+    const dedupedLines: string[] = [];
+    let lastHeader: string | null = null;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith('Entry:')) {
+        if (line === lastHeader) continue;
+        lastHeader = line;
+      }
+      dedupedLines.push(line);
+    }
+
+    return dedupedLines.join('\n').trim();
   };
 
   const handleViewPatientFolder = async (apt: any) => {
