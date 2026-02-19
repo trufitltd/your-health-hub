@@ -54,6 +54,11 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
+  const formatDoctorDisplayName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return 'Dr. Doctor';
+    return /^dr\.?\s/i.test(trimmed) ? trimmed : `Dr. ${trimmed}`;
+  };
   const appendMessageIfMissing = (message: ConsultationMessage) => {
     setMessages((prev) => (prev.some((existing) => existing.id === message.id) ? prev : [...prev, message]));
   };
@@ -424,7 +429,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                   </Avatar>
                   <div className="flex-1 overflow-hidden">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium truncate">{thread.doctorName}</span>
+                      <span className="font-medium truncate">{formatDoctorDisplayName(thread.doctorName)}</span>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {formatDate(thread.appointmentDate)}
                       </span>
@@ -468,7 +473,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
-                <h3 className="font-semibold">{selectedThread.doctorName}</h3>
+                <h3 className="font-semibold">{formatDoctorDisplayName(selectedThread.doctorName)}</h3>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
                   <span>•</span>
