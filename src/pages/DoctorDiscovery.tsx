@@ -23,6 +23,8 @@ interface Doctor {
   user_id: string;
   full_name: string;
   specialty: string;
+  experience?: string | null;
+  rate_per_consultation?: number | null;
   hospital_affiliation: string;
   profile_picture_url?: string;
   age: number;
@@ -209,6 +211,7 @@ export default function DoctorDiscovery() {
           user_id,
           full_name,
           specialty,
+          rate_per_consultation,
           hospital_affiliation,
           profile_picture_url,
           age,
@@ -258,7 +261,8 @@ export default function DoctorDiscovery() {
             ...doctor,
             rating: avgRating,
             total_reviews: ratings.length,
-            experience_years: doctor.experience || 5,
+            experience_years: doctor.experience ? Number(doctor.experience) : null,
+            rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })
@@ -322,6 +326,11 @@ export default function DoctorDiscovery() {
     };
   }, [queryClient]);
 
+  const isGeneralPracticeSpecialty = (specialty: string) => {
+    const normalized = specialty?.toLowerCase().replace(/_/g, ' ').trim();
+    return normalized === 'general practice' || normalized === 'general practitioner';
+  };
+
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
     return doctorsWithPresence.filter(doctor => {
@@ -332,8 +341,8 @@ export default function DoctorDiscovery() {
 
       const matchesDoctorType =
         doctorTypeFilter === 'all' ? true :
-        doctorTypeFilter === 'general' ? doctor.specialty.toLowerCase() === 'general practice' :
-        doctorTypeFilter === 'specialist' ? doctor.specialty.toLowerCase() !== 'general practice' : true;
+        doctorTypeFilter === 'general' ? isGeneralPracticeSpecialty(doctor.specialty || '') :
+        doctorTypeFilter === 'specialist' ? !isGeneralPracticeSpecialty(doctor.specialty || '') : true;
 
       const matchesSpecialty = !filters.specialty || doctor.specialty.toLowerCase().includes(filters.specialty.toLowerCase());
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
@@ -359,9 +368,13 @@ export default function DoctorDiscovery() {
     setProfileOpen(true);
   };
 
-  // Helper: Get consultation fee based on specialty
-  const getConsultationFee = (specialty: string) => {
-    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
+  // Helper: Get consultation fee based on specialty + specialist configured rate
+  const getConsultationFee = (doctor: Doctor) => {
+    const isSpecialist = !isGeneralPracticeSpecialty(doctor.specialty || '');
+    const parsedRate = Number(doctor.rate_per_consultation);
+    if (isSpecialist && Number.isFinite(parsedRate) && parsedRate > 0) {
+      return parsedRate;
+    }
     return isSpecialist ? 10000 : 5000;
   };
 
@@ -638,10 +651,10 @@ export default function DoctorDiscovery() {
                             </div>
                             <div className="flex gap-2 flex-col">
                               <Badge variant="outline" className="text-xs">
-                                {doctor.experience_years}y exp
+                                {doctor.experience_years ? `${doctor.experience_years}y exp` : 'Experience N/A'}
                               </Badge>
                               <Badge className="text-xs bg-blue-100 text-blue-800">
-                                {doctor.specialty.toLowerCase() === 'general practice' ? 'General' : 'Specialist'}
+                                {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
                               </Badge>
                               {!doctor.is_active && (
                                 <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
@@ -679,7 +692,7 @@ export default function DoctorDiscovery() {
                           )}
 
                           <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                            <p className="text-sm font-semibold text-success">₦{getConsultationFee(doctor.specialty).toLocaleString()}</p>
+                            <p className="text-sm font-semibold text-success">₦{getConsultationFee(doctor).toLocaleString()}</p>
                             <p className="text-xs text-muted-foreground">Consultation Fee</p>
                           </div>
 
@@ -759,7 +772,7 @@ export default function DoctorDiscovery() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="p-4 rounded-lg bg-muted/50">
                       <p className="text-sm text-muted-foreground mb-1">Experience</p>
-                      <p className="font-semibold">{selectedDoctor.experience_years} Years</p>
+                      <p className="font-semibold">{selectedDoctor.experience_years ? `${selectedDoctor.experience_years} Years` : 'Not specified'}</p>
                     </div>
                     <div className="p-4 rounded-lg bg-muted/50">
                       <p className="text-sm text-muted-foreground mb-1">Age</p>
@@ -779,7 +792,7 @@ export default function DoctorDiscovery() {
                   <div>
                     <h3 className="font-semibold mb-3">Professional Biography</h3>
                     <p className="text-muted-foreground leading-relaxed">
-                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
+                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
                     </p>
                   </div>
 

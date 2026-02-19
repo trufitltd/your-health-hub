@@ -47,6 +47,7 @@ export class WebRTCService {
   private currentOfferId: string | null = null;
   private localTracksAdded = false;
   private transceiversInitialized = false;
+  private readonly validSdpTypes: RTCSdpType[] = ['offer', 'answer', 'pranswer', 'rollback'];
 
   constructor(sessionId: string, userId: string, isInitiator: boolean, sessionStartedAt?: Date) {
     this.sessionId = sessionId;
@@ -244,10 +245,12 @@ export class WebRTCService {
           (async () => {
             try {
               console.log('Attempting to apply pending remote description after signaling state change');
-              const normalized = {
-                ...this.pendingRemoteDescription!,
-                sdp: this.removeProblematicExtensions(this.pendingRemoteDescription!.sdp || '')
-              };
+              const normalized = this.normalizeRemoteDescription(this.pendingRemoteDescription, 'answer');
+              if (!normalized) {
+                console.warn('Dropping invalid pending remote description');
+                this.pendingRemoteDescription = null;
+                return;
+              }
               await this.peerConnection!.setRemoteDescription(new RTCSessionDescription(normalized));
               console.log('Pending remote description applied successfully');
               this.pendingRemoteDescription = null;
@@ -649,33 +652,32 @@ export class WebRTCService {
       const pc = this.peerConnection;
       
       if (signalData.type === 'offer') {
-        const offer = signalData.offer as RTCSessionDescriptionInit;
+        const offer = this.normalizeRemoteDescription(signalData.offer, 'offer');
+        if (!offer) {
+          console.warn('Ignoring invalid offer payload:', signalData.offer);
+          return;
+        }
         console.log('Received offer, signalingState:', pc.signalingState);
         
         if (pc.signalingState === 'stable' && !pc.remoteDescription) {
           console.log('Setting remote description from offer');
           try {
             const offerId = (signalData.offer_id as string | undefined) ?? null;
-            // Normalize the offer SDP before setting it
-            const normalizedOffer = {
-              ...offer,
-              sdp: this.removeProblematicExtensions(offer.sdp || '')
-            };
-            await pc.setRemoteDescription(new RTCSessionDescription(normalizedOffer));
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
             // Ensure local tracks are added after setting remote description
             // so transceiver order matches the offer and avoids m-line mismatch.
             await this.addLocalTracks();
             this.forceSendRecvForLocalTracks();
-            this.logSdpMediaLines('offer', normalizedOffer.sdp || '');
+            this.logSdpMediaLines('offer', offer.sdp || '');
             
             const answer = await pc.createAnswer({
               offerToReceiveAudio: true,
               offerToReceiveVideo: true
             });
             // Normalize the answer SDP as well
-            const normalizedAnswer = {
-              ...answer,
+            const normalizedAnswer: RTCSessionDescriptionInit = {
+              type: 'answer',
               sdp: this.removeProblematicExtensions(answer.sdp || '')
             };
             this.logSdpMediaLines('answer', normalizedAnswer.sdp || '');
@@ -693,7 +695,11 @@ export class WebRTCService {
         }
       } 
       else if (signalData.type === 'answer') {
-        const answer = signalData.answer as RTCSessionDescriptionInit;
+        const answer = this.normalizeRemoteDescription(signalData.answer, 'answer');
+        if (!answer) {
+          console.warn('Ignoring invalid answer payload:', signalData.answer);
+          return;
+        }
         console.log('Received answer, signalingState:', pc.signalingState, 'remoteDescription:', !!pc.remoteDescription);
         const answerOfferId = (signalData.offer_id as string | undefined) ?? null;
         if (this.currentOfferId && (!answerOfferId || answerOfferId !== this.currentOfferId)) {
@@ -704,13 +710,8 @@ export class WebRTCService {
         if (pc.signalingState === 'have-local-offer' && !pc.remoteDescription) {
           console.log('Setting remote description from answer');
           try {
-            // Clean the answer SDP BEFORE trying to set it (same as offer)
-            const normalizedAnswer = {
-              ...answer,
-              sdp: this.removeProblematicExtensions(answer.sdp || '')
-            };
-            this.logSdpMediaLines('answer (received)', normalizedAnswer.sdp || '');
-            await pc.setRemoteDescription(new RTCSessionDescription(normalizedAnswer));
+            this.logSdpMediaLines('answer (received)', answer.sdp || '');
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
             console.log('Remote description set from answer');
             await this.flushCandidateQueue();
           } catch (error) {
@@ -926,9 +927,9 @@ export class WebRTCService {
       const offer = await this.peerConnection!.createOffer();
       this.currentOfferId = crypto.randomUUID();
       // Normalize the offer SDP to remove problematic extensions
-      const normalizedOffer = {
-        ...offer,
-        sdp: this.removeProblematicExtensions(offer.sdp!)
+      const normalizedOffer: RTCSessionDescriptionInit = {
+        type: 'offer',
+        sdp: this.removeProblematicExtensions(offer.sdp || '')
       };
       await this.peerConnection!.setLocalDescription(normalizedOffer);
       console.log('Offer created and set as local description');
@@ -937,6 +938,30 @@ export class WebRTCService {
     } catch (err) {
       console.error('Error creating offer:', err);
     }
+  }
+
+  private normalizeRemoteDescription(
+    rawDescription: unknown,
+    fallbackType: 'offer' | 'answer'
+  ): RTCSessionDescriptionInit | null {
+    if (!rawDescription || typeof rawDescription !== 'object') {
+      return null;
+    }
+
+    const input = rawDescription as { type?: unknown; sdp?: unknown };
+    const rawType = typeof input.type === 'string' ? input.type : null;
+    const type = this.validSdpTypes.includes((rawType ?? fallbackType) as RTCSdpType)
+      ? ((rawType ?? fallbackType) as RTCSdpType)
+      : fallbackType;
+
+    if (typeof input.sdp !== 'string' || input.sdp.length === 0) {
+      return null;
+    }
+
+    return {
+      type,
+      sdp: this.removeProblematicExtensions(input.sdp),
+    };
   }
 
   subscribeToSignalsOnly() {
