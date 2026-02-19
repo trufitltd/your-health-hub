@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Save, Stethoscope, Search, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -52,6 +52,7 @@ export function ClerkingPanel({ isOpen, onClose, sessionId, patientId, doctorId 
   });
 
   const [isSaving, setIsSaving] = useState(false);
+  const lastSavedSignatureRef = useRef<string | null>(null);
 
   /* ---------------- AUTO SAVE ---------------- */
 
@@ -108,6 +109,7 @@ export function ClerkingPanel({ isOpen, onClose, sessionId, patientId, doctorId 
   /* ---------------- SAVE ---------------- */
 
   const handleSave = async () => {
+    if (isSaving) return;
 
     if (!subjective && !objective && !assessment && !plan) {
       toast({ title: 'Empty Clerking', variant: 'destructive' });
@@ -136,6 +138,25 @@ ${plan}
 MEDICATIONS:
 ${selectedMedications.join(', ')}
 `;
+    const payloadSignature = JSON.stringify({
+      sessionId,
+      patientId,
+      doctorId,
+      subjective: subjective.trim(),
+      objective: objective.trim(),
+      assessment: assessment.trim(),
+      plan: plan.trim(),
+      meds: selectedMedications.map((m) => m.trim()).join('|'),
+      bp: vitals.bp.trim(),
+      pulse: vitals.pulse.trim(),
+      temp: vitals.temp.trim(),
+      spo2: vitals.spo2.trim()
+    });
+
+    if (payloadSignature === lastSavedSignatureRef.current) {
+      toast({ title: 'Already Saved' });
+      return;
+    }
 
     setIsSaving(true);
 
@@ -154,12 +175,14 @@ ${selectedMedications.join(', ')}
         p_patient_id: patientId,
         p_note_text: composedNote
       });
+      lastSavedSignatureRef.current = payloadSignature;
 
       localStorage.removeItem(storageKey);
 
       toast({ title: 'Clerking Saved ✅' });
 
     } catch (err) {
+      lastSavedSignatureRef.current = null;
       toast({ title: 'Save Failed', variant: 'destructive' });
     } finally {
       setIsSaving(false);
