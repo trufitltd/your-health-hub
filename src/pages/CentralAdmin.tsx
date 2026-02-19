@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
   Star, TrendingUp, Shield, Award, Eye, Trash2, Mail,
-  Badge as BadgeIcon
+  Badge as BadgeIcon, Settings
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -81,6 +81,17 @@ const CentralAdmin = () => {
   const [inboxPageSize, setInboxPageSize] = useState(10);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [profileFormData, setProfileFormData] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+  });
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: '',
+  });
 
   const adminEmails = useMemo(() => {
     const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
@@ -89,6 +100,14 @@ const CentralAdmin = () => {
 
   const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
   const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
+
+  useEffect(() => {
+    setProfileFormData({
+      fullName: (user?.user_metadata?.full_name as string) || '',
+      email: user?.email || '',
+      phone: (user?.user_metadata?.phone as string) || '',
+    });
+  }, [user?.email, user?.user_metadata]);
 
   // Fetch all doctors with their verification status - MUST be before early returns
   const { data: doctors = [], isLoading: doctorsLoading, refetch } = useQuery({
@@ -577,6 +596,92 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleSaveProfile = async () => {
+    if (!user?.id) return;
+
+    const fullName = profileFormData.fullName.trim();
+    const phone = profileFormData.phone.trim();
+    const nextEmail = profileFormData.email.trim();
+    const currentEmail = user.email || '';
+
+    if (!fullName) {
+      toast({ title: 'Missing name', description: 'Full name is required.', variant: 'destructive' });
+      return;
+    }
+    if (!nextEmail) {
+      toast({ title: 'Missing email', description: 'Email is required.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const updatePayload: { data: Record<string, string>; email?: string } = {
+        data: {
+          full_name: fullName,
+          phone,
+        },
+      };
+
+      if (nextEmail !== currentEmail) {
+        updatePayload.email = nextEmail;
+      }
+
+      const { error } = await supabase.auth.updateUser(updatePayload);
+      if (error) throw error;
+
+      toast({
+        title: 'Profile updated',
+        description:
+          nextEmail !== currentEmail
+            ? 'Profile updated. Check your email to confirm your new address.'
+            : 'Admin profile updated successfully.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Update failed',
+        description: error?.message || 'Could not update profile.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    const newPassword = passwordFormData.newPassword.trim();
+    const confirmPassword = passwordFormData.confirmPassword.trim();
+
+    if (!newPassword || !confirmPassword) {
+      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      setPasswordFormData({ newPassword: '', confirmPassword: '' });
+      toast({ title: 'Success', description: 'Password changed successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to change password.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -631,6 +736,7 @@ const CentralAdmin = () => {
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
+                    { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -735,6 +841,7 @@ const CentralAdmin = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
@@ -1355,6 +1462,103 @@ const CentralAdmin = () => {
                           </ul>
                         </div>
                       </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="settings" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Admin Profile</CardTitle>
+                    <CardDescription>Manage your central admin account settings</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-6">
+                      <div className="flex items-center gap-4">
+                        <Avatar className="w-16 h-16">
+                          <AvatarImage src="" />
+                          <AvatarFallback className="bg-primary text-primary-foreground text-xl">
+                            {(profileFormData.fullName || 'Admin')
+                              .split(' ')
+                              .map((n) => n[0])
+                              .slice(0, 2)
+                              .join('')
+                              .toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="font-semibold text-lg">{profileFormData.fullName || 'Central Admin'}</p>
+                          <p className="text-sm text-muted-foreground">{profileFormData.email || user?.email}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-sm font-medium">Full Name</label>
+                          <Input
+                            value={profileFormData.fullName}
+                            onChange={(e) => setProfileFormData({ ...profileFormData, fullName: e.target.value })}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">Email</label>
+                          <Input
+                            type="email"
+                            value={profileFormData.email}
+                            onChange={(e) => setProfileFormData({ ...profileFormData, email: e.target.value })}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">Phone</label>
+                          <Input
+                            value={profileFormData.phone}
+                            onChange={(e) => setProfileFormData({ ...profileFormData, phone: e.target.value })}
+                            className="mt-1"
+                            placeholder="+234..."
+                          />
+                        </div>
+                      </div>
+
+                      <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                        {isSavingProfile ? 'Saving...' : 'Save Profile'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Change Password</CardTitle>
+                    <CardDescription>Update your admin account password</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-w-md">
+                      <div>
+                        <label className="text-sm font-medium">New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.newPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="At least 8 characters"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Confirm New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.confirmPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="Re-enter new password"
+                        />
+                      </div>
+                      <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+                        {isChangingPassword ? 'Updating...' : 'Update Password'}
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
