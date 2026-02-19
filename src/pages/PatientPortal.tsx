@@ -140,12 +140,17 @@ const PatientPortal = () => {
   const queryClient = useQueryClient();
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
     phone: '',
     age: '',
     bloodType: '',
+  });
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: '',
   });
 
   // Initialize form data when patientRegistration loads
@@ -737,6 +742,41 @@ const PatientPortal = () => {
       toast({ title: 'Error', description: 'Failed to update profile.' });
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    const newPassword = passwordFormData.newPassword.trim();
+    const confirmPassword = passwordFormData.confirmPassword.trim();
+
+    if (!newPassword || !confirmPassword) {
+      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      setPasswordFormData({ newPassword: '', confirmPassword: '' });
+      toast({ title: 'Success', description: 'Password changed successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to change password.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -1779,6 +1819,40 @@ const PatientPortal = () => {
 
                       <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
                         {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Change Password</CardTitle>
+                    <CardDescription>Update your account password</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-w-md">
+                      <div>
+                        <label className="text-sm font-medium">New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.newPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="At least 8 characters"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Confirm New Password</label>
+                        <Input
+                          type="password"
+                          value={passwordFormData.confirmPassword}
+                          onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
+                          className="mt-1"
+                          placeholder="Re-enter new password"
+                        />
+                      </div>
+                      <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+                        {isChangingPassword ? 'Updating...' : 'Update Password'}
                       </Button>
                     </div>
                   </CardContent>
