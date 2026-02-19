@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
 
 interface FollowUpThread {
@@ -35,7 +36,11 @@ interface FollowUpThread {
   lastMessageAt?: string | null;
 }
 
-export function MessagesTab() {
+interface MessagesTabProps {
+  focusSessionId?: string | null;
+}
+
+export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
   const { user } = useAuth();
   const [threads, setThreads] = useState<FollowUpThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -44,9 +49,19 @@ export function MessagesTab() {
   const [isLoadingThreads, setIsLoadingThreads] = useState(true);
   const [messages, setMessages] = useState<ConsultationMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
+  const formatDoctorDisplayName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return 'Dr. Doctor';
+    return /^dr\.?\s/i.test(trimmed) ? trimmed : `Dr. ${trimmed}`;
+  };
+  const appendMessageIfMissing = (message: ConsultationMessage) => {
+    setMessages((prev) => (prev.some((existing) => existing.id === message.id) ? prev : [...prev, message]));
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -158,6 +173,92 @@ export function MessagesTab() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!focusSessionId) return;
+    setSelectedSessionId(focusSessionId);
+  }, [focusSessionId]);
+
+  useEffect(() => {
+    if (!focusSessionId || !user?.id) return;
+    if (threads.some((thread) => thread.sessionId === focusSessionId)) return;
+
+    let isMounted = true;
+    const loadFocusedSessionThread = async () => {
+      try {
+        const { data: session, error } = await supabase
+          .from('consultation_sessions')
+          .select(`
+            id,
+            doctor_id,
+            consultation_type,
+            created_at,
+            appointments(
+              date,
+              time,
+              specialist_name
+            )
+          `)
+          .eq('id', focusSessionId)
+          .eq('patient_id', user.id)
+          .maybeSingle();
+
+        if (error || !session || !isMounted) return;
+
+        const doctorId = (session as { doctor_id?: string | null }).doctor_id ?? '';
+        let doctorName =
+          (session as { appointments?: { specialist_name?: string | null } | Array<{ specialist_name?: string | null }> }).appointments &&
+          Array.isArray((session as any).appointments)
+            ? (((session as any).appointments[0]?.specialist_name as string | undefined) || 'Doctor')
+            : (((session as any).appointments?.specialist_name as string | undefined) || 'Doctor');
+        let doctorAvatar: string | null = null;
+        let specialty: string | null = null;
+
+        if (doctorId) {
+          const { data: doctorRow } = await supabase
+            .from('doctors')
+            .select('name, specialty, avatar_url')
+            .eq('id', doctorId)
+            .maybeSingle();
+          if (doctorRow) {
+            doctorName = (doctorRow.name as string | null) || doctorName;
+            doctorAvatar = (doctorRow.avatar_url as string | null) ?? null;
+            specialty = (doctorRow.specialty as string | null) ?? null;
+          }
+        }
+
+        const appointmentObj = Array.isArray((session as any).appointments)
+          ? (session as any).appointments[0]
+          : (session as any).appointments;
+
+        const thread: FollowUpThread = {
+          id: session.id as string,
+          sessionId: session.id as string,
+          doctorId,
+          doctorName,
+          specialty,
+          doctorAvatar,
+          followUpNotes: '',
+          appointmentDate: appointmentObj?.date ?? null,
+          appointmentTime: appointmentObj?.time ?? null,
+          consultationType: (session as { consultation_type?: string | null }).consultation_type ?? null,
+          lastMessageAt: (session as { created_at?: string | null }).created_at ?? null,
+        };
+
+        setThreads((prev) => {
+          if (prev.some((item) => item.sessionId === thread.sessionId)) return prev;
+          return [thread, ...prev];
+        });
+      } catch (err) {
+        console.error('Failed to load focused session thread:', err);
+      }
+    };
+
+    loadFocusedSessionThread();
+    return () => {
+      isMounted = false;
+    };
+  }, [focusSessionId, user?.id, threads]);
+
+  useEffect(() => {
     if (!selectedSessionId) {
       setMessages([]);
       return;
@@ -177,7 +278,7 @@ export function MessagesTab() {
       });
 
     const unsubscribe = consultationService.subscribeToMessages(selectedSessionId, (message) => {
-      setMessages((prev) => [...prev, message]);
+      appendMessageIfMissing(message);
     });
 
     return () => {
@@ -220,7 +321,50 @@ export function MessagesTab() {
       content,
     );
 
-    setMessages((prev) => [...prev, sent]);
+    appendMessageIfMissing(sent);
+  };
+
+  const handleAttachDocument = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selectedSessionId || !user?.id) return;
+
+    const senderName =
+      user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Patient';
+
+    setIsUploadingAttachment(true);
+    try {
+      const fileName = `${Date.now()}-${file.name}`;
+      const filePath = `${user.id}/consultation-attachments/${selectedSessionId}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('patient-files')
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('patient-files')
+        .getPublicUrl(filePath);
+
+      const sent = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'patient',
+        senderName,
+        file.name,
+        'file',
+        publicUrlData.publicUrl,
+      );
+
+      appendMessageIfMissing(sent);
+      toast({ title: 'Attachment sent' });
+    } catch (error) {
+      console.error('Failed to upload attachment:', error);
+      toast({ title: 'Upload failed', description: 'Could not send attachment.', variant: 'destructive' });
+    } finally {
+      setIsUploadingAttachment(false);
+    }
   };
 
   const formatTime = (dateString: string) => {
@@ -285,7 +429,7 @@ export function MessagesTab() {
                   </Avatar>
                   <div className="flex-1 overflow-hidden">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium truncate">{thread.doctorName}</span>
+                      <span className="font-medium truncate">{formatDoctorDisplayName(thread.doctorName)}</span>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {formatDate(thread.appointmentDate)}
                       </span>
@@ -306,9 +450,9 @@ export function MessagesTab() {
 
       {/* Chat Area */}
       {selectedThread ? (
-        <div className="flex flex-col h-full bg-background">
+        <div className="flex flex-col h-full min-h-0 bg-background">
           {/* Chat Header */}
-          <div className="p-4 border-b border-border flex items-center justify-between">
+          <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <Button 
                 variant="ghost" 
@@ -328,9 +472,9 @@ export function MessagesTab() {
                     .slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
-              <div>
-                <h3 className="font-semibold">{selectedThread.doctorName}</h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="min-w-0">
+                <h3 className="font-semibold">{formatDoctorDisplayName(selectedThread.doctorName)}</h3>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
                   <span>•</span>
                   <span>
@@ -340,7 +484,7 @@ export function MessagesTab() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="hidden sm:flex items-center gap-1">
               <Button variant="ghost" size="icon">
                 <Phone className="w-5 h-5 text-muted-foreground" />
               </Button>
@@ -354,7 +498,7 @@ export function MessagesTab() {
           </div>
 
           {/* Messages List */}
-          <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+          <ScrollArea className="flex-1 min-h-0 p-3 sm:p-4" ref={scrollRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -369,7 +513,7 @@ export function MessagesTab() {
                   return (
                     <div
                       key={message.id}
-                      className={cn('flex gap-3 max-w-[80%]', isUser ? 'ml-auto flex-row-reverse' : '')}
+                      className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isUser ? 'ml-auto flex-row-reverse' : '')}
                     >
                       {!isUser && (
                         <div className="w-8 flex-shrink-0">
@@ -390,13 +534,27 @@ export function MessagesTab() {
                       <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start')}>
                         <div
                           className={cn(
-                            'rounded-2xl px-4 py-2 shadow-sm',
+                            'rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full',
                             isUser
                               ? 'bg-primary text-primary-foreground rounded-tr-sm'
                               : 'bg-muted text-foreground rounded-tl-sm',
                           )}
                         >
-                          <p className="text-sm">{message.content}</p>
+                          {message.message_type === 'file' && message.file_url ? (
+                            <a
+                              href={message.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(
+                                'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
+                                isUser ? 'text-primary-foreground' : 'text-primary'
+                              )}
+                            >
+                              {message.content || 'Open attachment'}
+                            </a>
+                          ) : (
+                            <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 mt-1 px-1">
                           <span className="text-[10px] text-muted-foreground">
@@ -413,18 +571,32 @@ export function MessagesTab() {
           </ScrollArea>
 
           {/* Input Area */}
-          <div className="p-4 border-t border-border bg-background">
+          <div className="sticky bottom-0 p-4 border-t border-border bg-background">
             <form onSubmit={handleSendMessage} className="flex items-end gap-2">
-              <Button type="button" variant="ghost" size="icon" className="flex-shrink-0">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleAttachDocument}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="flex-shrink-0"
+                disabled={isUploadingAttachment}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
                 <Paperclip className="w-5 h-5 text-muted-foreground" />
               </Button>
               <Input
-                placeholder="Type a message..."
+                placeholder={isUploadingAttachment ? 'Uploading attachment...' : 'Type a message...'}
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 className="flex-1 min-h-[44px]"
+                disabled={isUploadingAttachment}
               />
-              <Button type="submit" disabled={!newMessage.trim()} className="flex-shrink-0">
+              <Button type="submit" disabled={!newMessage.trim() || isUploadingAttachment} className="flex-shrink-0">
                 <Send className="w-5 h-5" />
               </Button>
             </form>

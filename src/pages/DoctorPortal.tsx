@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -43,6 +43,7 @@ import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
+import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -51,8 +52,6 @@ const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [viewNotesOpen, setViewNotesOpen] = useState(false);
-  const [selectedAppointmentForNotes, setSelectedAppointmentForNotes] = useState<any>(null);
   const [viewFolderOpen, setViewFolderOpen] = useState(false);
   const [selectedAppointmentForFolder, setSelectedAppointmentForFolder] = useState<any>(null);
   const [isLoadingPatientFolder, setIsLoadingPatientFolder] = useState(false);
@@ -60,15 +59,49 @@ const DoctorPortal = () => {
   const [patientFolderNotes, setPatientFolderNotes] = useState<Array<{
     id: string;
     created_at: string;
+    doctor_id: string | null;
     diagnosis: string | null;
     treatment_plan: string | null;
     prescriptions: string | null;
     follow_up_notes: string | null;
   }>>([]);
+  const [patientHealthRecords, setPatientHealthRecords] = useState<Array<{
+    id: string;
+    file_name: string;
+    file_url: string;
+    file_type: string | null;
+    file_size: number | null;
+    uploaded_at: string;
+    notes: string | null;
+  }>>([]);
+  const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
+  const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const unreadReviewsCount = unreadReviewIds.length;
+  const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
+
+  const getSeenReviewIds = () => {
+    if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
+    try {
+      const raw = window.localStorage.getItem(reviewSeenStorageKey);
+      if (!raw) return new Set<string>();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set<string>();
+      return new Set<string>(parsed.filter((v) => typeof v === 'string'));
+    } catch {
+      return new Set<string>();
+    }
+  };
+
+  const persistSeenReviewIds = (ids: Set<string>) => {
+    if (!reviewSeenStorageKey || typeof window === 'undefined') return;
+    window.localStorage.setItem(reviewSeenStorageKey, JSON.stringify(Array.from(ids)));
+  };
 
   // Track doctor presence
   useEffect(() => {
@@ -78,6 +111,133 @@ const DoctorPortal = () => {
   }, [user?.id, role]);
   
   useTrackUserPresence(user?.id, 'doctor');
+  useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  useEffect(() => {
+    if (!user?.id || !reviewSeenStorageKey) return;
+
+    const loadUnreadReviews = async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('doctor_id', user.id)
+        .eq('status', 'completed')
+        .not('rating', 'is', null)
+        .order('date', { ascending: false });
+
+      if (error) {
+        console.error('Failed to load doctor review notifications:', error);
+        return;
+      }
+
+      const seenIds = getSeenReviewIds();
+      const unseenIds = (data || [])
+        .map((row) => row.id as string)
+        .filter((id) => !seenIds.has(id));
+      setUnreadReviewIds(unseenIds);
+    };
+
+    loadUnreadReviews();
+  }, [user?.id, reviewSeenStorageKey]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`doctor-review-notify-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'appointments', filter: `doctor_id=eq.${user.id}` },
+        (payload) => {
+          const updated = payload.new as {
+            id?: string;
+            rating?: number | null;
+            review_comment?: string | null;
+            patient_name?: string | null;
+          } | null;
+
+          if (!updated?.id || updated.rating === null || updated.rating === undefined) return;
+
+          setUnreadReviewIds((prev) => {
+            if (prev.includes(updated.id as string)) return prev;
+
+            const seenIds = getSeenReviewIds();
+            if (seenIds.has(updated.id as string)) return prev;
+
+            toast({
+              title: 'New patient review',
+              description: `${updated.patient_name || 'A patient'} rated you ${updated.rating}/5`,
+            });
+            return [...prev, updated.id as string];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`doctor-unread-messages-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
+        async (payload) => {
+          const message = payload.new as {
+            session_id?: string;
+            sender_id?: string;
+            sender_role?: string;
+          } | null;
+
+          if (!message?.session_id || !message.sender_id) return;
+          if (message.sender_id === user.id) return;
+          if (message.sender_role !== 'patient') return;
+          if (activeTab === 'messages') return;
+
+          let session = sessionParticipantsCacheRef.current.get(message.session_id);
+          if (!session) {
+            const { data } = await supabase
+              .from('consultation_sessions')
+              .select('patient_id, doctor_id')
+              .eq('id', message.session_id)
+              .maybeSingle();
+            if (!data) return;
+            session = {
+              patient_id: data.patient_id ?? null,
+              doctor_id: data.doctor_id ?? null,
+            };
+            sessionParticipantsCacheRef.current.set(message.session_id, session);
+          }
+
+          if (session.doctor_id !== user.id) return;
+          setUnreadMessagesCount((prev) => prev + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'messages' && unreadMessagesCount > 0) {
+      setUnreadMessagesCount(0);
+    }
+  }, [activeTab, unreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'reviews' || unreadReviewIds.length === 0) return;
+    const seenIds = getSeenReviewIds();
+    unreadReviewIds.forEach((id) => seenIds.add(id));
+    persistSeenReviewIds(seenIds);
+    setUnreadReviewIds([]);
+  }, [activeTab, unreadReviewIds]);
   
   // Subscribe to patient presence
   const { presenceMap: patientPresenceMap } = usePatientPresence();
@@ -169,6 +329,7 @@ const DoctorPortal = () => {
   const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
@@ -177,6 +338,10 @@ const DoctorPortal = () => {
     specialty: '',
     experience: '',
     bio: '',
+  });
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: '',
   });
 
   const patientFolderFieldOrder = [
@@ -203,15 +368,74 @@ const DoctorPortal = () => {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
 
+  const entryHeaderRegex = /---\s*Entry:\s*(.+?)\s+by doctor:([0-9a-fA-F-]{36})/g;
+
+  const extractDoctorIdsFromEntries = (value: unknown): string[] => {
+    if (typeof value !== 'string' || !value.includes('by doctor:')) return [];
+
+    const ids: string[] = [];
+    let match: RegExpExecArray | null = entryHeaderRegex.exec(value);
+    while (match) {
+      ids.push(match[2]);
+      match = entryHeaderRegex.exec(value);
+    }
+    entryHeaderRegex.lastIndex = 0;
+    return ids;
+  };
+
+  const formatEntryTimestamp = (rawTimestamp: string): string => {
+    const date = new Date(rawTimestamp.trim());
+    if (Number.isNaN(date.getTime())) return rawTimestamp.trim();
+    return date.toLocaleString();
+  };
+
+  const formatFolderEntryText = (value: unknown, fallback: string): string => {
+    if (value === null || value === undefined || value === '') return fallback;
+    if (typeof value !== 'string') return String(value);
+
+    const formatted = value.replace(entryHeaderRegex, (_match, timestamp, doctorId) => {
+      const doctorName = doctorNamesById[doctorId];
+      const doctorLabel = doctorName ? `Dr. ${doctorName}` : `Doctor ${doctorId.slice(0, 8)}`;
+      return `\nEntry: ${formatEntryTimestamp(String(timestamp))} by ${doctorLabel}`;
+    });
+    entryHeaderRegex.lastIndex = 0;
+
+    // Some legacy clerking writes can repeat the same "Entry:" header across
+    // multiple lines of one note. Collapse duplicate consecutive headers so
+    // multiline content remains a single entry block in the UI.
+    const lines = formatted
+      .split('\n')
+      .map((line) => line.trimEnd());
+    const dedupedLines: string[] = [];
+    let lastHeader: string | null = null;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith('Entry:')) {
+        if (line === lastHeader) continue;
+        lastHeader = line;
+      }
+      dedupedLines.push(line);
+    }
+
+    return dedupedLines.join('\n').trim();
+  };
+
   const handleViewPatientFolder = async (apt: any) => {
     setSelectedAppointmentForFolder(apt);
     setViewFolderOpen(true);
     setIsLoadingPatientFolder(true);
     setPatientFolder(null);
     setPatientFolderNotes([]);
+    setPatientHealthRecords([]);
 
     try {
-      const [{ data: folder, error: folderError }, { data: notes, error: notesError }] = await Promise.all([
+      const [
+        { data: folder, error: folderError },
+        { data: notes, error: notesError },
+        { data: healthRecords, error: healthRecordsError }
+      ] = await Promise.all([
         supabase
           .from('patient_folders')
           .select('*')
@@ -219,18 +443,87 @@ const DoctorPortal = () => {
           .maybeSingle(),
         supabase
           .from('doctor_consultation_notes')
-          .select('id, created_at, diagnosis, treatment_plan, prescriptions, follow_up_notes')
+          .select('id, created_at, doctor_id, diagnosis, treatment_plan, prescriptions, follow_up_notes')
           .eq('patient_id', apt.patient_id)
           .eq('doctor_id', user?.id)
           .order('created_at', { ascending: false })
-          .limit(10)
+          .limit(10),
+        supabase
+          .from('health_records')
+          .select('id, file_name, file_url, file_type, file_size, uploaded_at, notes')
+          .eq('patient_id', apt.patient_id)
+          .order('uploaded_at', { ascending: false })
       ]);
 
       if (folderError) throw folderError;
       if (notesError) throw notesError;
+      if (healthRecordsError) throw healthRecordsError;
 
       setPatientFolder((folder as Record<string, any> | null) ?? null);
-      setPatientFolderNotes((notes as any) ?? []);
+      const typedNotes = ((notes as any) ?? []) as Array<{
+        id: string;
+        created_at: string;
+        doctor_id: string | null;
+        diagnosis: string | null;
+        treatment_plan: string | null;
+        prescriptions: string | null;
+        follow_up_notes: string | null;
+      }>;
+      setPatientFolderNotes(typedNotes);
+      setPatientHealthRecords((healthRecords as any) ?? []);
+
+      const idsFromFolder = patientFolderFieldOrder.flatMap((field) =>
+        extractDoctorIdsFromEntries((folder as Record<string, any> | null)?.[field])
+      );
+      const idsFromNotes = typedNotes.flatMap((note) => [
+        ...(note.doctor_id ? [note.doctor_id] : []),
+        ...extractDoctorIdsFromEntries(note.follow_up_notes),
+      ]);
+      const uniqueDoctorIds = Array.from(new Set([...idsFromFolder, ...idsFromNotes]));
+
+      if (uniqueDoctorIds.length > 0) {
+        const map: Record<string, string> = {};
+        if (user?.id && doctorRegistration?.full_name) {
+          map[user.id] = doctorRegistration.full_name;
+        }
+
+        const { data: doctorRows, error: doctorError } = await supabase
+          .from('doctor_registrations')
+          .select('user_id, full_name')
+          .in('user_id', uniqueDoctorIds);
+
+        if (doctorError) {
+          console.warn('Could not load doctor names for folder entries:', doctorError);
+        } else {
+          (doctorRows || []).forEach((doctor: any) => {
+            if (doctor.user_id && doctor.full_name) {
+              map[doctor.user_id] = doctor.full_name;
+            }
+          });
+        }
+
+        const unresolvedDoctorIds = uniqueDoctorIds.filter((id) => !map[id]);
+        if (unresolvedDoctorIds.length > 0) {
+          const { data: publicDoctorRows, error: publicDoctorError } = await supabase
+            .from('doctors')
+            .select('id, name')
+            .in('id', unresolvedDoctorIds);
+
+          if (publicDoctorError) {
+            console.warn('Could not load fallback doctor names from doctors table:', publicDoctorError);
+          } else {
+            (publicDoctorRows || []).forEach((doctor: any) => {
+              if (doctor.id && doctor.name) {
+                map[doctor.id] = doctor.name;
+              }
+            });
+          }
+        }
+
+        setDoctorNamesById(map);
+      } else {
+        setDoctorNamesById({});
+      }
     } catch (error) {
       console.error('Failed to load patient folder:', error);
       toast({
@@ -487,7 +780,8 @@ const DoctorPortal = () => {
             name: apt.patient_name,
             age: apt.patient_age || 'N/A',
             lastVisit: apt.date,
-            appointments: []
+            appointments: [],
+            latestAppointment: null as any
           });
         }
         const patient = patientsMap.get(apt.patient_id);
@@ -496,6 +790,15 @@ const DoctorPortal = () => {
           time: apt.time,
           status: apt.status
         });
+
+        const appointmentDateTime = new Date(`${apt.date}T${apt.time}`).getTime();
+        const latestDateTime = patient.latestAppointment
+          ? new Date(`${patient.latestAppointment.date}T${patient.latestAppointment.time}`).getTime()
+          : 0;
+        if (!patient.latestAppointment || appointmentDateTime > latestDateTime) {
+          patient.latestAppointment = apt;
+          patient.lastVisit = apt.date;
+        }
       }
     });
 
@@ -506,10 +809,10 @@ const DoctorPortal = () => {
         const dateB = new Date(`${b.date}T${b.time}`).getTime();
         return dateB - dateA;
       });
-      if (patient.appointments.length > 0) {
-        patient.lastVisit = patient.appointments[0].date;
-      }
-    });
+	      if (patient.appointments.length > 0 && !patient.lastVisit) {
+	        patient.lastVisit = patient.appointments[0].date;
+	      }
+	    });
 
     return Array.from(patientsMap.values());
   }, [fetchedAppointments]);
@@ -592,6 +895,41 @@ const DoctorPortal = () => {
       toast({ title: 'Error', description: 'Failed to update profile.' });
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    const newPassword = passwordFormData.newPassword.trim();
+    const confirmPassword = passwordFormData.confirmPassword.trim();
+
+    if (!newPassword || !confirmPassword) {
+      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      setPasswordFormData({ newPassword: '', confirmPassword: '' });
+      toast({ title: 'Success', description: 'Password changed successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to change password.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -712,19 +1050,10 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="lg:hidden"
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </Button>
-
               {/* Availability Toggle */}
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+              <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
-                <span className="text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
+                <span className="hidden sm:inline text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
                 <Switch
                   checked={isAvailable}
                   onCheckedChange={handleAvailabilityToggle}
@@ -732,10 +1061,15 @@ const DoctorPortal = () => {
                 />
               </div>
 
-              <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('appointments')}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative"
+                onClick={() => setActiveTab(unreadReviewsCount > 0 ? 'reviews' : 'appointments')}
+              >
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                  {stats.pendingRequests}
+                  {stats.pendingRequests + unreadReviewsCount}
                 </span>
               </Button>
 
@@ -768,6 +1102,15 @@ const DoctorPortal = () => {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </Button>
             </div>
           </div>
         </div>
@@ -800,8 +1143,8 @@ const DoctorPortal = () => {
                     { id: 'patients', label: 'My Patients', icon: Users },
                     { id: 'availability', label: 'Availability', icon: Clock },
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
-                    { id: 'reviews', label: 'Reviews', icon: Star },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare },
+                    { id: 'reviews', label: 'Reviews', icon: Star, badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? '99+' : unreadReviewsCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
@@ -821,8 +1164,8 @@ const DoctorPortal = () => {
                       </div>
                       {item.badge && (
                         <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
-                          ? 'bg-primary-foreground text-primary'
-                          : 'bg-accent text-accent-foreground'
+                          ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
+                          : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
                           }`}>
                           {item.badge}
                         </span>
@@ -912,7 +1255,7 @@ const DoctorPortal = () => {
                   <div className="flex-1">
                     <h3 className="font-semibold text-success mb-1">Account Approved ✓</h3>
                     <p className="text-sm text-muted-foreground">
-                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients.
+                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.
                     </p>
                   </div>
                 </div>
@@ -1172,6 +1515,11 @@ const DoctorPortal = () => {
                                 </div>
                               </div>
                               <div className="flex gap-2">
+                                {apt.patient_id && (
+                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                    View Folder
+                                  </Button>
+                                )}
                                 <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
                                   Decline
                                 </Button>
@@ -1268,7 +1616,14 @@ const DoctorPortal = () => {
                                   <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                 </div>
                               </div>
-                              <Badge variant="destructive">Rejected</Badge>
+                              <div className="flex gap-2">
+                                {apt.patient_id && (
+                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                    View Folder
+                                  </Button>
+                                )}
+                                <Badge variant="destructive">Rejected</Badge>
+                              </div>
                             </div>
                           ))
                         )}
@@ -1311,12 +1666,11 @@ const DoctorPortal = () => {
                                   )}
                                 </div>
                               </div>
-                              <Button size="sm" variant="outline" onClick={() => {
-                                setSelectedAppointmentForNotes(apt);
-                                setViewNotesOpen(true);
-                              }}>
-                                View Notes
-                              </Button>
+                              {apt.patient_id && (
+                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                  View Folder
+                                </Button>
+                              )}
                             </div>
                           ))
                         )}
@@ -1365,12 +1719,9 @@ const DoctorPortal = () => {
                                   size="sm"
                                 />
                               )}
-                              {apt.status === 'completed' && (
-                                <Button size="sm" variant="outline" onClick={() => {
-                                  setSelectedAppointmentForNotes(apt);
-                                  setViewNotesOpen(true);
-                                }}>
-                                  View Notes
+                              {apt.patient_id && (
+                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                  View Folder
                                 </Button>
                               )}
                               {apt.status === 'pending' && (
@@ -1438,10 +1789,24 @@ const DoctorPortal = () => {
                                 <p className="text-sm font-medium">{patient.appointments.length}</p>
                               </div>
                               <div className="flex flex-col sm:flex-row gap-2">
-                                <Button size="sm" variant="outline" className="w-full sm:w-auto">
-                                  View Profile
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => patient.latestAppointment && handleViewPatientFolder(patient.latestAppointment)}
+                                  disabled={!patient.latestAppointment}
+                                >
+                                  View Folder
                                 </Button>
-                                <Button size="sm" variant="ghost" className="w-full sm:w-auto">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => {
+                                    setActiveTab('messages');
+                                    setSidebarOpen(false);
+                                  }}
+                                >
                                   <MessageSquare className="w-4 h-4 mr-2" />
                                   Message
                                 </Button>
@@ -1733,6 +2098,40 @@ const DoctorPortal = () => {
                         </div>
                       </CardContent>
                     </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Change Password</CardTitle>
+                        <CardDescription>Update your account password</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4 max-w-md">
+                          <div>
+                            <label className="text-sm font-medium">New Password</label>
+                            <Input
+                              type="password"
+                              value={passwordFormData.newPassword}
+                              onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
+                              className="mt-1"
+                              placeholder="At least 8 characters"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-sm font-medium">Confirm New Password</label>
+                            <Input
+                              type="password"
+                              value={passwordFormData.confirmPassword}
+                              onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
+                              className="mt-1"
+                              placeholder="Re-enter new password"
+                            />
+                          </div>
+                          <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+                            {isChangingPassword ? 'Updating...' : 'Update Password'}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </TabsContent>
                 </Tabs>
               </main>
@@ -1770,7 +2169,10 @@ const DoctorPortal = () => {
                           <label className="text-sm font-medium">{formatFolderFieldLabel(field)}</label>
                           <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[60px]">
                             <p className="text-sm whitespace-pre-wrap">
-                              {patientFolder[field] || `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`}
+                              {formatFolderEntryText(
+                                patientFolder[field],
+                                `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`
+                              )}
                             </p>
                           </div>
                         </div>
@@ -1791,7 +2193,42 @@ const DoctorPortal = () => {
                             <p className="text-sm"><span className="font-medium">Assessment:</span> {note.diagnosis || 'Not recorded'}</p>
                             <p className="text-sm"><span className="font-medium">Plan:</span> {note.treatment_plan || 'Not recorded'}</p>
                             <p className="text-sm"><span className="font-medium">E-Prescription:</span> {note.prescriptions || 'Not recorded'}</p>
-                            <p className="text-sm whitespace-pre-wrap"><span className="font-medium">Full Clerking Note:</span> {note.follow_up_notes || 'Not recorded'}</p>
+                            <p className="text-sm whitespace-pre-wrap">
+                              <span className="font-medium">Full Clerking Note:</span>{' '}
+                              {formatFolderEntryText(note.follow_up_notes, 'Not recorded')}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Uploaded Health Records</label>
+                    <div className="mt-2 space-y-2">
+                      {patientHealthRecords.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No uploaded health records found.</p>
+                      ) : (
+                        patientHealthRecords.map((record) => (
+                          <div key={record.id} className="p-3 rounded-lg bg-muted/30">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{record.file_name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(record.uploaded_at).toLocaleString()}
+                                  {record.file_size ? ` • ${(record.file_size / 1024).toFixed(1)} KB` : ''}
+                                </p>
+                                {record.notes && (
+                                  <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => window.open(record.file_url, '_blank')}
+                              >
+                                View
+                              </Button>
+                            </div>
                           </div>
                         ))
                       )}
@@ -1816,40 +2253,6 @@ const DoctorPortal = () => {
           </DialogContent>
         </Dialog>
         
-        {/* View Notes Modal */}
-        <Dialog open={viewNotesOpen} onOpenChange={setViewNotesOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>Consultation Notes</DialogTitle>
-              <DialogDescription>
-                Notes from consultation with {selectedAppointmentForNotes?.patient_name}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-muted/50">
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="font-medium">Patient:</span> {selectedAppointmentForNotes?.patient_name}</div>
-                  <div><span className="font-medium">Date:</span> {selectedAppointmentForNotes?.date}</div>
-                  <div><span className="font-medium">Time:</span> {selectedAppointmentForNotes?.time}</div>
-                  <div><span className="font-medium">Type:</span> {selectedAppointmentForNotes?.type}</div>
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Consultation Notes:</label>
-                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[100px]">
-                  <p className="text-sm">
-                    {selectedAppointmentForNotes?.notes || 'No notes available for this consultation.'}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setViewNotesOpen(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
     </div>
   );
 };
