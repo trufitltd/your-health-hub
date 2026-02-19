@@ -67,6 +67,7 @@ const PatientPortal = () => {
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
+  const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
@@ -320,6 +321,8 @@ const PatientPortal = () => {
         title: 'Refill requested',
         description: 'Your refill request has been sent to your doctor.',
       });
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(prescription.sessionId), 0);
       setActiveTab('messages');
       setSidebarOpen(false);
       queryClient.invalidateQueries({ queryKey: ['messages', prescription.sessionId] });
@@ -1565,7 +1568,7 @@ const PatientPortal = () => {
 
               {/* Messages Tab */}
               <TabsContent value="messages" className="space-y-6">
-                <MessagesTab />
+                <MessagesTab focusSessionId={messagesFocusSessionId} />
               </TabsContent>
 
               {/* Records Tab */}
