@@ -189,6 +189,28 @@ const PatientPortal = () => {
         return [];
       }
 
+      const doctorIds = Array.from(
+        new Set(
+          (notes || [])
+            .map((note: any) => note.consultation_sessions?.doctor_id)
+            .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+        )
+      );
+
+      const doctorNameMap = new Map<string, string>();
+      if (doctorIds.length > 0) {
+        const { data: doctorRows } = await supabase
+          .from('doctors')
+          .select('id, name')
+          .in('id', doctorIds);
+
+        (doctorRows || []).forEach((doctor: any) => {
+          if (doctor.id && doctor.name) {
+            doctorNameMap.set(doctor.id, doctor.name);
+          }
+        });
+      }
+
       // Parse prescriptions and format them
       const formatted: PatientPrescription[] = [];
       (notes || []).forEach((note: any) => {
@@ -203,14 +225,19 @@ const PatientPortal = () => {
               // Simple parsing: expect format like "Medication - Dosage" or just the text
               const parts = line.split('-').map((p: string) => p.trim());
               const daysSincePrescription = Math.floor((Date.now() - new Date(note.created_at).getTime()) / (1000 * 60 * 60 * 24));
+              const doctorId = note.consultation_sessions?.doctor_id ?? null;
+              const resolvedDoctorName =
+                (doctorId ? doctorNameMap.get(doctorId) : null) ||
+                note.consultation_sessions?.appointments?.specialist_name ||
+                'Doctor';
               formatted.push({
                 id: `${note.id}-${formatted.length}-${line.trim().toLowerCase()}`,
                 noteId: note.id,
                 medication: parts[0] || line,
                 dosage: parts[1] || 'As prescribed',
                 rawText: line.trim(),
-                doctor: note.consultation_sessions?.appointments?.specialist_name || 'Dr. Unknown',
-                doctorId: note.consultation_sessions?.doctor_id ?? null,
+                doctor: resolvedDoctorName,
+                doctorId,
                 sessionId: note.consultation_sessions?.id ?? null,
                 date: note.created_at,
                 refillsRemaining: daysSincePrescription > 90 ? 0 : 3,

@@ -471,6 +471,24 @@ const DoctorPortal = () => {
           });
         }
 
+        const unresolvedDoctorIds = uniqueDoctorIds.filter((id) => !map[id]);
+        if (unresolvedDoctorIds.length > 0) {
+          const { data: publicDoctorRows, error: publicDoctorError } = await supabase
+            .from('doctors')
+            .select('id, name')
+            .in('id', unresolvedDoctorIds);
+
+          if (publicDoctorError) {
+            console.warn('Could not load fallback doctor names from doctors table:', publicDoctorError);
+          } else {
+            (publicDoctorRows || []).forEach((doctor: any) => {
+              if (doctor.id && doctor.name) {
+                map[doctor.id] = doctor.name;
+              }
+            });
+          }
+        }
+
         setDoctorNamesById(map);
       } else {
         setDoctorNamesById({});
