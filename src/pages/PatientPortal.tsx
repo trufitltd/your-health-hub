@@ -54,6 +54,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
+import { createPrescriptionPdfBlob } from '@/lib/pdf';
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -98,8 +99,11 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
 interface PatientPrescription {
   id: string;
   noteId: string;
-  medication: string;
-  dosage: string;
+  items: Array<{
+    medication: string;
+    dosage: string;
+    rawText: string;
+  }>;
   rawText: string;
   doctor: string;
   doctorId: string | null;
@@ -122,6 +126,7 @@ const PatientPortal = () => {
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
+  const [downloadedPrescriptionIds, setDownloadedPrescriptionIds] = useState<string[]>([]);
   const { user, signOut } = useAuth();
   
   // Track patient presence
@@ -203,6 +208,22 @@ const PatientPortal = () => {
     newPassword: '',
     confirmPassword: '',
   });
+  const prescriptionDownloadStorageKey = user?.id ? `patient-prescription-downloads-${user.id}` : null;
+
+  useEffect(() => {
+    if (!prescriptionDownloadStorageKey || typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(prescriptionDownloadStorageKey);
+      if (!raw) {
+        setDownloadedPrescriptionIds([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setDownloadedPrescriptionIds(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []);
+    } catch {
+      setDownloadedPrescriptionIds([]);
+    }
+  }, [prescriptionDownloadStorageKey]);
 
   // Initialize form data when patientRegistration loads
   useEffect(() => {
@@ -267,46 +288,82 @@ const PatientPortal = () => {
         });
       }
 
-      // Parse prescriptions and format them
-      const formatted: PatientPrescription[] = [];
+      // Parse prescriptions and group by consultation (session-first).
+      const grouped = new Map<string, PatientPrescription>();
       (notes || []).forEach((note: any) => {
         if (note.prescriptions) {
           try {
-            // Try to parse as JSON if it's structured
-            const parsed = typeof note.prescriptions === 'string'
+            const parsedLines = typeof note.prescriptions === 'string'
               ? note.prescriptions.split(/\r?\n/).filter((line: string) => line.trim())
               : [note.prescriptions];
-            
-            parsed.forEach((line: string) => {
-              // Simple parsing: expect format like "Medication - Dosage" or just the text
-              const parts = line.split('-').map((p: string) => p.trim());
-              const daysSincePrescription = Math.floor((Date.now() - new Date(note.created_at).getTime()) / (1000 * 60 * 60 * 24));
-              const doctorId = note.consultation_sessions?.doctor_id ?? null;
-              const resolvedDoctorName =
-                (doctorId ? doctorNameMap.get(doctorId) : null) ||
-                note.consultation_sessions?.appointments?.specialist_name ||
-                'Doctor';
-              formatted.push({
-                id: `${note.id}-${formatted.length}-${line.trim().toLowerCase()}`,
+
+            const items = parsedLines
+              .map((line: unknown) => {
+                const normalizedLine = String(line ?? '').trim();
+                const parts = normalizedLine.split('-').map((p: string) => p.trim());
+                return {
+                  medication: parts[0] || normalizedLine,
+                  dosage: parts[1] || 'As prescribed',
+                  rawText: normalizedLine,
+                };
+              })
+              .filter((item) => item.rawText.length > 0);
+
+            if (items.length === 0) return;
+
+            const daysSincePrescription = Math.floor((Date.now() - new Date(note.created_at).getTime()) / (1000 * 60 * 60 * 24));
+            const doctorId = note.consultation_sessions?.doctor_id ?? null;
+            const sessionId = note.consultation_sessions?.id ?? null;
+            const resolvedDoctorName =
+              (doctorId ? doctorNameMap.get(doctorId) : null) ||
+              note.consultation_sessions?.appointments?.specialist_name ||
+              'Doctor';
+            const dayKey = new Date(note.created_at).toISOString().slice(0, 10);
+            const groupKey = sessionId
+              ? `session:${sessionId}`
+              : `fallback:${doctorId || 'unknown'}:${dayKey}`;
+
+            const existing = grouped.get(groupKey);
+            if (!existing) {
+              grouped.set(groupKey, {
+                id: groupKey,
                 noteId: note.id,
-                medication: parts[0] || line,
-                dosage: parts[1] || 'As prescribed',
-                rawText: line.trim(),
+                items,
+                rawText: items.map((item) => item.rawText).join('\n'),
                 doctor: resolvedDoctorName,
                 doctorId,
-                sessionId: note.consultation_sessions?.id ?? null,
+                sessionId,
                 date: note.created_at,
                 refillsRemaining: daysSincePrescription > 90 ? 0 : 3,
                 status: daysSincePrescription > 90 ? 'past' : 'active'
               });
-            });
+            } else {
+              const seen = new Set(existing.items.map((item) => item.rawText.toLowerCase().trim()));
+              for (const item of items) {
+                const key = item.rawText.toLowerCase().trim();
+                if (!seen.has(key)) {
+                  existing.items.push(item);
+                  seen.add(key);
+                }
+              }
+              existing.rawText = existing.items.map((item) => item.rawText).join('\n');
+              if (new Date(note.created_at).getTime() > new Date(existing.date).getTime()) {
+                existing.date = note.created_at;
+              }
+              if (existing.status === 'past' && daysSincePrescription <= 90) {
+                existing.status = 'active';
+                existing.refillsRemaining = 3;
+              }
+              grouped.set(groupKey, existing);
+            }
           } catch (err) {
             console.error('Error parsing prescription:', err);
           }
         }
       });
-
-      return formatted;
+      return Array.from(grouped.values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
     },
     enabled: !!user?.id,
   });
@@ -344,35 +401,100 @@ const PatientPortal = () => {
   };
 
   const handleDownloadPrescription = (prescription: PatientPrescription) => {
-    try {
+    if (!prescriptionDownloadStorageKey) return;
+    if (downloadedPrescriptionIds.includes(prescription.id)) {
+      toast({
+        title: 'Download locked',
+        description: 'You already downloaded this prescription. Request refill and download renewed copy from doctor message after approval.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    (async () => {
+      try {
+      if (!user?.id) {
+        toast({
+          title: 'Download unavailable',
+          description: 'You must be signed in to download prescriptions.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (!prescription.noteId || !prescription.doctorId) {
+        toast({
+          title: 'Download unavailable',
+          description: 'Prescription details are incomplete for verification.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
+        p_note_id: prescription.noteId,
+        p_session_id: prescription.sessionId,
+        p_patient_id: user.id,
+        p_doctor_id: prescription.doctorId,
+        p_drug_list: prescription.rawText,
+        p_date_issued: prescription.date,
+      });
+      if (codeError || !codeData) {
+        throw codeError || new Error('Could not generate verification code');
+      }
+
+      const verificationCode = String(codeData);
+      const verificationBaseUrl =
+        (import.meta.env.VITE_VERIFICATION_BASE_URL as string | undefined) ||
+        'https://myedoctorhealth.com';
+      const verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+
+      const lines = prescription.items.map(
+        (item, index) => `${index + 1}. ${item.medication} - ${item.dosage}`
+      );
       const content = [
-        'MYE-DOCTOR PRESCRIPTION',
         `Patient: ${displayName}`,
         `Prescribed by: ${prescription.doctor}`,
         `Date: ${new Date(prescription.date).toLocaleString()}`,
+        `Verification Code: ${verificationCode}`,
         '',
-        `Medication: ${prescription.medication}`,
-        `Dosage: ${prescription.dosage}`,
-        `Instructions: ${prescription.rawText}`,
+        'Items:',
+        ...lines,
+        '',
+        'Instructions:',
+        prescription.rawText,
         '',
         `Status: ${prescription.status}`,
       ].join('\n');
 
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const blob = await createPrescriptionPdfBlob({
+        title: 'MYE-DOCTOR PRESCRIPTION',
+        lines: content,
+        verificationUrl,
+        verificationCode,
+      });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      const safeMedication = prescription.medication.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      const safeMedication = (prescription.items[0]?.medication || 'medication')
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase();
       link.href = url;
-      link.download = `prescription-${safeMedication || 'medication'}-${new Date(prescription.date).toISOString().split('T')[0]}.txt`;
+      link.download = `prescription-${safeMedication || 'medication'}-${new Date(prescription.date).toISOString().split('T')[0]}.pdf`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      const next = Array.from(new Set([...downloadedPrescriptionIds, prescription.id]));
+      setDownloadedPrescriptionIds(next);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(prescriptionDownloadStorageKey, JSON.stringify(next));
+      }
       toast({ title: 'Downloaded', description: 'Prescription downloaded successfully.' });
-    } catch (error) {
+      } catch (error) {
       console.error('Failed to download prescription:', error);
       toast({ title: 'Error', description: 'Failed to download prescription.', variant: 'destructive' });
-    }
+      }
+    })();
   };
 
   const handleRequestPrescriptionRefill = async (prescription: PatientPrescription) => {
@@ -388,7 +510,10 @@ const PatientPortal = () => {
 
     setIsRequestingRefillId(prescription.id);
     try {
-      const content = `Prescription refill request: ${prescription.medication} (${prescription.dosage}). Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
+      const itemsSummary = prescription.items
+        .map((item) => `${item.medication} (${item.dosage})`)
+        .join('; ');
+      const content = `Prescription refill request: ${itemsSummary}. Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
       const { error } = await supabase.from('consultation_messages').insert({
         session_id: prescription.sessionId,
         sender_id: user.id,
@@ -2034,11 +2159,19 @@ const PatientPortal = () => {
                                   <Pill className={`w-5 h-5 ${prescription.status === 'active' ? 'text-success' : 'text-muted-foreground'}`} />
                                 </div>
                                 <div>
-                                  <p className="font-semibold">{prescription.medication}</p>
-                                  <p className="text-sm text-muted-foreground">{prescription.dosage}</p>
+                                  <p className="font-semibold">
+                                    {prescription.items.length} prescription item{prescription.items.length > 1 ? 's' : ''}
+                                  </p>
                                   <p className="text-xs text-muted-foreground mt-1">
                                     Prescribed by {prescription.doctor} • {new Date(prescription.date).toLocaleDateString()}
                                   </p>
+                                  <div className="mt-2 space-y-1">
+                                    {prescription.items.map((item, index) => (
+                                      <p key={`${prescription.id}-${index}`} className="text-sm text-foreground/90">
+                                        {index + 1}. {item.medication} - {item.dosage}
+                                      </p>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
                               <div className="text-right">
@@ -2054,6 +2187,15 @@ const PatientPortal = () => {
                               <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
                                 View Details
                               </Button>
+                              {!downloadedPrescriptionIds.includes(prescription.id) ? (
+                                <Button size="sm" variant="outline" onClick={() => handleDownloadPrescription(prescription)}>
+                                  Download
+                                </Button>
+                              ) : (
+                                <Button size="sm" variant="outline" disabled>
+                                  Downloaded
+                                </Button>
+                              )}
                               {prescription.status === 'active' && (
                                 <Button
                                   size="sm"
@@ -2324,12 +2466,6 @@ const PatientPortal = () => {
               <div className="p-4 rounded-lg bg-muted/40 border border-border">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="font-medium">Medication:</span> {selectedPrescription.medication}
-                  </div>
-                  <div>
-                    <span className="font-medium">Dosage:</span> {selectedPrescription.dosage}
-                  </div>
-                  <div>
                     <span className="font-medium">Doctor:</span> {selectedPrescription.doctor}
                   </div>
                   <div>
@@ -2340,6 +2476,22 @@ const PatientPortal = () => {
                   </div>
                   <div>
                     <span className="font-medium">Refills remaining:</span> {selectedPrescription.refillsRemaining}
+                  </div>
+                  <div>
+                    <span className="font-medium">Total items:</span> {selectedPrescription.items.length}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">Prescription Items</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[72px]">
+                  <div className="space-y-1">
+                    {selectedPrescription.items.map((item, index) => (
+                      <p key={`${selectedPrescription.id}-item-${index}`} className="text-sm whitespace-pre-wrap">
+                        {index + 1}. {item.medication} - {item.dosage}
+                      </p>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -2355,9 +2507,13 @@ const PatientPortal = () => {
           <DialogFooter>
             {selectedPrescription && (
               <>
-                <Button variant="outline" onClick={() => handleDownloadPrescription(selectedPrescription)}>
+                <Button
+                  variant="outline"
+                  onClick={() => handleDownloadPrescription(selectedPrescription)}
+                  disabled={downloadedPrescriptionIds.includes(selectedPrescription.id)}
+                >
                   <Download className="w-4 h-4 mr-2" />
-                  Download
+                  {downloadedPrescriptionIds.includes(selectedPrescription.id) ? 'Downloaded' : 'Download'}
                 </Button>
                 <Button
                   onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
