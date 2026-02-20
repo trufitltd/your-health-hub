@@ -347,23 +347,29 @@ export function DoctorMessagesTab() {
       }).select('id, created_at').single();
       if (noteError) throw noteError;
 
-      const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
-        p_note_id: insertedNote.id,
-        p_session_id: selectedSessionId,
-        p_patient_id: selectedThread.patientId,
-        p_doctor_id: user.id,
-        p_drug_list: replacementPrescription.trim(),
-        p_date_issued: insertedNote.created_at,
-      });
-      if (codeError || !codeData) {
-        throw codeError || new Error('Could not generate verification code');
-      }
-
-      const verificationCode = String(codeData);
       const verificationBaseUrl =
         (import.meta.env.VITE_VERIFICATION_BASE_URL as string | undefined) ||
         'https://myedoctorhealth.com';
-      const verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+      let verificationCode: string | undefined;
+      let verificationUrl: string | undefined;
+      try {
+        const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
+          p_note_id: insertedNote.id,
+          p_session_id: selectedSessionId,
+          p_patient_id: selectedThread.patientId,
+          p_doctor_id: user.id,
+          p_drug_list: replacementPrescription.trim(),
+          p_date_issued: insertedNote.created_at,
+        });
+        if (!codeError && codeData) {
+          verificationCode = String(codeData);
+          verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+        } else {
+          console.warn('Verification generation failed for refill:', codeError);
+        }
+      } catch (verificationErr) {
+        console.warn('Verification unavailable for refill PDF:', verificationErr);
+      }
 
       const fileName = `refill-prescription-${new Date().toISOString().slice(0, 10)}.pdf`;
       const filePath = `${user.id}/prescription-refills/${selectedSessionId}/${Date.now()}-${fileName}`;
@@ -371,7 +377,7 @@ export function DoctorMessagesTab() {
         `Date: ${new Date().toLocaleString()}`,
         `Patient: ${selectedThread.patientName}`,
         `Doctor: ${senderName}`,
-        `Verification Code: ${verificationCode}`,
+        `Verification Code: ${verificationCode || 'Pending/Unavailable'}`,
         '',
         'Prescription:',
         replacementPrescription.trim(),
@@ -383,7 +389,7 @@ export function DoctorMessagesTab() {
           title: 'MYE-DOCTOR REFILL PRESCRIPTION',
           lines: prescriptionText,
           verificationUrl,
-          verificationCode,
+          verificationCode: verificationCode || 'Pending/Unavailable',
         }), {
           upsert: false,
           contentType: 'application/pdf',
