@@ -29,6 +29,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
+import { createPrescriptionPdfBlob } from '@/lib/pdf';
 
 interface PatientThread {
   id: string;
@@ -292,15 +293,16 @@ export function DoctorMessagesTab() {
     if (message.sender_role !== 'patient' || !message.content) return null;
     const content = message.content.trim();
     if (!content.startsWith('Prescription refill request:')) return null;
+    const body = content
+      .replace(/^Prescription refill request:\s*/i, '')
+      .replace(/\.\s*Original prescription date:.*$/i, '')
+      .trim();
 
-    const match = content.match(/^Prescription refill request:\s*(.+?)\s*\((.+?)\)\./i);
-    if (!match) {
-      return { medication: 'Medication', dosage: 'As prescribed' };
-    }
-
+    const firstMatch = body.match(/^(.+?)\s*\((.+?)\)/);
     return {
-      medication: match[1]?.trim() || 'Medication',
-      dosage: match[2]?.trim() || 'As prescribed',
+      summary: body || 'Medication',
+      medication: firstMatch?.[1]?.trim() || body || 'Medication',
+      dosage: firstMatch?.[2]?.trim() || 'As prescribed',
     };
   };
 
@@ -308,7 +310,7 @@ export function DoctorMessagesTab() {
     const parsed = parseRefillRequest(message);
     if (!parsed) return;
     setSelectedRefillMessage(message);
-    setReplacementPrescription(`${parsed.medication} - ${parsed.dosage}`);
+    setReplacementPrescription(parsed.summary || `${parsed.medication} - ${parsed.dosage}`);
     setApproveDialogOpen(true);
   };
 
@@ -334,7 +336,7 @@ export function DoctorMessagesTab() {
 
     setIsSubmittingRefillAction(true);
     try {
-      const { error: noteError } = await supabase.from('doctor_consultation_notes').insert({
+      const { data: insertedNote, error: noteError } = await supabase.from('doctor_consultation_notes').insert({
         session_id: selectedSessionId,
         patient_id: selectedThread.patientId,
         doctor_id: user.id,
@@ -342,17 +344,74 @@ export function DoctorMessagesTab() {
         treatment_plan: null,
         prescriptions: replacementPrescription.trim(),
         follow_up_notes: `Prescription refill approved on ${new Date().toLocaleString()}.`,
-      });
+      }).select('id, created_at').single();
       if (noteError) throw noteError;
+
+      const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
+        p_note_id: insertedNote.id,
+        p_session_id: selectedSessionId,
+        p_patient_id: selectedThread.patientId,
+        p_doctor_id: user.id,
+        p_drug_list: replacementPrescription.trim(),
+        p_date_issued: insertedNote.created_at,
+      });
+      if (codeError || !codeData) {
+        throw codeError || new Error('Could not generate verification code');
+      }
+
+      const verificationCode = String(codeData);
+      const verificationBaseUrl =
+        (import.meta.env.VITE_VERIFICATION_BASE_URL as string | undefined) ||
+        'https://myedoctorhealth.com';
+      const verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+
+      const fileName = `refill-prescription-${new Date().toISOString().slice(0, 10)}.pdf`;
+      const filePath = `${user.id}/prescription-refills/${selectedSessionId}/${Date.now()}-${fileName}`;
+      const prescriptionText = [
+        `Date: ${new Date().toLocaleString()}`,
+        `Patient: ${selectedThread.patientName}`,
+        `Doctor: ${senderName}`,
+        `Verification Code: ${verificationCode}`,
+        '',
+        'Prescription:',
+        replacementPrescription.trim(),
+      ];
+
+      const { error: uploadError } = await supabase.storage
+        .from('doctor-files')
+        .upload(filePath, await createPrescriptionPdfBlob({
+          title: 'MYE-DOCTOR REFILL PRESCRIPTION',
+          lines: prescriptionText,
+          verificationUrl,
+          verificationCode,
+        }), {
+          upsert: false,
+          contentType: 'application/pdf',
+        });
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('doctor-files')
+        .getPublicUrl(filePath);
 
       const sent = await consultationService.sendMessage(
         selectedSessionId,
         user.id,
         'doctor',
         senderName,
-        `Refill approved for ${parsed.medication}. New prescription: ${replacementPrescription.trim()}`,
+        `Refill approved for ${parsed.summary}. Download your renewed prescription from the attached file.`,
       );
       appendMessageIfMissing(sent);
+      const fileMessage = await consultationService.sendMessage(
+        selectedSessionId,
+        user.id,
+        'doctor',
+        senderName,
+        fileName,
+        'file',
+        publicUrlData.publicUrl,
+      );
+      appendMessageIfMissing(fileMessage);
 
       toast({ title: 'Refill approved', description: 'Prescription has been renewed and sent to patient.' });
       setApproveDialogOpen(false);

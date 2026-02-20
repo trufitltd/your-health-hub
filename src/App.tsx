@@ -18,6 +18,7 @@ import SlotSelection from "./pages/SlotSelection";
 import Consultation from "./pages/Consultation";
 import AdminLogin from "./pages/AdminLogin";
 import CentralAdmin from "./pages/CentralAdmin";
+import VerifyPrescription from "./pages/VerifyPrescription";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -42,6 +43,7 @@ const App = () => (
             <Route path="/contact" element={<Contact />} />
             <Route path="/install" element={<Install />} />
             <Route path="/consultation/:appointmentId" element={<Consultation />} />
+            <Route path="/verify/:code" element={<VerifyPrescription />} />
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="/admin" element={<CentralAdmin />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
