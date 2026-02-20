@@ -8,7 +8,9 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy-functions:dev": "SUPABASE_SKIP_DOCKER=1 supabase functions deploy --project-ref vteuluwlwhtnhdtcabch",
+    "deploy-functions:prod": "SUPABASE_SKIP_DOCKER=1 supabase functions deploy --project-ref bulvfrbnhaqsybrpsudy"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.20",
