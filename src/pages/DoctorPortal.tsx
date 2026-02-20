@@ -1,11 +1,16 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import type { DateClickArg, EventClickArg, EventInput, DayCellMountArg, EventMountArg } from '@fullcalendar/core';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X
+  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +53,46 @@ import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
+const formatDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const APPOINTMENT_STATUS_CALENDAR_STYLES = {
+  pending: {
+    dot: '#d97706',
+    bg: '#d97706',
+    text: '#ffffff'
+  },
+  confirmed: {
+    dot: '#0f8f76',
+    bg: '#0f8f76',
+    text: '#ffffff'
+  },
+  completed: {
+    dot: '#16a34a',
+    bg: '#16a34a',
+    text: '#ffffff'
+  },
+  rejected: {
+    dot: '#dc2626',
+    bg: '#dc2626',
+    text: '#ffffff'
+  },
+  cancelled: {
+    dot: '#6b7280',
+    bg: '#6b7280',
+    text: '#ffffff'
+  },
+  default: {
+    dot: '#334155',
+    bg: '#334155',
+    text: '#ffffff'
+  }
+} as const;
+
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
@@ -76,6 +121,12 @@ const DoctorPortal = () => {
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+  const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
+  const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
+  const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
+  const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
@@ -767,6 +818,321 @@ const DoctorPortal = () => {
       }
     });
   }, [fetchedAppointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (appointmentViewMode !== 'calendar') return;
+
+    if (filteredAppointmentsByStatus.length === 0) {
+      setSelectedCalendarDate(null);
+      return;
+    }
+
+    setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
+  }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
+
+  const appointmentsByDate = useMemo(() => {
+    return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
+      if (!acc[apt.date]) {
+        acc[apt.date] = [];
+      }
+      acc[apt.date].push(apt);
+      return acc;
+    }, {});
+  }, [filteredAppointmentsByStatus]);
+
+  const calendarStatusLegend = useMemo(() => {
+    const seen = new Set<string>();
+    return filteredAppointmentsByStatus
+      .filter((apt) => {
+        if (seen.has(apt.status)) return false;
+        seen.add(apt.status);
+        return true;
+      })
+      .map((apt) => apt.status);
+  }, [filteredAppointmentsByStatus]);
+
+  const calendarDialogDayAppointments = useMemo(() => {
+    if (!calendarDialogDate) return [];
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+  }, [appointmentsByDate, calendarDialogDate]);
+
+  const calendarFocusedAppointment = useMemo(() => {
+    if (!calendarFocusedAppointmentId) return null;
+    return filteredAppointmentsByStatus.find((apt) => apt.id === calendarFocusedAppointmentId) || null;
+  }, [calendarFocusedAppointmentId, filteredAppointmentsByStatus]);
+
+  const normalizeTime = (time: string) => {
+    const trimmed = time.trim();
+    if (/^\d{2}:\d{2}$/.test(trimmed)) return `${trimmed}:00`;
+    if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+
+    const twelveHour = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHour) {
+      const hourValue = parseInt(twelveHour[1], 10);
+      const minuteValue = twelveHour[2];
+      const period = twelveHour[3].toUpperCase();
+      const normalizedHour = period === 'PM' ? (hourValue % 12) + 12 : hourValue % 12;
+      return `${String(normalizedHour).padStart(2, '0')}:${minuteValue}:00`;
+    }
+
+    return '00:00:00';
+  };
+
+  const fullCalendarEvents = useMemo<EventInput[]>(() => {
+    return filteredAppointmentsByStatus.map((apt) => {
+      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      return {
+        id: apt.id,
+        title: apt.patient_name || 'Unknown Patient',
+        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        allDay: false,
+        backgroundColor: styles.bg,
+        borderColor: styles.dot,
+        textColor: styles.text,
+        extendedProps: {
+          status: apt.status,
+          appointmentDate: apt.date
+        }
+      };
+    });
+  }, [filteredAppointmentsByStatus]);
+
+  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+
+  const handleCalendarDayClick = (dateStr: string) => {
+    const dayKey = dateStr.slice(0, 10);
+    setSelectedCalendarDate(dayKey);
+    setCalendarDialogDate(dayKey);
+    setCalendarEventDialogOpen(false);
+    setCalendarDayDialogOpen(true);
+  };
+
+  const handleCalendarEventClick = (arg: EventClickArg) => {
+    const eventDate = arg.event.start ? formatDateKey(arg.event.start) : arg.event.startStr.slice(0, 10);
+    setSelectedCalendarDate(eventDate);
+    setCalendarDialogDate(eventDate);
+    setCalendarDayDialogOpen(false);
+    setCalendarFocusedAppointmentId(arg.event.id || null);
+    setCalendarEventDialogOpen(true);
+  };
+
+  const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
+    const dateLabel = arg.date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    arg.el.setAttribute('title', `View appointments for ${dateLabel}`);
+    arg.el.style.cursor = 'pointer';
+  };
+
+  const handleCalendarEventMount = (arg: EventMountArg) => {
+    const eventTime = arg.event.start
+      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : '';
+    const eventStatus = String(arg.event.extendedProps.status || '').trim();
+    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
+    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    arg.el.style.cursor = 'pointer';
+  };
+
+  const renderDoctorAppointmentsCalendar = (emptyTitle: string, emptyDescription?: string) => {
+    if (filteredAppointmentsByStatus.length === 0) {
+      return (
+        <div className="text-center py-12">
+          <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <p className="text-muted-foreground">{emptyTitle}</p>
+          {emptyDescription && (
+            <p className="text-sm text-muted-foreground mt-2">{emptyDescription}</p>
+          )}
+        </div>
+      );
+    }
+
+    const calendarDialogDateLabel = calendarDialogDate
+      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric'
+      })
+      : null;
+
+    return (
+      <div className="space-y-6">
+        {calendarStatusLegend.length > 0 && (
+          <div className="flex flex-wrap gap-3">
+            {calendarStatusLegend.map((status) => {
+              const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+              return (
+                <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
+                  <span className="capitalize">{status}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="patient-portal-calendar rounded-xl border border-border bg-card p-2 md:p-4">
+          <FullCalendar
+            key={calendarRenderKey}
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            initialView="dayGridMonth"
+            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            headerToolbar={{
+              left: 'prev,next today',
+              center: 'title',
+              right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            }}
+            events={fullCalendarEvents}
+            dayMaxEvents={2}
+            eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
+            slotMinTime="06:00:00"
+            slotMaxTime="23:00:00"
+            slotDuration="00:30:00"
+            allDaySlot={false}
+            nowIndicator
+            height="auto"
+            dayCellDidMount={handleCalendarDayCellMount}
+            eventDidMount={handleCalendarEventMount}
+            dateClick={(arg: DateClickArg) => {
+              handleCalendarDayClick(arg.dateStr);
+            }}
+            eventClick={(arg: EventClickArg) => {
+              handleCalendarEventClick(arg);
+            }}
+          />
+        </div>
+
+        <Dialog open={calendarDayDialogOpen} onOpenChange={setCalendarDayDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>
+                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+              </DialogTitle>
+              <DialogDescription>
+                Review appointments for the selected day.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              {calendarDialogDayAppointments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+              ) : (
+                calendarDialogDayAppointments.map((apt) => (
+                  <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm font-medium">{apt.time}</span>
+                        {getStatusBadge(apt.status)}
+                      </div>
+                      <p className="text-sm font-semibold mt-1 truncate">
+                        {apt.patient_name || 'Unknown Patient'}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCalendarFocusedAppointmentId(apt.id);
+                        setCalendarDayDialogOpen(false);
+                        setCalendarEventDialogOpen(true);
+                      }}
+                    >
+                      View
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={calendarEventDialogOpen && !!calendarFocusedAppointment}
+          onOpenChange={(open) => {
+            setCalendarEventDialogOpen(open);
+            if (!open) setCalendarFocusedAppointmentId(null);
+          }}
+        >
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Appointment Details</DialogTitle>
+              <DialogDescription>Manage the selected appointment.</DialogDescription>
+            </DialogHeader>
+            {calendarFocusedAppointment && (
+              <div className="space-y-4">
+                <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+                  <p className="text-sm font-semibold">
+                    {calendarFocusedAppointment.patient_name || 'Unknown Patient'}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>•</span>
+                    <span>{calendarFocusedAppointment.time}</span>
+                  </div>
+                  <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
+                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 justify-end">
+                  {calendarFocusedAppointment.patient_id && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        handleViewPatientFolder(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      View Folder
+                    </Button>
+                  )}
+                  {calendarFocusedAppointment.status === 'confirmed' && (
+                    <JoinConsultationButton
+                      appointmentId={calendarFocusedAppointment.id}
+                      participantName={calendarFocusedAppointment.patient_name || ''}
+                      status={calendarFocusedAppointment.status}
+                      variant="default"
+                      size="sm"
+                    />
+                  )}
+                  {calendarFocusedAppointment.status === 'pending' && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive border-destructive/30"
+                        onClick={() => {
+                          handleDeclineRequest(calendarFocusedAppointment.id);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-success hover:bg-success/90"
+                        onClick={() => {
+                          handleAcceptRequest(calendarFocusedAppointment.id);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        Accept
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  };
 
   // Derive patients list from appointments
   const patientsList = useMemo(() => {
@@ -1462,8 +1828,32 @@ const DoctorPortal = () => {
               <TabsContent value="appointments" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Appointments</CardTitle>
-                    <CardDescription>Manage all your appointments in one place</CardDescription>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <CardTitle>Appointments</CardTitle>
+                        <CardDescription>Manage all your appointments in one place</CardDescription>
+                      </div>
+                      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                        <Button
+                          size="sm"
+                          variant={appointmentViewMode === 'list' ? 'default' : 'ghost'}
+                          className="h-8 gap-1"
+                          onClick={() => setAppointmentViewMode('list')}
+                        >
+                          <List className="w-4 h-4" />
+                          List
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={appointmentViewMode === 'calendar' ? 'default' : 'ghost'}
+                          className="h-8 gap-1"
+                          onClick={() => setAppointmentViewMode('calendar')}
+                        >
+                          <Calendar className="w-4 h-4" />
+                          Calendar
+                        </Button>
+                      </div>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     {/* Status Sub-tabs */}
@@ -1485,257 +1875,290 @@ const DoctorPortal = () => {
 
                       {/* Pending Tab Content */}
                       <TabsContent value="pending" className="space-y-4">
-                        {filteredAppointmentsByStatus.length === 0 ? (
-                          <div className="text-center py-12">
-                            <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No pending requests</p>
-                            <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
-                          </div>
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar(
+                            'No pending requests',
+                            'New requests will appear here when patients book appointments'
+                          )
                         ) : (
-                          filteredAppointmentsByStatus.map((apt) => (
-                            <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
-                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                <div className="relative">
-                                  <Avatar className="w-12 h-12">
-                                    <AvatarImage src={(apt as any).patient_profile_picture} />
-                                    <AvatarFallback className="bg-primary/10 text-primary">
-                                      {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div className="absolute bottom-0 right-0">
-                                    {getPresenceIndicator(apt.patient_id)}
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No pending requests</p>
+                                <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="relative">
+                                      <Avatar className="w-12 h-12">
+                                        <AvatarImage src={(apt as any).patient_profile_picture} />
+                                        <AvatarFallback className="bg-primary/10 text-primary">
+                                          {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div className="absolute bottom-0 right-0">
+                                        {getPresenceIndicator(apt.patient_id)}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {new Date(apt.date).toLocaleDateString()} at {apt.time}
+                                      </p>
+                                      <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {apt.patient_id && (
+                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                        View Folder
+                                      </Button>
+                                    )}
+                                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
+                                      Decline
+                                    </Button>
+                                    <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(apt.id)}>
+                                      Accept
+                                    </Button>
                                   </div>
                                 </div>
-                                <div>
-                                  <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-sm text-muted-foreground">
-                                    {new Date(apt.date).toLocaleDateString()} at {apt.time}
-                                  </p>
-                                  <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
-                                </div>
-                              </div>
-                              <div className="flex gap-2">
-                                {apt.patient_id && (
-                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                    View Folder
-                                  </Button>
-                                )}
-                                <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
-                                  Decline
-                                </Button>
-                                <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(apt.id)}>
-                                  Accept
-                                </Button>
-                              </div>
-                            </div>
-                          ))
+                              ))
+                            )}
+                          </>
                         )}
                       </TabsContent>
 
                       {/* Upcoming Tab Content */}
                       <TabsContent value="upcoming" className="space-y-4">
-                        {filteredAppointmentsByStatus.length === 0 ? (
-                          <div className="text-center py-12">
-                            <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No upcoming appointments</p>
-                          </div>
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No upcoming appointments')
                         ) : (
-                          filteredAppointmentsByStatus.map((apt) => (
-                            <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
-                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                <div className="text-center w-20">
-                                  <p className="text-sm font-semibold">{apt.time}</p>
-                                  <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                                </div>
-                                <div className="w-px h-12 bg-border" />
-                                <div className="relative">
-                                  <Avatar className="w-12 h-12">
-                                    <AvatarImage src={(apt as any).patient_profile_picture} />
-                                    <AvatarFallback className="bg-primary/10 text-primary">
-                                      {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div className="absolute bottom-0 right-0">
-                                    {getPresenceIndicator(apt.patient_id)}
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No upcoming appointments</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <div className="relative">
+                                      <Avatar className="w-12 h-12">
+                                        <AvatarImage src={(apt as any).patient_profile_picture} />
+                                        <AvatarFallback className="bg-primary/10 text-primary">
+                                          {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div className="absolute bottom-0 right-0">
+                                        {getPresenceIndicator(apt.patient_id)}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <JoinConsultationButton
+                                      appointmentId={apt.id}
+                                      participantName={apt.patient_name || ''}
+                                      status={apt.status}
+                                      variant="default"
+                                      size="sm"
+                                      className="gradient-primary"
+                                    />
+                                    {apt.patient_id && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => handleViewPatientFolder(apt)}
+                                      >
+                                        View Folder
+                                      </Button>
+                                    )}
                                   </div>
                                 </div>
-                                <div>
-                                  <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                </div>
-                              </div>
-                              <div className="flex gap-2">
-                                <JoinConsultationButton
-                                  appointmentId={apt.id}
-                                  participantName={apt.patient_name || ''}
-                                  status={apt.status}
-                                  variant="default"
-                                  size="sm"
-                                  className="gradient-primary"
-                                />
-                                {apt.patient_id && (
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline"
-                                    onClick={() => handleViewPatientFolder(apt)}
-                                  >
-                                    View Folder
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          ))
+                              ))
+                            )}
+                          </>
                         )}
                       </TabsContent>
 
                       {/* Rejected Tab Content */}
                       <TabsContent value="rejected" className="space-y-4">
-                        {filteredAppointmentsByStatus.length === 0 ? (
-                          <div className="text-center py-12">
-                            <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No rejected appointments</p>
-                          </div>
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No rejected appointments')
                         ) : (
-                          filteredAppointmentsByStatus.map((apt) => (
-                            <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
-                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                <div className="text-center w-20">
-                                  <p className="text-sm font-semibold">{apt.time}</p>
-                                  <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                                </div>
-                                <div className="w-px h-12 bg-border" />
-                                <Avatar className="w-12 h-12">
-                                  <AvatarImage src={(apt as any).patient_profile_picture} />
-                                  <AvatarFallback className="bg-primary/10 text-primary">
-                                    {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <div>
-                                  <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                  <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
-                                </div>
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No rejected appointments</p>
                               </div>
-                              <div className="flex gap-2">
-                                {apt.patient_id && (
-                                  <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                    View Folder
-                                  </Button>
-                                )}
-                                <Badge variant="destructive">Rejected</Badge>
-                              </div>
-                            </div>
-                          ))
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).patient_profile_picture} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {apt.patient_id && (
+                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                        View Folder
+                                      </Button>
+                                    )}
+                                    <Badge variant="destructive">Rejected</Badge>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </>
                         )}
                       </TabsContent>
 
                       {/* Completed Tab Content */}
                       <TabsContent value="completed" className="space-y-4">
-                        {filteredAppointmentsByStatus.length === 0 ? (
-                          <div className="text-center py-12">
-                            <CheckCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No completed consultations</p>
-                          </div>
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No completed consultations')
                         ) : (
-                          filteredAppointmentsByStatus.map((apt) => (
-                            <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
-                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                <div className="text-center w-20">
-                                  <p className="text-sm font-semibold">{apt.time}</p>
-                                  <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                                </div>
-                                <div className="w-px h-12 bg-border" />
-                                <Avatar className="w-12 h-12">
-                                  <AvatarImage src={(apt as any).patient_profile_picture} />
-                                  <AvatarFallback className="bg-primary/10 text-primary">
-                                    {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <div>
-                                  <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                  {(apt as any).rating && (
-                                    <div className="flex items-center gap-1 mt-1">
-                                      {[...Array(5)].map((_, i) => (
-                                        <Star
-                                          key={i}
-                                          className={`w-3 h-3 ${i < (apt as any).rating ? 'text-warning fill-warning' : 'text-muted'}`}
-                                        />
-                                      ))}
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <CheckCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No completed consultations</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
                                     </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).patient_profile_picture} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      {(apt as any).rating && (
+                                        <div className="flex items-center gap-1 mt-1">
+                                          {[...Array(5)].map((_, i) => (
+                                            <Star
+                                              key={i}
+                                              className={`w-3 h-3 ${i < (apt as any).rating ? 'text-warning fill-warning' : 'text-muted'}`}
+                                            />
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {apt.patient_id && (
+                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                      View Folder
+                                    </Button>
                                   )}
                                 </div>
-                              </div>
-                              {apt.patient_id && (
-                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                  View Folder
-                                </Button>
-                              )}
-                            </div>
-                          ))
+                              ))
+                            )}
+                          </>
                         )}
                       </TabsContent>
 
                       {/* All Tab Content */}
                       <TabsContent value="all" className="space-y-4">
-                        {filteredAppointmentsByStatus.length === 0 ? (
-                          <div className="text-center py-12">
-                            <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No appointments found</p>
-                          </div>
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No appointments found')
                         ) : (
-                          filteredAppointmentsByStatus.map((apt) => (
-                            <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
-                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                <div className="text-center w-20">
-                                  <p className="text-sm font-semibold">{apt.time}</p>
-                                  <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                                </div>
-                                <div className="w-px h-12 bg-border" />
-                                <Avatar className="w-12 h-12">
-                                  <AvatarImage src={(apt as any).patient_profile_picture} />
-                                  <AvatarFallback className="bg-primary/10 text-primary">
-                                    {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <div>
-                                  <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                  <Badge className="mt-1" variant={
-                                    apt.status === 'pending' ? 'default' :
-                                    apt.status === 'confirmed' ? 'outline' :
-                                    apt.status === 'completed' ? 'secondary' : 'destructive'
-                                  }>
-                                    {apt.status}
-                                  </Badge>
-                                </div>
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No appointments found</p>
                               </div>
-                              {apt.status === 'confirmed' && (
-                                <JoinConsultationButton
-                                  appointmentId={apt.id}
-                                  participantName={apt.patient_name || ''}
-                                  status={apt.status}
-                                  variant="default"
-                                  size="sm"
-                                />
-                              )}
-                              {apt.patient_id && (
-                                <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                  View Folder
-                                </Button>
-                              )}
-                              {apt.status === 'pending' && (
-                                <div className="flex gap-2">
-                                  <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeclineRequest(apt.id)}>
-                                    Decline
-                                  </Button>
-                                  <Button size="sm" className="bg-success" onClick={() => handleAcceptRequest(apt.id)}>
-                                    Accept
-                                  </Button>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).patient_profile_picture} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <Badge className="mt-1" variant={
+                                        apt.status === 'pending' ? 'default' :
+                                        apt.status === 'confirmed' ? 'outline' :
+                                        apt.status === 'completed' ? 'secondary' : 'destructive'
+                                      }>
+                                        {apt.status}
+                                      </Badge>
+                                    </div>
+                                  </div>
+                                  {apt.status === 'confirmed' && (
+                                    <JoinConsultationButton
+                                      appointmentId={apt.id}
+                                      participantName={apt.patient_name || ''}
+                                      status={apt.status}
+                                      variant="default"
+                                      size="sm"
+                                    />
+                                  )}
+                                  {apt.patient_id && (
+                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                      View Folder
+                                    </Button>
+                                  )}
+                                  {apt.status === 'pending' && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeclineRequest(apt.id)}>
+                                        Decline
+                                      </Button>
+                                      <Button size="sm" className="bg-success" onClick={() => handleAcceptRequest(apt.id)}>
+                                        Accept
+                                      </Button>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          ))
+                              ))
+                            )}
+                          </>
                         )}
                       </TabsContent>
                     </Tabs>
