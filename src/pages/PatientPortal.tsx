@@ -421,32 +421,32 @@ const PatientPortal = () => {
         });
         return;
       }
-      if (!prescription.noteId || !prescription.doctorId) {
-        toast({
-          title: 'Download unavailable',
-          description: 'Prescription details are incomplete for verification.',
-          variant: 'destructive',
-        });
-        return;
-      }
-
-      const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
-        p_note_id: prescription.noteId,
-        p_session_id: prescription.sessionId,
-        p_patient_id: user.id,
-        p_doctor_id: prescription.doctorId,
-        p_drug_list: prescription.rawText,
-        p_date_issued: prescription.date,
-      });
-      if (codeError || !codeData) {
-        throw codeError || new Error('Could not generate verification code');
-      }
-
-      const verificationCode = String(codeData);
       const verificationBaseUrl =
         (import.meta.env.VITE_VERIFICATION_BASE_URL as string | undefined) ||
         'https://myedoctorhealth.com';
-      const verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+      let verificationCode: string | undefined;
+      let verificationUrl: string | undefined;
+
+      if (prescription.noteId && prescription.doctorId) {
+        try {
+          const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
+            p_note_id: prescription.noteId,
+            p_session_id: prescription.sessionId,
+            p_patient_id: user.id,
+            p_doctor_id: prescription.doctorId,
+            p_drug_list: prescription.rawText,
+            p_date_issued: prescription.date,
+          });
+          if (!codeError && codeData) {
+            verificationCode = String(codeData);
+            verificationUrl = `${verificationBaseUrl.replace(/\/$/, '')}/verify/${verificationCode}`;
+          } else {
+            console.warn('Prescription verification code generation failed:', codeError);
+          }
+        } catch (verificationErr) {
+          console.warn('Prescription verification unavailable, continuing with download:', verificationErr);
+        }
+      }
 
       const lines = prescription.items.map(
         (item, index) => `${index + 1}. ${item.medication} - ${item.dosage}`
@@ -455,7 +455,7 @@ const PatientPortal = () => {
         `Patient: ${displayName}`,
         `Prescribed by: ${prescription.doctor}`,
         `Date: ${new Date(prescription.date).toLocaleString()}`,
-        `Verification Code: ${verificationCode}`,
+        `Verification Code: ${verificationCode || 'Pending/Unavailable'}`,
         '',
         'Items:',
         ...lines,
@@ -464,13 +464,13 @@ const PatientPortal = () => {
         prescription.rawText,
         '',
         `Status: ${prescription.status}`,
-      ].join('\n');
+      ];
 
       const blob = await createPrescriptionPdfBlob({
         title: 'MYE-DOCTOR PRESCRIPTION',
         lines: content,
         verificationUrl,
-        verificationCode,
+        verificationCode: verificationCode || 'Pending/Unavailable',
       });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -489,7 +489,12 @@ const PatientPortal = () => {
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(prescriptionDownloadStorageKey, JSON.stringify(next));
       }
-      toast({ title: 'Downloaded', description: 'Prescription downloaded successfully.' });
+      toast({
+        title: 'Downloaded',
+        description: verificationCode
+          ? 'Prescription downloaded successfully.'
+          : 'Prescription downloaded. QR verification will be available once server verification is configured.',
+      });
       } catch (error) {
       console.error('Failed to download prescription:', error);
       toast({ title: 'Error', description: 'Failed to download prescription.', variant: 'destructive' });
