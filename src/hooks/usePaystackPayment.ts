@@ -5,13 +5,7 @@ interface PaystackConfig {
   amount: number; // in kobo (multiply naira by 100)
   reference: string;
   publicKey: string;
-  metadata?: {
-    custom_fields?: Array<{
-      display_name: string;
-      variable_name: string;
-      value: string;
-    }>;
-  };
+  metadata?: Record<string, unknown>;
   onSuccess: (reference: any) => void;
   onClose: () => void;
 }

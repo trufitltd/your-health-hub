@@ -214,14 +214,33 @@ export const checkSlotAvailability = async (
     // Query for existing appointments at this time
     const { data, error } = await supabase
       .from('appointments')
-      .select('id')
+      .select('id,status,slot_locked_until')
       .eq('doctor_id', doctorId)
       .eq('date', date)
       .eq('time', time)
-      .not('status', 'in', '(cancelled)');
+      .in('status', [
+        'pending',
+        'confirmed',
+        'in_progress',
+        'completed',
+        'pending_payment',
+        'PENDING_PAYMENT',
+        'CONFIRMED',
+        'IN_PROGRESS',
+        'COMPLETED',
+      ]);
     
     if (error) throw error;
-    return (data?.length ?? 0) === 0; // Available if no conflicts
+
+    const now = Date.now();
+    const blockingRows = (data || []).filter((row: any) => {
+      const status = String(row.status || '').toLowerCase();
+      if (status !== 'pending_payment') return true;
+      if (!row.slot_locked_until) return false;
+      return new Date(row.slot_locked_until).getTime() > now;
+    });
+
+    return blockingRows.length === 0;
   } catch (error) {
     console.error('Error checking slot availability:', error);
     // If there's an error, assume available to allow booking
