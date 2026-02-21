@@ -15,6 +15,7 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
+import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -64,24 +65,15 @@ export function SlotSelectionModal({
         .from('appointments')
         .select('time,status,slot_locked_until')
         .eq('doctor_id', selectedDoctor)
-        .eq('date', selectedDate)
-        .in('status', [
-          'pending',
-          'confirmed',
-          'in_progress',
-          'pending_payment',
-          'PENDING_PAYMENT',
-          'CONFIRMED',
-          'IN_PROGRESS',
-        ]);
+        .eq('date', selectedDate);
       
       if (error) throw error;
       const nowMs = Date.now();
       return (data || [])
         .filter((apt) => {
           const typedApt = apt as BookedSlotRow;
-          const status = String(typedApt.status || '').toLowerCase();
-          if (status !== 'pending_payment') return true;
+          if (!isSlotBlockingAppointmentStatus(typedApt.status)) return false;
+          if (!isPendingPaymentAppointmentStatus(typedApt.status)) return true;
           if (!typedApt.slot_locked_until) return false;
           return new Date(typedApt.slot_locked_until).getTime() > nowMs;
         })

@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useState } from 'react';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface PatientWithStats {
   id: string;
@@ -87,9 +88,15 @@ export function PatientsTable() {
 
           console.log(`Patient ${patient.full_name} appointments:`, appointments);
 
+          const normalizedAppointments = (appointments || []).map((appointment) => ({
+            ...appointment,
+            status: normalizeAppointmentStatus(appointment.status),
+          }));
           const total = appointments?.length || 0;
-          const completed = appointments?.filter(a => a.status === 'completed').length || 0;
-          const pending = appointments?.filter(a => a.status === 'pending' || a.status === 'confirmed' || a.status === 'requested').length || 0;
+          const completed = normalizedAppointments.filter((a) => a.status === 'completed').length;
+          const pending = normalizedAppointments.filter((a) =>
+            a.status === 'pending' || a.status === 'confirmed' || a.status === 'in_progress'
+          ).length;
           const ratings = appointments?.filter(a => a.rating && a.rating > 0).map(a => a.rating!) || [];
           const avgRating = ratings.length > 0 
             ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length 
