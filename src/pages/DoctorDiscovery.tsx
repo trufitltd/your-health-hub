@@ -178,7 +178,15 @@ export default function DoctorDiscovery() {
                 .eq('doctor_id', doctorId)
                 .eq('date', date)
                 .eq('time', time)
-                .in('status', ['pending', 'confirmed'])
+                .in('status', [
+                  'pending',
+                  'confirmed',
+                  'in_progress',
+                  'pending_payment',
+                  'PENDING_PAYMENT',
+                  'CONFIRMED',
+                  'IN_PROGRESS',
+                ])
                 .limit(1);
 
               if (!booking || booking.length === 0) {
