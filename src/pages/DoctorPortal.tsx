@@ -49,6 +49,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -648,7 +649,13 @@ const DoctorPortal = () => {
       const patientIds = appointments.map(apt => apt.patient_id).filter(Boolean);
       console.log('Patient IDs:', patientIds);
       
-      if (patientIds.length === 0) return appointments.map(apt => ({ ...apt, patient_age: null }));
+      if (patientIds.length === 0) {
+        return appointments.map((apt: any) => ({
+          ...apt,
+          status: normalizeAppointmentStatus(apt.status),
+          patient_age: null,
+        }));
+      }
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
@@ -659,8 +666,9 @@ const DoctorPortal = () => {
       
       // Merge the data
       const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
-      return appointments.map(apt => ({
+      return appointments.map((apt: any) => ({
         ...apt,
+        status: normalizeAppointmentStatus(apt.status),
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
         patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
         patient_profile_picture: patientDataMap.get(apt.patient_id)?.profile_picture_url || null

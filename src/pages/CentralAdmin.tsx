@@ -38,6 +38,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
+import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
 
 interface Doctor {
   id: string;
@@ -736,6 +737,7 @@ const CentralAdmin = () => {
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
+                    { id: 'pricing', label: 'Pricing', icon: TrendingUp },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
@@ -841,6 +843,7 @@ const CentralAdmin = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
 
@@ -1377,6 +1380,11 @@ const CentralAdmin = () => {
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+
+              {/* Pricing Tab */}
+              <TabsContent value="pricing" className="space-y-6">
+                <PricingManagementPanel />
               </TabsContent>
 
               {/* Quality Assurance Tab */}
