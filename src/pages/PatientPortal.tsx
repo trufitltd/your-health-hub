@@ -49,10 +49,12 @@ import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
 import { useHealthRecords } from '@/hooks/useHealthRecords';
+import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
+import { BookingService } from '@/services/BookingService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
 
@@ -586,11 +588,6 @@ const PatientPortal = () => {
     toast({ title: 'Booking', description: 'Booking flow not implemented yet.' });
   };
 
-  const handleNewAppointment = () => {
-    if (!requireAuthForBooking()) return;
-    navigate('/doctor-discovery');
-  };
-
   // Booking modal state
   const [bookingOpen, setBookingOpen] = useState(false);
   const [slotSelectionOpen, setSlotSelectionOpen] = useState(false);
@@ -600,6 +597,7 @@ const PatientPortal = () => {
   const [bookingTime, setBookingTime] = useState('');
   // appointment type removed - all bookings are generic
   const [bookingNotes, setBookingNotes] = useState('');
+  const [bookingFinalPrice, setBookingFinalPrice] = useState<number | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
@@ -615,14 +613,8 @@ const PatientPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
-
-  // Pricing logic (single uniform consultation price)
-  const getPricing = (specialty: string) => {
-    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
-    return isSpecialist ? 8000 : 4000;
-  };
-
-  const formatPrice = (price: number) => `₦${price.toLocaleString()}`;
+  const { initializePayment } = usePaystackPayment();
+  const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
   // Handle external booking requests
   useEffect(() => {
@@ -703,6 +695,7 @@ const PatientPortal = () => {
     setBookingDate('');
     setBookingTime('');
     setBookingNotes('');
+    setBookingFinalPrice(null);
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
     setRescheduleDoctorId(null);
@@ -715,7 +708,8 @@ const PatientPortal = () => {
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
-    navigate('/doctor-discovery');
+    resetBookingState();
+    setSlotSelectionOpen(true);
   };
 
   const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
@@ -731,6 +725,7 @@ const PatientPortal = () => {
       setSpecialistName(doctor.name);
       setBookingDate(date);
       setBookingTime(time);
+      setBookingFinalPrice(null);
       setSlotSelectionOpen(false);
       setBookingOpen(true);
     } catch (err: unknown) {
@@ -746,6 +741,15 @@ const PatientPortal = () => {
       return;
     }
 
+    if (!paystackPublicKey) {
+      toast({
+        title: 'Configuration Error',
+        description: 'Payment gateway not configured. Please contact support.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setIsBooking(true);
     try {
       // Final conflict check before insertion
@@ -756,30 +760,38 @@ const PatientPortal = () => {
         return;
       }
 
-      const payload: Record<string, unknown> = {
-        patient_id: user?.id,
-        patient_name: displayName,
-        specialist_name: specialistName,
-        doctor_id: selectedDoctorId,
-        date: bookingDate,
-        time: bookingTime,
+      const booking = await BookingService.initiateBooking({
+        doctorId: selectedDoctorId,
+        preferredDate: bookingDate,
+        preferredTime: bookingTime,
+        duration: 30,
+        consultationType: 'video',
         notes: bookingNotes,
-        status: 'pending',
-      };
+      });
 
-      const { data, error } = await supabase.from('appointments').insert([payload]).select();
-      if (error) {
-        throw error;
-      }
+      setBookingFinalPrice(booking.finalPrice);
+      setBookingOpen(false);
 
-      toast({ title: 'Booked', description: 'Your appointment request has been submitted.' });
-      resetBookingState();
-      // Refresh appointments list
-      invalidateAppointments();
+      initializePayment({
+        email: booking.paymentInitialization.email || user?.email || '',
+        amount: booking.paymentInitialization.amountInKobo,
+        reference: booking.paymentInitialization.reference,
+        publicKey: paystackPublicKey,
+        metadata: booking.paymentInitialization.metadata,
+        onSuccess: () => {
+          setIsBooking(false);
+          toast({ title: 'Payment successful', description: `Appointment confirmed. Amount paid: ₦${booking.finalPrice.toLocaleString()}` });
+          resetBookingState();
+          invalidateAppointments();
+        },
+        onClose: () => {
+          setIsBooking(false);
+          toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
+        },
+      });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
       toast({ title: 'Booking failed', description: message });
-    } finally {
       setIsBooking(false);
     }
   };
@@ -1558,7 +1570,9 @@ const PatientPortal = () => {
                   <div>
                     <Label>Consultation Fee</Label>
                     <div className="p-2 text-sm">
-                      {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice'))}
+                      {bookingFinalPrice !== null
+                        ? `₦${bookingFinalPrice.toLocaleString()}`
+                        : 'Calculated securely at payment step'}
                     </div>
                   </div>
                   <div>

@@ -9,7 +9,8 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Calendar, Clock, AlertCircle } from 'lucide-react';
+import { Calendar as DateCalendar } from '@/components/ui/calendar';
+import { Calendar as CalendarIcon, Clock, AlertCircle } from 'lucide-react';
 import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailableSlots';
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
@@ -23,6 +24,19 @@ interface SlotSelectionModalProps {
   onSlotSelect: (doctor: { id: string; name: string }, date: string, time: string) => void;
   doctorId?: string | null;
 }
+
+type BookedSlotRow = {
+  time: string | null;
+  status: string | null;
+  slot_locked_until: string | null;
+};
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 /**
  * Slot Selection Modal Component
@@ -48,13 +62,30 @@ export function SlotSelectionModal({
       
       const { data, error } = await supabase
         .from('appointments')
-        .select('time')
+        .select('time,status,slot_locked_until')
         .eq('doctor_id', selectedDoctor)
         .eq('date', selectedDate)
-        .in('status', ['pending', 'confirmed']);
+        .in('status', [
+          'pending',
+          'confirmed',
+          'in_progress',
+          'pending_payment',
+          'PENDING_PAYMENT',
+          'CONFIRMED',
+          'IN_PROGRESS',
+        ]);
       
       if (error) throw error;
-      return (data || []).map(apt => apt.time);
+      const nowMs = Date.now();
+      return (data || [])
+        .filter((apt) => {
+          const typedApt = apt as BookedSlotRow;
+          const status = String(typedApt.status || '').toLowerCase();
+          if (status !== 'pending_payment') return true;
+          if (!typedApt.slot_locked_until) return false;
+          return new Date(typedApt.slot_locked_until).getTime() > nowMs;
+        })
+        .map((apt) => String((apt as BookedSlotRow).time || '').slice(0, 5));
     },
     enabled: !!selectedDoctor && !!selectedDate,
   });
@@ -86,6 +117,11 @@ export function SlotSelectionModal({
     [slots, doctorId]
   );
 
+  useEffect(() => {
+    if (doctorId || selectedDoctor || doctors.length !== 1) return;
+    setSelectedDoctor(doctors[0].id);
+  }, [doctorId, selectedDoctor, doctors]);
+
   // Get schedules for selected doctor
   const doctorSchedules = useMemo(
     () => slots.filter((slot) => slot.doctor_id === selectedDoctor),
@@ -103,7 +139,7 @@ export function SlotSelectionModal({
       // The view already filters by is_available = true, so we can include all
       const datesForWeekDay = generateDatesForDayOfWeek(schedule.day_of_week, 30);
       datesForWeekDay.forEach((date) => {
-        dates.add(date.toISOString().split('T')[0]);
+        dates.add(toDateKey(date));
       });
     });
 
@@ -114,8 +150,8 @@ export function SlotSelectionModal({
   const timeSlots = useMemo(() => {
     if (!selectedDate || !selectedDoctor) return [];
 
-    const date = new Date(selectedDate);
-    const dayOfWeek = date.getUTCDay();
+    const date = new Date(`${selectedDate}T00:00:00`);
+    const dayOfWeek = date.getDay();
 
     const schedules = doctorSchedules.filter(
       (s) => s.day_of_week === dayOfWeek
@@ -137,7 +173,7 @@ export function SlotSelectionModal({
 
     // Filter out past times if selected date is today
     const now = new Date();
-    const isToday = selectedDate === now.toISOString().split('T')[0];
+    const isToday = selectedDate === toDateKey(now);
     
     if (isToday) {
       const currentTime = now.toTimeString().slice(0, 5);
@@ -164,6 +200,19 @@ export function SlotSelectionModal({
   };
 
   const canConfirm = selectedDoctor && selectedDate && selectedTime;
+  const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
+  const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
+  const minCalendarDate = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }, []);
+  const maxCalendarDate = useMemo(() => {
+    const max = new Date();
+    max.setDate(max.getDate() + 29);
+    max.setHours(23, 59, 59, 999);
+    return max;
+  }, []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,31 +271,23 @@ export function SlotSelectionModal({
                   No available dates
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  {availableDates.map((date) => {
-                    const dateObj = new Date(date);
-                    const dayName = dateObj.toLocaleDateString('en-US', {
-                      weekday: 'short',
-                    });
-                    const dayNum = dateObj.getDate();
-                    return (
-                      <button
-                        key={date}
-                        onClick={() => {
-                          setSelectedDate(date);
-                          setSelectedTime(null);
-                        }}
-                        className={`p-2 rounded-lg border-2 transition-colors text-center text-xs ${
-                          selectedDate === date
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:border-primary/50'
-                        }`}
-                      >
-                        <div className="font-medium">{dayName}</div>
-                        <div className="text-sm">{dayNum}</div>
-                      </button>
-                    );
-                  })}
+                <div className="rounded-lg border bg-background/60">
+                  <DateCalendar
+                    mode="single"
+                    selected={selectedCalendarDate}
+                    onSelect={(date) => {
+                      if (!date) return;
+                      const dateKey = toDateKey(date);
+                      if (!availableDateSet.has(dateKey)) return;
+                      setSelectedDate(dateKey);
+                      setSelectedTime(null);
+                    }}
+                    disabled={(date) => {
+                      if (date < minCalendarDate || date > maxCalendarDate) return true;
+                      return !availableDateSet.has(toDateKey(date));
+                    }}
+                    className="mx-auto p-2"
+                  />
                 </div>
               )}
             </div>
@@ -310,7 +351,7 @@ export function SlotSelectionModal({
                   {doctors.find((d) => d.id === selectedDoctor)?.specialty}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Calendar className="w-3 h-3" />
+                  <CalendarIcon className="w-3 h-3" />
                   {new Date(selectedDate).toLocaleDateString('en-US', {
                     weekday: 'long',
                     year: 'numeric',
