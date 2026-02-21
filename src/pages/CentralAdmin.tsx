@@ -699,6 +699,13 @@ const CentralAdmin = () => {
             </Link>
 
             <div className="flex items-center gap-4">
+              <Link to="/install" className="hidden md:block">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Download className="w-4 h-4" />
+                  Download App
+                </Button>
+              </Link>
+
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <Shield className="w-4 h-4 text-primary" />
                 <span className="text-sm font-medium">Medical Director</span>
@@ -805,6 +812,20 @@ const CentralAdmin = () => {
                 </div>
               </div>
             </motion.div>
+
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm">
+                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                </p>
+                <Link to="/install">
+                  <Button size="sm" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    Open Install Page
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
 
             {/* Quick Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">

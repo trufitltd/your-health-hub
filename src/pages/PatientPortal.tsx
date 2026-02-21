@@ -99,6 +99,7 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
 interface PatientPrescription {
   id: string;
   noteId: string;
+  noteIds: string[];
   items: Array<{
     medication: string;
     dosage: string;
@@ -111,6 +112,7 @@ interface PatientPrescription {
   date: string;
   refillsRemaining: number;
   status: 'active' | 'past';
+  isDownloaded: boolean;
 }
 
 const PatientPortal = () => {
@@ -126,7 +128,6 @@ const PatientPortal = () => {
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
-  const [downloadedPrescriptionIds, setDownloadedPrescriptionIds] = useState<string[]>([]);
   const { user, signOut } = useAuth();
   
   // Track patient presence
@@ -208,23 +209,6 @@ const PatientPortal = () => {
     newPassword: '',
     confirmPassword: '',
   });
-  const prescriptionDownloadStorageKey = user?.id ? `patient-prescription-downloads-${user.id}` : null;
-
-  useEffect(() => {
-    if (!prescriptionDownloadStorageKey || typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(prescriptionDownloadStorageKey);
-      if (!raw) {
-        setDownloadedPrescriptionIds([]);
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      setDownloadedPrescriptionIds(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []);
-    } catch {
-      setDownloadedPrescriptionIds([]);
-    }
-  }, [prescriptionDownloadStorageKey]);
-
   // Initialize form data when patientRegistration loads
   useEffect(() => {
     if (patientRegistration) {
@@ -328,6 +312,7 @@ const PatientPortal = () => {
               grouped.set(groupKey, {
                 id: groupKey,
                 noteId: note.id,
+                noteIds: [note.id],
                 items,
                 rawText: items.map((item) => item.rawText).join('\n'),
                 doctor: resolvedDoctorName,
@@ -335,7 +320,8 @@ const PatientPortal = () => {
                 sessionId,
                 date: note.created_at,
                 refillsRemaining: daysSincePrescription > 90 ? 0 : 3,
-                status: daysSincePrescription > 90 ? 'past' : 'active'
+                status: daysSincePrescription > 90 ? 'past' : 'active',
+                isDownloaded: false,
               });
             } else {
               const seen = new Set(existing.items.map((item) => item.rawText.toLowerCase().trim()));
@@ -347,6 +333,9 @@ const PatientPortal = () => {
                 }
               }
               existing.rawText = existing.items.map((item) => item.rawText).join('\n');
+              if (!existing.noteIds.includes(note.id)) {
+                existing.noteIds.push(note.id);
+              }
               if (new Date(note.created_at).getTime() > new Date(existing.date).getTime()) {
                 existing.date = note.created_at;
               }
@@ -361,7 +350,35 @@ const PatientPortal = () => {
           }
         }
       });
-      return Array.from(grouped.values()).sort(
+      const groupedItems = Array.from(grouped.values());
+      const allNoteIds = groupedItems.flatMap((item) => item.noteIds);
+      if (allNoteIds.length > 0) {
+        try {
+          const { data: verificationRows, error: verificationError } = await supabase
+            .from('prescription_verifications')
+            .select('note_id, is_downloaded')
+            .in('note_id', allNoteIds)
+            .eq('patient_id', user.id);
+
+          if (verificationError) {
+            console.warn('Could not fetch prescription download status:', verificationError);
+          } else {
+            const downloadedNoteIdSet = new Set(
+              (verificationRows || [])
+                .filter((row: any) => !!row.is_downloaded)
+                .map((row: any) => String(row.note_id))
+            );
+
+            groupedItems.forEach((item) => {
+              item.isDownloaded = item.noteIds.some((id) => downloadedNoteIdSet.has(id));
+            });
+          }
+        } catch (statusErr) {
+          console.warn('Download status lookup unavailable:', statusErr);
+        }
+      }
+
+      return groupedItems.sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
     },
@@ -401,8 +418,7 @@ const PatientPortal = () => {
   };
 
   const handleDownloadPrescription = (prescription: PatientPrescription) => {
-    if (!prescriptionDownloadStorageKey) return;
-    if (downloadedPrescriptionIds.includes(prescription.id)) {
+    if (prescription.isDownloaded) {
       toast({
         title: 'Download locked',
         description: 'You already downloaded this prescription. Request refill and download renewed copy from doctor message after approval.',
@@ -484,10 +500,14 @@ const PatientPortal = () => {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      const next = Array.from(new Set([...downloadedPrescriptionIds, prescription.id]));
-      setDownloadedPrescriptionIds(next);
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(prescriptionDownloadStorageKey, JSON.stringify(next));
+      try {
+        await (supabase as any).rpc('mark_prescription_downloaded', {
+          p_note_ids: prescription.noteIds,
+        });
+        queryClient.invalidateQueries({ queryKey: ['prescriptions', user.id] });
+        setSelectedPrescription((prev) => (prev && prev.id === prescription.id ? { ...prev, isDownloaded: true } : prev));
+      } catch (markErr) {
+        console.warn('Could not persist prescription download status:', markErr);
       }
       toast({
         title: 'Downloaded',
@@ -1376,6 +1396,13 @@ const PatientPortal = () => {
                 />
               </div>
 
+              <Link to="/install" className="hidden md:block">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Download className="w-4 h-4" />
+                  Download App
+                </Button>
+              </Link>
+
               <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
                 {notifications.filter(n => !n.read).length > 0 && (
@@ -1527,6 +1554,20 @@ const PatientPortal = () => {
                 </Button>
               </div>
             </motion.div>
+
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm">
+                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                </p>
+                <Link to="/install">
+                  <Button size="sm" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    Open Install Page
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
 
             {/* Slot Selection Modal */}
             <SlotSelectionModal
@@ -2192,7 +2233,7 @@ const PatientPortal = () => {
                               <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
                                 View Details
                               </Button>
-                              {!downloadedPrescriptionIds.includes(prescription.id) ? (
+                              {!prescription.isDownloaded ? (
                                 <Button size="sm" variant="outline" onClick={() => handleDownloadPrescription(prescription)}>
                                   Download
                                 </Button>
@@ -2515,10 +2556,10 @@ const PatientPortal = () => {
                 <Button
                   variant="outline"
                   onClick={() => handleDownloadPrescription(selectedPrescription)}
-                  disabled={downloadedPrescriptionIds.includes(selectedPrescription.id)}
+                  disabled={selectedPrescription.isDownloaded}
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  {downloadedPrescriptionIds.includes(selectedPrescription.id) ? 'Downloaded' : 'Download'}
+                  {selectedPrescription.isDownloaded ? 'Downloaded' : 'Download'}
                 </Button>
                 <Button
                   onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
