@@ -50,6 +50,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
+import { WalletService } from '@/services/WalletService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -94,6 +95,10 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
   }
 } as const;
 
+type WalletTransactionRow = {
+  status: string | null;
+};
+
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
@@ -121,8 +126,8 @@ const DoctorPortal = () => {
     notes: string | null;
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'cancelled' | 'all'>('pending');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
@@ -130,6 +135,9 @@ const DoctorPortal = () => {
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
+  const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
+  const [withdrawalAmount, setWithdrawalAmount] = useState('');
+  const [withdrawalNarration, setWithdrawalNarration] = useState('');
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const navigate = useNavigate();
@@ -379,6 +387,24 @@ const DoctorPortal = () => {
   
   // Fetch doctor earnings
   const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
+  const { data: doctorWallet, isLoading: walletLoading } = useQuery({
+    queryKey: ['doctor-wallet', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      return WalletService.getDoctorWallet(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: walletTransactions = [], isLoading: walletTransactionsLoading } = useQuery({
+    queryKey: ['doctor-wallet-transactions', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      return WalletService.getWalletTransactions(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -763,7 +789,7 @@ const DoctorPortal = () => {
   // Filter pending requests for the current doctor
   const pendingRequests = (fetchedAppointments || []).filter(apt => {
     console.log('Checking appointment:', apt.id, 'Status:', apt.status);
-    return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
+    return apt.status === 'pending';
     }).map(apt => ({
     id: apt.id,
     patient: apt.patient_name || 'Unknown Patient',
@@ -784,6 +810,14 @@ const DoctorPortal = () => {
     earnings: earningsData?.thisMonthEarnings || 0,
     rating: doctorStats?.rating || 0,
   };
+  const walletAvailableBalance = Number(doctorWallet?.available_balance || 0);
+  const walletPendingBalance = Number(doctorWallet?.pending_balance || 0);
+  const pendingWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'pending').length;
+  const availableWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'available').length;
+  const withdrawalAmountNumber = Number(withdrawalAmount || 0);
+  const canRequestWithdrawal =
+    withdrawalAmountNumber > 0 &&
+    withdrawalAmountNumber <= walletAvailableBalance;
 
   const filteredAppointmentsByStatus = useMemo(() => {
     if (!fetchedAppointments) return [];
@@ -794,7 +828,7 @@ const DoctorPortal = () => {
       case 'pending':
         filtered = fetchedAppointments.filter(apt => apt.status === 'pending');
         break;
-      case 'upcoming':
+      case 'confirmed':
         filtered = fetchedAppointments.filter(apt => {
           const aptDateTime = new Date(`${apt.date}T${apt.time}`);
           return aptDateTime > now && apt.status === 'confirmed';
@@ -806,16 +840,19 @@ const DoctorPortal = () => {
       case 'rejected':
         filtered = fetchedAppointments.filter(apt => apt.status === 'rejected');
         break;
+      case 'cancelled':
+        filtered = fetchedAppointments.filter(apt => apt.status === 'cancelled');
+        break;
       case 'all':
       default:
         filtered = fetchedAppointments;
     }
     
-    // Sort: pending by created_at desc, upcoming by date asc, completed by date desc
+    // Sort: pending by created_at desc, confirmed by date asc, completed by date desc
     return filtered.sort((a, b) => {
       if (appointmentStatusFilter === 'pending') {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      } else if (appointmentStatusFilter === 'upcoming') {
+      } else if (appointmentStatusFilter === 'confirmed') {
         const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
         const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
         return dateTimeA - dateTimeB;
@@ -1368,14 +1405,18 @@ const DoctorPortal = () => {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'pending':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
+      case 'confirmed':
+        return <Badge className="bg-success/10 text-success border-success/20">Confirmed</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
-      case 'in-progress':
+        return <Badge className="bg-primary/10 text-primary border-primary/20">Completed</Badge>;
+      case 'in_progress':
         return <Badge className="bg-primary/10 text-primary border-primary/20">In Progress</Badge>;
-      case 'upcoming':
-        return <Badge variant="outline">Upcoming</Badge>;
+      case 'rejected':
+        return <Badge variant="destructive">Rejected</Badge>;
       case 'cancelled':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Cancelled</Badge>;
+        return <Badge variant="destructive">Cancelled</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -1405,6 +1446,27 @@ const DoctorPortal = () => {
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
+  };
+
+  const formatNaira = (value: number) => `₦${Math.round(value).toLocaleString()}`;
+
+  const submitWithdrawalRequest = () => {
+    if (!canRequestWithdrawal) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter an amount within your available balance.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    toast({
+      title: 'Withdrawal queue coming soon',
+      description: 'Your request flow is staged in UI. Backend payout processing will be enabled next.',
+    });
+    setWithdrawalDialogOpen(false);
+    setWithdrawalAmount('');
+    setWithdrawalNarration('');
   };
 
   return (
@@ -1866,7 +1928,7 @@ const DoctorPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-5 mb-6">
+                      <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
                         <TabsTrigger value="pending" className="relative">
                           Pending
                           {stats.pendingRequests > 0 && (
@@ -1875,9 +1937,10 @@ const DoctorPortal = () => {
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
+                        <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
                         <TabsTrigger value="completed">Completed</TabsTrigger>
                         <TabsTrigger value="rejected">Rejected</TabsTrigger>
+                        <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
                         <TabsTrigger value="all">All</TabsTrigger>
                       </TabsList>
 
@@ -1939,16 +2002,16 @@ const DoctorPortal = () => {
                         )}
                       </TabsContent>
 
-                      {/* Upcoming Tab Content */}
-                      <TabsContent value="upcoming" className="space-y-4">
+                      {/* Confirmed Tab Content */}
+                      <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No upcoming appointments')
+                          renderDoctorAppointmentsCalendar('No confirmed appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No upcoming appointments</p>
+                                <p className="text-muted-foreground">No confirmed appointments</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
@@ -2041,6 +2104,46 @@ const DoctorPortal = () => {
                                     )}
                                     <Badge variant="destructive">Rejected</Badge>
                                   </div>
+                                </div>
+                              ))
+                            )}
+                          </>
+                        )}
+                      </TabsContent>
+
+                      {/* Cancelled Tab Content */}
+                      <TabsContent value="cancelled" className="space-y-4">
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No cancelled appointments')
+                        ) : (
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No cancelled appointments</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-muted-foreground/30 bg-muted/40">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).patient_profile_picture} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    </div>
+                                  </div>
+                                  <Badge variant="destructive">Cancelled</Badge>
                                 </div>
                               ))
                             )}
@@ -2266,7 +2369,7 @@ const DoctorPortal = () => {
 
 
                   <TabsContent value="earnings" className="space-y-6">
-                    <div className="grid md:grid-cols-3 gap-4">
+                    <div className="grid md:grid-cols-4 gap-4">
                       <Card>
                         <CardContent className="pt-6">
                           <div className="flex items-center gap-4">
@@ -2276,7 +2379,7 @@ const DoctorPortal = () => {
                             <div>
                               <p className="text-sm text-muted-foreground">This Month</p>
                               <p className="text-2xl font-bold">
-                                {earningsLoading ? '...' : `₦${stats.earnings.toLocaleString()}`}
+                                {earningsLoading ? '...' : formatNaira(stats.earnings)}
                               </p>
                             </div>
                           </div>
@@ -2312,7 +2415,79 @@ const DoctorPortal = () => {
                           </div>
                         </CardContent>
                       </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center">
+                              <Banknote className="w-6 h-6 text-accent" />
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">Wallet Available</p>
+                              <p className="text-2xl font-bold">
+                                {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
+                              </p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
                     </div>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Wallet Balance & Withdrawals</CardTitle>
+                        <CardDescription>Track pending releases and prepare withdrawal requests</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">Available Balance</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">Pending Balance</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletPendingBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">Ready Entries</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : availableWalletEntries}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">Pending Entries</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : pendingWalletEntries}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                          <p className="text-sm font-medium">Withdrawal process (staged)</p>
+                          <ol className="space-y-1 text-sm text-muted-foreground list-decimal pl-5">
+                            <li>Enter amount from your available balance.</li>
+                            <li>Confirm account and narration details.</li>
+                            <li>Submit request for admin/manual payout review.</li>
+                            <li>Mark request as paid and debit wallet in next release.</li>
+                          </ol>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs text-muted-foreground">
+                              Backend payout orchestration is intentionally deferred until approval workflow is finalized.
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => setWithdrawalDialogOpen(true)}
+                              disabled={walletLoading}
+                            >
+                              Request Withdrawal
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
 
                     <Card>
                       <CardHeader>
@@ -2340,7 +2515,7 @@ const DoctorPortal = () => {
                                   <div className="flex items-center justify-between text-sm">
                                     <span className="font-medium">{month.month}</span>
                                     <div className="text-right">
-                                      <span className="font-bold">₦{month.earnings.toLocaleString()}</span>
+                                      <span className="font-bold">{formatNaira(month.earnings)}</span>
                                       <span className="text-muted-foreground ml-2">({month.consultations} consultations)</span>
                                     </div>
                                   </div>
@@ -2569,6 +2744,59 @@ const DoctorPortal = () => {
             </div>
         </div>
         
+        <Dialog open={withdrawalDialogOpen} onOpenChange={setWithdrawalDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Request Withdrawal</DialogTitle>
+              <DialogDescription>
+                This flow is staged in UI for now. Submission will connect to payout processing in the next phase.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">Available Balance</label>
+                <div className="mt-1 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  {walletLoading ? 'Loading wallet...' : formatNaira(walletAvailableBalance)}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Withdrawal Amount (₦)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="100"
+                  value={withdrawalAmount}
+                  onChange={(e) => setWithdrawalAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  className="mt-1"
+                />
+                {withdrawalAmount && !canRequestWithdrawal && (
+                  <p className="mt-1 text-xs text-destructive">
+                    Amount must be greater than zero and not exceed your available balance.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm font-medium">Narration (optional)</label>
+                <Textarea
+                  value={withdrawalNarration}
+                  onChange={(e) => setWithdrawalNarration(e.target.value)}
+                  placeholder="e.g., Weekly payout request"
+                  className="mt-1 min-h-[88px]"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setWithdrawalDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={submitWithdrawalRequest}>
+                Submit Request
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* View Folder Modal */}
         <Dialog open={viewFolderOpen} onOpenChange={setViewFolderOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">

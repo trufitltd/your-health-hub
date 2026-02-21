@@ -39,6 +39,7 @@ import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface Doctor {
   id: string;
@@ -132,11 +133,18 @@ const CentralAdmin = () => {
 
       const doctorsWithStats = await Promise.all(
         doctorsData.map(async (doc) => {
-          const { count: consultationCount } = await supabase
+          const { data: consultationRows, error: consultationError } = await supabase
             .from('appointments')
-            .select('id', { count: 'exact', head: true })
-            .eq('doctor_id', doc.user_id)
-            .eq('status', 'completed');
+            .select('status')
+            .eq('doctor_id', doc.user_id);
+
+          if (consultationError) {
+            console.error('Error fetching consultation count for doctor:', doc.user_id, consultationError);
+          }
+
+          const consultationCount = (consultationRows || []).filter(
+            (row: { status?: string | null }) => normalizeAppointmentStatus(row.status) === 'completed',
+          ).length;
 
           const { data: ratingRows, error: ratingError } = await supabase
             .from('appointments')
@@ -185,7 +193,10 @@ const CentralAdmin = () => {
         return [];
       }
       
-      return data || [];
+      return (data || []).map((apt: any) => ({
+        ...apt,
+        status: normalizeAppointmentStatus(apt.status),
+      }));
     },
     enabled: !!user && isAdmin,
   });

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 
 export interface Doctor {
   id: string;
@@ -25,6 +26,12 @@ export interface AvailableSlot {
   booked_count: number;
   available_slots: number;
 }
+
+type AppointmentSlotRow = {
+  id: string;
+  status: string | null;
+  slot_locked_until: string | null;
+};
 
 /**
  * Fetch all active doctors
@@ -217,25 +224,14 @@ export const checkSlotAvailability = async (
       .select('id,status,slot_locked_until')
       .eq('doctor_id', doctorId)
       .eq('date', date)
-      .eq('time', time)
-      .in('status', [
-        'pending',
-        'confirmed',
-        'in_progress',
-        'completed',
-        'pending_payment',
-        'PENDING_PAYMENT',
-        'CONFIRMED',
-        'IN_PROGRESS',
-        'COMPLETED',
-      ]);
+      .eq('time', time);
     
     if (error) throw error;
 
     const now = Date.now();
-    const blockingRows = (data || []).filter((row: any) => {
-      const status = String(row.status || '').toLowerCase();
-      if (status !== 'pending_payment') return true;
+    const blockingRows = ((data || []) as AppointmentSlotRow[]).filter((row) => {
+      if (!isSlotBlockingAppointmentStatus(row.status)) return false;
+      if (!isPendingPaymentAppointmentStatus(row.status)) return true;
       if (!row.slot_locked_until) return false;
       return new Date(row.slot_locked_until).getTime() > now;
     });
