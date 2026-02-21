@@ -6,13 +6,11 @@ import type {
   PricePreviewInput,
   PricePreviewResult,
 } from '../marketplace-types.ts';
-import { normalizeDoctorType } from '../marketplace-types.ts';
+import { normalizeAppointmentStatusRaw, normalizeDoctorType } from '../marketplace-types.ts';
 import { PricingService } from './PricingService.ts';
 import { AvailabilityService } from './AvailabilityService.ts';
 import { PaymentService } from './PaymentService.ts';
 import { WalletService } from './WalletService.ts';
-
-const normalizeStatus = (status?: string | null) => (status || '').toLowerCase();
 
 type DoctorTierRow = {
   id: string;
@@ -245,7 +243,7 @@ export class BookingService {
         date: slot.date,
         time: slot.time,
         notes: input.notes || null,
-        status: 'PENDING_PAYMENT',
+        status: 'pending_payment',
         final_price: price.finalPrice,
         price_breakdown: breakdown,
         pricing_profile_id: price.pricingProfileId,
@@ -297,7 +295,7 @@ export class BookingService {
     }
     if (!appointment) throw new Error('Appointment not found for payment');
 
-    const status = normalizeStatus(appointment.status);
+    const status = normalizeAppointmentStatusRaw(appointment.status);
     if (status === 'confirmed' || status === 'completed' || status === 'in_progress') {
       return { appointmentId: appointment.id, alreadyProcessed: true };
     }
@@ -322,7 +320,7 @@ export class BookingService {
     const { error: confirmError } = await this.supabase
       .from('appointments')
       .update({
-        status: 'CONFIRMED',
+        status: 'confirmed',
         slot_locked_until: null,
       })
       .eq('id', appointment.id);
@@ -349,11 +347,25 @@ export class BookingService {
     await this.paymentService.markPaymentFailed(reference, reason);
 
     if (payment.appointment_id) {
+      const { data: appointment, error: appointmentLookupError } = await this.supabase
+        .from('appointments')
+        .select('id, status')
+        .eq('id', payment.appointment_id)
+        .maybeSingle();
+
+      if (appointmentLookupError) {
+        throw new Error(`Failed to load appointment status before expiring payment: ${appointmentLookupError.message}`);
+      }
+
+      const status = normalizeAppointmentStatusRaw(appointment?.status);
+      if (status !== 'pending_payment') {
+        return { updated: true };
+      }
+
       const { error } = await this.supabase
         .from('appointments')
-        .update({ status: 'EXPIRED', slot_locked_until: null })
-        .eq('id', payment.appointment_id)
-        .in('status', ['PENDING_PAYMENT', 'pending_payment']);
+        .update({ status: 'expired', slot_locked_until: null })
+        .eq('id', payment.appointment_id);
 
       if (error) {
         throw new Error(`Failed to expire appointment after failed payment: ${error.message}`);

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { isPendingPaymentAppointmentStatus, normalizeAppointmentStatusRaw } from '../marketplace-types.ts';
 
 type AvailabilityCheckInput = {
   doctorId: string;
@@ -36,8 +37,6 @@ const BUSY_STATUSES = new Set([
   'pending_payment',
 ]);
 
-const normalizeStatus = (status?: string | null) => (status || '').toLowerCase();
-
 export class AvailabilityService {
   constructor(private readonly supabase: SupabaseClient) {}
 
@@ -59,15 +58,31 @@ export class AvailabilityService {
   async cleanupExpiredPendingLocks(doctorId?: string) {
     let query = this.supabase
       .from('appointments')
-      .update({ status: 'EXPIRED', slot_locked_until: null })
-      .in('status', ['PENDING_PAYMENT', 'pending_payment'])
+      .select('id, status')
       .lt('slot_locked_until', new Date().toISOString());
 
     if (doctorId) query = query.eq('doctor_id', doctorId);
 
-    const { error } = await query;
-    if (error) {
-      console.warn('[AvailabilityService] Failed to cleanup expired locks:', error.message);
+    const { data, error } = await query;
+    if (error || !data) {
+      console.warn('[AvailabilityService] Failed to load expired pending locks:', error?.message);
+      return;
+    }
+
+    const pendingPaymentIds = (data || [])
+      .filter((row: any) => isPendingPaymentAppointmentStatus(row.status))
+      .map((row: any) => row.id)
+      .filter(Boolean);
+
+    if (pendingPaymentIds.length === 0) return;
+
+    const { error: updateError } = await this.supabase
+      .from('appointments')
+      .update({ status: 'expired', slot_locked_until: null })
+      .in('id', pendingPaymentIds);
+
+    if (updateError) {
+      console.warn('[AvailabilityService] Failed to cleanup expired locks:', updateError.message);
     }
   }
 
@@ -103,20 +118,16 @@ export class AvailabilityService {
       .from('appointments')
       .select('id, time, duration_minutes, status, slot_locked_until')
       .eq('doctor_id', doctorId)
-      .eq('date', date)
-      .in('status', [
-        'pending', 'confirmed', 'in_progress', 'completed', 'pending_payment',
-        'PENDING_PAYMENT', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED',
-      ]);
+      .eq('date', date);
 
     if (error) throw new Error(`Failed to load doctor appointments for availability check: ${error.message}`);
 
     const now = Date.now();
 
     return (data || []).filter((apt: any) => {
-      const status = normalizeStatus(apt.status);
+      const status = normalizeAppointmentStatusRaw(apt.status);
       if (!BUSY_STATUSES.has(status)) return false;
-      if (status === 'pending_payment') {
+      if (isPendingPaymentAppointmentStatus(status)) {
         if (!apt.slot_locked_until) return false;
         const lockTime = new Date(apt.slot_locked_until).getTime();
         return lockTime > now;

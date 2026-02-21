@@ -16,6 +16,7 @@ import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard 
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { BookingService } from '@/services/BookingService';
+import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface LocationState {
   doctorId?: string;
@@ -158,26 +159,15 @@ export default function SlotSelection() {
         .from('appointments')
         .select('time, status, slot_locked_until')
         .eq('doctor_id', state.doctorId)
-        .eq('date', selectedDate)
-        .in('status', [
-          'pending',
-          'confirmed',
-          'in_progress',
-          'completed',
-          'pending_payment',
-          'PENDING_PAYMENT',
-          'CONFIRMED',
-          'IN_PROGRESS',
-          'COMPLETED',
-        ]);
+        .eq('date', selectedDate);
 
       if (error) throw error;
 
       const nowMs = Date.now();
       return (data || [])
         .filter((apt: any) => {
-          const status = String(apt.status || '').toLowerCase();
-          if (status !== 'pending_payment') return true;
+          if (!isSlotBlockingAppointmentStatus(apt.status)) return false;
+          if (!isPendingPaymentAppointmentStatus(apt.status)) return true;
           if (!apt.slot_locked_until) return false;
           return new Date(apt.slot_locked_until).getTime() > nowMs;
         })

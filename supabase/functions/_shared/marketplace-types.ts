@@ -98,3 +98,27 @@ export const normalizeDoctorType = (specialty?: string | null): DoctorType => {
 };
 
 export const roundMoney = (value: number) => Number((Math.round(value * 100) / 100).toFixed(2));
+
+export const normalizeAppointmentStatusRaw = (status?: string | null) => {
+  const normalized = (status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/\s+/g, '_');
+
+  if (!normalized) return '';
+  if (normalized === 'requested' || normalized === 'awaiting_approval') return 'pending';
+  if (normalized === 'canceled') return 'cancelled';
+  if (normalized === 'inprogress') return 'in_progress';
+  return normalized;
+};
+
+export const normalizeAppointmentStatus = (status?: string | null) => {
+  const normalized = normalizeAppointmentStatusRaw(status);
+  if (normalized === 'pending_payment') return 'pending';
+  if (normalized === 'expired') return 'cancelled';
+  return normalized;
+};
+
+export const isPendingPaymentAppointmentStatus = (status?: string | null) =>
+  normalizeAppointmentStatusRaw(status) === 'pending_payment';
