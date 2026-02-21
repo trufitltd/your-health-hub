@@ -605,8 +605,8 @@ const PatientPortal = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'all'>('confirmed');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'cancelled' | 'all'>('all');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
@@ -1026,6 +1026,9 @@ const PatientPortal = () => {
         break;
       case 'rejected':
         filtered = appointments.filter(apt => apt.status === 'rejected');
+        break;
+      case 'cancelled':
+        filtered = appointments.filter(apt => apt.status === 'cancelled');
         break;
       case 'all':
       default:
@@ -1837,7 +1840,7 @@ const PatientPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-5 mb-6">
+                      <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
                         <TabsTrigger value="pending" className="relative">
                           Pending
                           {pendingCount > 0 && (
@@ -1849,6 +1852,7 @@ const PatientPortal = () => {
                         <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
                         <TabsTrigger value="completed">Completed</TabsTrigger>
                         <TabsTrigger value="rejected">Rejected</TabsTrigger>
+                        <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
                         <TabsTrigger value="all">All</TabsTrigger>
                       </TabsList>
 
@@ -2061,6 +2065,50 @@ const PatientPortal = () => {
                                     </div>
                                   </div>
                                   <Badge variant="destructive">Rejected</Badge>
+                                </div>
+                              ))
+                            )}
+                          </>
+                        )}
+                      </TabsContent>
+
+                      {/* Cancelled Tab Content */}
+                      <TabsContent value="cancelled" className="space-y-4">
+                        {appointmentViewMode === 'calendar' ? (
+                          renderAppointmentsCalendar('No cancelled appointments')
+                        ) : (
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No cancelled appointments</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-muted-foreground/30 bg-muted/40">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                          .split(' ')
+                                          .map((n) => n[0])
+                                          .join('')
+                                          .slice(0, 2)}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
+                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    </div>
+                                  </div>
+                                  <Badge variant="destructive">Cancelled</Badge>
                                 </div>
                               ))
                             )}
