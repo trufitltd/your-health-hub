@@ -10,7 +10,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List
+  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List, Download
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -1426,6 +1426,26 @@ const DoctorPortal = () => {
                   className="ml-1"
                 />
               </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="hidden md:inline-flex"
+                onClick={() => navigate('/install')}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Install App
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden"
+                onClick={() => navigate('/install')}
+                aria-label="Install app"
+              >
+                <Download className="w-5 h-5" />
+              </Button>
 
               <Button
                 variant="ghost"

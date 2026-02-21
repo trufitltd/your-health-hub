@@ -1376,6 +1376,26 @@ const PatientPortal = () => {
                 />
               </div>
 
+              <Button
+                variant="outline"
+                size="sm"
+                className="hidden md:inline-flex"
+                onClick={() => navigate('/install')}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Install App
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden"
+                onClick={() => navigate('/install')}
+                aria-label="Install app"
+              >
+                <Download className="w-5 h-5" />
+              </Button>
+
               <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
                 {notifications.filter(n => !n.read).length > 0 && (
