@@ -376,6 +376,14 @@ const PatientPortal = () => {
   };
 
   const handleInstallApp = async () => {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/i.test(ua);
+    const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
+    if (isIOS || isInAppBrowser) {
+      navigate('/install');
+      return;
+    }
+
     const result = await promptInstall();
     if (result === 'accepted') {
       toast({ title: 'Installed', description: 'MyEdoctor has been installed successfully.' });
