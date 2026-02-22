@@ -1440,6 +1440,13 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
+              <Link to="/install" className="hidden md:block">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Download className="w-4 h-4" />
+                  Download App
+                </Button>
+              </Link>
+
               {/* Availability Toggle */}
               <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
@@ -1638,6 +1645,20 @@ const DoctorPortal = () => {
                 </div>
               </motion.div>
             )}
+
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm">
+                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                </p>
+                <Link to="/install">
+                  <Button size="sm" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    Open Install Page
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
 
             {/* Verification Status Banner */}
             {doctorRegistration?.verification_status === 'pending' && (
