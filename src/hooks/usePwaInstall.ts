@@ -12,12 +12,36 @@ declare global {
   }
 }
 
+const PWA_INSTALLED_STORAGE_KEY = "pwa-installed";
+
+const getStoredInstalledFlag = () => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(PWA_INSTALLED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const setStoredInstalledFlag = (value: boolean) => {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) {
+      window.localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, "true");
+    } else {
+      window.localStorage.removeItem(PWA_INSTALLED_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+};
+
 const detectInstalled = () => {
   if (typeof window === "undefined") return false;
   const isStandalone = window.matchMedia("(display-mode: standalone)").matches;
   // @ts-expect-error iOS standalone mode.
   const iosStandalone = window.navigator.standalone === true;
-  return isStandalone || iosStandalone || window.__pwaInstalled === true;
+  return isStandalone || iosStandalone || window.__pwaInstalled === true || getStoredInstalledFlag();
 };
 
 export function usePwaInstall() {
@@ -38,6 +62,7 @@ export function usePwaInstall() {
 
     const onInstalled = () => {
       window.__pwaInstalled = true;
+      setStoredInstalledFlag(true);
       window.__pwaDeferredPrompt = null;
       setIsInstalled(true);
       setDeferredPrompt(null);
@@ -79,6 +104,7 @@ export function usePwaInstall() {
 
     if (outcome === "accepted") {
       window.__pwaInstalled = true;
+      setStoredInstalledFlag(true);
       setIsInstalled(true);
       return "accepted" as const;
     }
