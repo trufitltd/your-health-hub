@@ -358,21 +358,67 @@ const PatientPortal = () => {
         try {
           const { data: verificationRows, error: verificationError } = await supabase
             .from('prescription_verifications')
-            .select('note_id, is_downloaded')
+            .select('note_id, is_downloaded, status, expires_at, date_issued, drug_list')
             .in('note_id', allNoteIds)
             .eq('patient_id', user.id);
 
           if (verificationError) {
             console.warn('Could not fetch prescription download status:', verificationError);
           } else {
-            const downloadedNoteIdSet = new Set(
-              (verificationRows || [])
-                .filter((row: any) => !!row.is_downloaded)
-                .map((row: any) => String(row.note_id))
-            );
+            const rowsByNoteId = new Map<string, any>();
+            (verificationRows || []).forEach((row: any) => {
+              if (row?.note_id) rowsByNoteId.set(String(row.note_id), row);
+            });
 
             groupedItems.forEach((item) => {
-              item.isDownloaded = item.noteIds.some((id) => downloadedNoteIdSet.has(id));
+              const matchingRows = item.noteIds
+                .map((id) => rowsByNoteId.get(String(id)))
+                .filter(Boolean) as Array<{
+                note_id: string;
+                is_downloaded: boolean;
+                status: string | null;
+                expires_at: string | null;
+                date_issued: string | null;
+                drug_list: string | null;
+              }>;
+
+              if (matchingRows.length === 0) return;
+
+              const latestVerification = [...matchingRows].sort((a, b) => {
+                const aTime = a.date_issued ? new Date(a.date_issued).getTime() : 0;
+                const bTime = b.date_issued ? new Date(b.date_issued).getTime() : 0;
+                return bTime - aTime;
+              })[0];
+
+              // Count distinct dispenses so duplicate note rows don't consume multiple refills.
+              const downloadedCycleKeys = new Set<string>();
+              matchingRows
+                .filter((row) => !!row.is_downloaded)
+                .forEach((row) => {
+                  const normalizedDrugList = String(row.drug_list || '')
+                    .toLowerCase()
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                  const issuedDay = row.date_issued
+                    ? new Date(row.date_issued).toISOString().slice(0, 10)
+                    : 'unknown-day';
+                  downloadedCycleKeys.add(`${normalizedDrugList}|${issuedDay}`);
+                });
+
+              const dispensedCount = downloadedCycleKeys.size;
+              item.refillsRemaining = Math.max(0, 3 - dispensedCount);
+
+              const isExpiredByDate =
+                !!latestVerification.expires_at &&
+                new Date(latestVerification.expires_at).getTime() < Date.now();
+              const isExpiredByStatus = latestVerification.status === 'expired';
+
+              item.status =
+                !isExpiredByDate && !isExpiredByStatus && item.refillsRemaining > 0
+                  ? 'active'
+                  : 'past';
+
+              item.isDownloaded = !!latestVerification.is_downloaded;
             });
           }
         } catch (statusErr) {
@@ -2265,7 +2311,8 @@ const PatientPortal = () => {
                                 {getStatusBadge(prescription.status)}
                                 {prescription.status === 'active' && (
                                   <p className="text-xs text-muted-foreground mt-2">
-                                    {prescription.refillsRemaining} refills remaining
+                                    {prescription.refillsRemaining}{' '}
+                                    {prescription.refillsRemaining === 1 ? 'refill' : 'refills'} remaining
                                   </p>
                                 )}
                               </div>
