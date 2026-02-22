@@ -59,7 +59,7 @@ export function DoctorMessagesTab() {
   const [replacementPrescription, setReplacementPrescription] = useState('');
   const [disapprovalReason, setDisapprovalReason] = useState('');
   const [isSubmittingRefillAction, setIsSubmittingRefillAction] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesViewportRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
@@ -200,10 +200,9 @@ export function DoctorMessagesTab() {
   }, [selectedSessionId]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, selectedSessionId]);
+    if (!messagesViewportRef.current) return;
+    messagesViewportRef.current.scrollTop = messagesViewportRef.current.scrollHeight;
+  }, [messages, selectedSessionId, isLoadingMessages]);
 
   const filteredThreads = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -467,8 +466,8 @@ export function DoctorMessagesTab() {
   };
 
   return (
-    <div className="grid md:grid-cols-[350px_1fr] gap-6 h-[600px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
-      <div className={`flex flex-col border-r border-border bg-muted/10 ${selectedSessionId ? 'hidden md:flex' : 'flex'}`}>
+    <div className="grid lg:grid-cols-[320px_1fr] gap-0 h-[calc(100vh-15rem)] min-h-[520px] max-h-[820px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
+      <div className={`flex flex-col border-r border-border bg-muted/10 ${selectedSessionId ? 'hidden lg:flex' : 'flex'}`}>
         <div className="p-4 border-b border-border">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -529,7 +528,7 @@ export function DoctorMessagesTab() {
         <div className="flex flex-col h-full min-h-0 bg-background">
           <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setSelectedSessionId(null)}>
+              <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSelectedSessionId(null)}>
                 <X className="w-5 h-5" />
               </Button>
               <Avatar>
@@ -561,7 +560,7 @@ export function DoctorMessagesTab() {
             </div>
           </div>
 
-          <ScrollArea className="flex-1 min-h-0 p-3 sm:p-4" ref={scrollRef}>
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4" ref={messagesViewportRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -624,7 +623,7 @@ export function DoctorMessagesTab() {
                 })}
               </div>
             )}
-          </ScrollArea>
+          </div>
 
           <div className="sticky bottom-0 p-4 border-t border-border bg-background">
             <form onSubmit={handleSendMessage} className="flex items-end gap-2">
@@ -658,7 +657,7 @@ export function DoctorMessagesTab() {
           </div>
         </div>
       ) : (
-        <div className="hidden md:flex flex-col items-center justify-center h-full bg-muted/5 text-center p-8">
+        <div className="hidden lg:flex flex-col items-center justify-center h-full bg-muted/5 text-center p-8">
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
             <Search className="w-8 h-8 text-primary" />
           </div>
