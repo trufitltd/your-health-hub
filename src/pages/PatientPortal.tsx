@@ -53,6 +53,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
+import { usePwaInstall } from '@/hooks/usePwaInstall';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
 
@@ -128,6 +129,7 @@ const PatientPortal = () => {
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const [downloadedPrescriptionIds, setDownloadedPrescriptionIds] = useState<string[]>([]);
   const { user, signOut } = useAuth();
+  const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   
   // Track patient presence
   useTrackUserPresence(user?.id, 'patient');
@@ -371,6 +373,20 @@ const PatientPortal = () => {
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
+  };
+
+  const handleInstallApp = async () => {
+    const result = await promptInstall();
+    if (result === 'accepted') {
+      toast({ title: 'Installed', description: 'MyEdoctor has been installed successfully.' });
+      return;
+    }
+    if (result === 'dismissed') {
+      toast({ title: 'Install cancelled', description: 'You can install the app any time from this button.' });
+      return;
+    }
+    if (result === 'already_installed') return;
+    navigate('/install');
   };
 
   const handleRecordUpload = async (file: File) => {
@@ -1376,25 +1392,29 @@ const PatientPortal = () => {
                 />
               </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                className="hidden md:inline-flex"
-                onClick={() => navigate('/install')}
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Install App
-              </Button>
+              {!isPwaInstalled && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="hidden md:inline-flex"
+                    onClick={handleInstallApp}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Install App
+                  </Button>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                className="md:hidden"
-                onClick={() => navigate('/install')}
-                aria-label="Install app"
-              >
-                <Download className="w-5 h-5" />
-              </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="md:hidden"
+                    onClick={handleInstallApp}
+                    aria-label="Install app"
+                  >
+                    <Download className="w-5 h-5" />
+                  </Button>
+                </>
+              )}
 
               <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
