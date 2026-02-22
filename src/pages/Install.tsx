@@ -1,61 +1,113 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Layout } from '@/components/layout';
-import { Download, Share2, Smartphone, Check, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
+import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import { Layout } from "@/components/layout";
+import { Button } from "@/components/ui/button";
+import { Check, Download, Globe, Laptop, Share2, Smartphone, Tablet } from "lucide-react";
+import { usePwaInstall } from "@/hooks/usePwaInstall";
 
 export default function InstallPage() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
-  const [showIOSInstructions, setShowIOSInstructions] = useState(false);
+  const { isInstalled, canInstall, promptInstall } = usePwaInstall();
+  const [installFeedback, setInstallFeedback] = useState("");
+
+  const ua = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+  const isMobile = isIOS || isAndroid;
+  const isDesktop = !isMobile;
+  const isChromeLike = /Chrome|CriOS|Edg|OPR/i.test(ua);
+  const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-    };
-
-    window.addEventListener('beforeinstallprompt', handler);
-
-    // Check if already installed
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setIsInstalled(true);
+    if (isInstalled) {
+      setInstallFeedback("MyEdoctor is already installed on this device.");
     }
-
-    // Detect iOS
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    if (isIOS) {
-      setShowIOSInstructions(true);
-    }
-
-    return () => window.removeEventListener('beforeinstallprompt', handler);
-  }, []);
+  }, [isInstalled]);
 
   const handleInstall = async () => {
-    if (!deferredPrompt) return;
-
-    await deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-
-    if (outcome === 'accepted') {
-      setIsInstalled(true);
+    if (isIOS && !canInstall) {
+      setInstallFeedback(
+        "On iPhone/iPad, direct install popups are not supported by Apple. Use Safari Share -> Add to Home Screen."
+      );
+      return;
     }
 
-    setDeferredPrompt(null);
+    if (isInAppBrowser) {
+      setInstallFeedback(
+        "This in-app browser blocks app installation. Open this page in Safari or Chrome, then install."
+      );
+      return;
+    }
+
+    const result = await promptInstall();
+    if (result === "unavailable") {
+      if (isAndroid) {
+        setInstallFeedback(
+          "Direct install is not available in this browser session. Open browser menu -> Install app / Add to Home screen."
+        );
+        return;
+      }
+      setInstallFeedback(
+        "Install prompt is not available yet. Use your browser menu and choose Install App / Add to Home Screen."
+      );
+      return;
+    }
+    if (result === "accepted") {
+      setInstallFeedback("Install accepted. MyEdoctor will appear on your home screen.");
+      return;
+    }
+    if (result === "dismissed") {
+      setInstallFeedback("Install was dismissed. You can install later from this page.");
+      return;
+    }
+    setInstallFeedback("MyEdoctor is already installed on this device.");
   };
 
+  const installHelpTitle = useMemo(() => {
+    if (isIOS) return "Install on iPhone or iPad";
+    if (isAndroid) return "Install on Android";
+    if (isDesktop) return "Install on Desktop";
+    return "Install Instructions";
+  }, [isAndroid, isDesktop, isIOS]);
+
+  const installSteps = useMemo(() => {
+    if (isIOS) {
+      return [
+        "Open this page in Safari.",
+        "Tap the Share icon.",
+        "Select Add to Home Screen, then tap Add.",
+      ];
+    }
+
+    if (isAndroid) {
+      if (canInstall) {
+        return [
+          "Tap Install App Now below.",
+          "Accept the browser prompt.",
+          "Open MyEdoctor from your home screen.",
+        ];
+      }
+
+      return [
+        "Open browser menu (three dots).",
+        "Tap Install app or Add to Home screen.",
+        "Confirm install and open from your home screen.",
+      ];
+    }
+
+    return [
+      "Use Chrome or Edge for best PWA support.",
+      "Click the install icon in the address bar or browser menu.",
+      "Launch MyEdoctor as a desktop app from your apps list.",
+    ];
+  }, [canInstall, isAndroid, isIOS]);
+
   const features = [
-    'Instant access from your home screen',
-    'Works offline with cached data',
-    'Push notifications for appointments',
-    'Faster loading times',
-    'Native app-like experience',
-    'No app store download required',
+    "Instant access from your home screen",
+    "Works offline with cached data",
+    "Push notifications for appointments",
+    "Faster loading times",
+    "Native app-like experience",
+    "No app store download required",
   ];
 
   return (
@@ -70,11 +122,9 @@ export default function InstallPage() {
             <div className="w-20 h-20 rounded-3xl gradient-primary flex items-center justify-center mx-auto mb-6 shadow-glow">
               <Smartphone className="w-10 h-10 text-primary-foreground" />
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold mb-4">
-              Install MyEdoctor
-            </h1>
+            <h1 className="text-3xl md:text-4xl font-bold mb-4">Install MyEdoctor</h1>
             <p className="text-muted-foreground">
-              Get the full app experience on your device. No app store required!
+              Download our mobile app experience by installing this PWA. No app store required.
             </p>
           </motion.div>
 
@@ -92,51 +142,85 @@ export default function InstallPage() {
             </motion.div>
           ) : (
             <>
-              {/* Install Button (Android/Chrome) */}
-              {deferredPrompt && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-center mb-8"
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-center mb-8"
+              >
+                <Button
+                  variant="gradient"
+                  size="xl"
+                  onClick={handleInstall}
+                  className="w-full sm:w-auto"
                 >
-                  <Button
-                    variant="gradient"
-                    size="xl"
-                    onClick={handleInstall}
-                    className="w-full sm:w-auto"
-                  >
-                    <Download className="w-5 h-5" />
-                    Install App Now
-                  </Button>
-                </motion.div>
-              )}
+                  <Download className="w-5 h-5" />
+                  {isIOS && !canInstall ? "Show iPhone Install Steps" : "Install App Now"}
+                </Button>
+              </motion.div>
 
-              {/* iOS Instructions */}
-              {showIOSInstructions && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-card rounded-2xl border border-border p-6 mb-8"
-                >
-                  <h3 className="font-semibold mb-4">Install on iPhone/iPad</h3>
-                  <ol className="space-y-3 text-sm">
-                    <li className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">1</span>
-                      <span>Tap the <Share2 className="w-4 h-4 inline mx-1" /> Share button in Safari</span>
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-card rounded-2xl border border-border p-6 mb-8"
+              >
+                <h3 className="font-semibold mb-4">{installHelpTitle}</h3>
+                <ol className="space-y-3 text-sm mb-4">
+                  {installSteps.map((step, index) => (
+                    <li key={step} className="flex items-start gap-3">
+                      <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">
+                        {index + 1}
+                      </span>
+                      <span>
+                        {index === 1 && isIOS ? (
+                          <>
+                            Tap the <Share2 className="w-4 h-4 inline mx-1" /> Share icon.
+                          </>
+                        ) : (
+                          step
+                        )}
+                      </span>
                     </li>
-                    <li className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">2</span>
-                      <span>Scroll down and tap "Add to Home Screen"</span>
-                    </li>
-                    <li className="flex items-start gap-3">
-                      <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">3</span>
-                      <span>Tap "Add" to confirm installation</span>
-                    </li>
-                  </ol>
-                </motion.div>
-              )}
+                  ))}
+                </ol>
+
+                {!canInstall && isChromeLike && !isIOS && (
+                  <p className="text-xs text-muted-foreground">
+                    If install is not shown, refresh once and keep browsing this site for a few seconds.
+                  </p>
+                )}
+              </motion.div>
             </>
           )}
+
+          {installFeedback && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-primary/5 border border-primary/20 rounded-xl p-4 mb-8 text-sm text-primary"
+            >
+              {installFeedback}
+            </motion.div>
+          )}
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8"
+          >
+            <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
+              <Smartphone className="w-5 h-5 text-primary" />
+              Mobile install ready
+            </div>
+            <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
+              <Tablet className="w-5 h-5 text-primary" />
+              Tablet optimized
+            </div>
+            <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
+              <Laptop className="w-5 h-5 text-primary" />
+              Desktop app mode
+            </div>
+          </motion.div>
 
           {/* Features */}
           <motion.div
@@ -154,6 +238,10 @@ export default function InstallPage() {
                 </li>
               ))}
             </ul>
+            <div className="mt-6 text-xs text-muted-foreground flex items-center gap-2">
+              <Globe className="w-4 h-4" />
+              App URL: {window.location.origin}/install
+            </div>
           </motion.div>
         </div>
       </section>
