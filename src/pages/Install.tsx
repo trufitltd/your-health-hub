@@ -15,6 +15,7 @@ export default function InstallPage() {
   const isMobile = isIOS || isAndroid;
   const isDesktop = !isMobile;
   const isChromeLike = /Chrome|CriOS|Edg|OPR/i.test(ua);
+  const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
 
   useEffect(() => {
     if (isInstalled) {
@@ -23,8 +24,28 @@ export default function InstallPage() {
   }, [isInstalled]);
 
   const handleInstall = async () => {
+    if (isIOS && !canInstall) {
+      setInstallFeedback(
+        "On iPhone/iPad, direct install popups are not supported by Apple. Use Safari Share -> Add to Home Screen."
+      );
+      return;
+    }
+
+    if (isInAppBrowser) {
+      setInstallFeedback(
+        "This in-app browser blocks app installation. Open this page in Safari or Chrome, then install."
+      );
+      return;
+    }
+
     const result = await promptInstall();
     if (result === "unavailable") {
+      if (isAndroid) {
+        setInstallFeedback(
+          "Direct install is not available in this browser session. Open browser menu -> Install app / Add to Home screen."
+        );
+        return;
+      }
       setInstallFeedback(
         "Install prompt is not available yet. Use your browser menu and choose Install App / Add to Home Screen."
       );
@@ -133,7 +154,7 @@ export default function InstallPage() {
                   className="w-full sm:w-auto"
                 >
                   <Download className="w-5 h-5" />
-                  Install App Now
+                  {isIOS && !canInstall ? "Show iPhone Install Steps" : "Install App Now"}
                 </Button>
               </motion.div>
 
