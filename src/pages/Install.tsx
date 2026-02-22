@@ -3,15 +3,10 @@ import { motion } from "framer-motion";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Check, Download, Globe, Laptop, Share2, Smartphone, Tablet } from "lucide-react";
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
+import { usePwaInstall } from "@/hooks/usePwaInstall";
 
 export default function InstallPage() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const { isInstalled, canInstall, promptInstall } = usePwaInstall();
   const [installFeedback, setInstallFeedback] = useState("");
 
   const ua = navigator.userAgent;
@@ -22,54 +17,28 @@ export default function InstallPage() {
   const isChromeLike = /Chrome|CriOS|Edg|OPR/i.test(ua);
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-    };
-
-    const onInstalled = () => {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-      setInstallFeedback("MyEdoctor is installed successfully.");
-    };
-
-    window.addEventListener("beforeinstallprompt", handler);
-    window.addEventListener("appinstalled", onInstalled);
-
-    if (
-      window.matchMedia("(display-mode: standalone)").matches ||
-      // @ts-expect-error iOS standalone mode.
-      window.navigator.standalone === true
-    ) {
-      setIsInstalled(true);
+    if (isInstalled) {
       setInstallFeedback("MyEdoctor is already installed on this device.");
     }
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", handler);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
+  }, [isInstalled]);
 
   const handleInstall = async () => {
-    if (!deferredPrompt) {
+    const result = await promptInstall();
+    if (result === "unavailable") {
       setInstallFeedback(
         "Install prompt is not available yet. Use your browser menu and choose Install App / Add to Home Screen."
       );
       return;
     }
-
-    await deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-
-    if (outcome === "accepted") {
-      setIsInstalled(true);
+    if (result === "accepted") {
       setInstallFeedback("Install accepted. MyEdoctor will appear on your home screen.");
-    } else {
-      setInstallFeedback("Install was dismissed. You can install later from this page.");
+      return;
     }
-
-    setDeferredPrompt(null);
+    if (result === "dismissed") {
+      setInstallFeedback("Install was dismissed. You can install later from this page.");
+      return;
+    }
+    setInstallFeedback("MyEdoctor is already installed on this device.");
   };
 
   const installHelpTitle = useMemo(() => {
@@ -89,7 +58,7 @@ export default function InstallPage() {
     }
 
     if (isAndroid) {
-      if (deferredPrompt) {
+      if (canInstall) {
         return [
           "Tap Install App Now below.",
           "Accept the browser prompt.",
@@ -109,7 +78,7 @@ export default function InstallPage() {
       "Click the install icon in the address bar or browser menu.",
       "Launch MyEdoctor as a desktop app from your apps list.",
     ];
-  }, [deferredPrompt, isAndroid, isIOS]);
+  }, [canInstall, isAndroid, isIOS]);
 
   const features = [
     "Instant access from your home screen",
@@ -193,7 +162,7 @@ export default function InstallPage() {
                   ))}
                 </ol>
 
-                {!deferredPrompt && isChromeLike && !isIOS && (
+                {!canInstall && isChromeLike && !isIOS && (
                   <p className="text-xs text-muted-foreground">
                     If install is not shown, refresh once and keep browsing this site for a few seconds.
                   </p>
