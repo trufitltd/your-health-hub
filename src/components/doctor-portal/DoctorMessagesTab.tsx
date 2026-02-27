@@ -30,6 +30,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface PatientThread {
   id: string;
@@ -45,6 +46,7 @@ interface PatientThread {
 
 export function DoctorMessagesTab() {
   const { user } = useAuth();
+  const { formatDate, formatDateTime, formatTime } = useLocaleFormatter();
   const [threads, setThreads] = useState<PatientThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -277,15 +279,11 @@ export function DoctorMessagesTab() {
     }
   };
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  const formatMessageTime = (dateString: string) => formatTime(dateString);
 
-  const formatDate = (dateString: string | null | undefined) => {
+  const formatMessageDate = (dateString: string | null | undefined) => {
     if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
+    return formatDate(dateString);
   };
 
   const parseRefillRequest = (message: ConsultationMessage) => {
@@ -342,7 +340,7 @@ export function DoctorMessagesTab() {
         diagnosis: null,
         treatment_plan: null,
         prescriptions: replacementPrescription.trim(),
-        follow_up_notes: `Prescription refill approved on ${new Date().toLocaleString()}.`,
+        follow_up_notes: `Prescription refill approved on ${formatDateTime(new Date())}.`,
       }).select('id, created_at').single();
       if (noteError) throw noteError;
 
@@ -373,7 +371,7 @@ export function DoctorMessagesTab() {
       const fileName = `refill-prescription-${new Date().toISOString().slice(0, 10)}.pdf`;
       const filePath = `${user.id}/prescription-refills/${selectedSessionId}/${Date.now()}-${fileName}`;
       const prescriptionText = [
-        `Date: ${new Date().toLocaleString()}`,
+        `Date: ${formatDateTime(new Date())}`,
         `Patient: ${selectedThread.patientName}`,
         `Doctor: ${senderName}`,
         `Verification Code: ${verificationCode || 'Pending/Unavailable'}`,
@@ -510,7 +508,7 @@ export function DoctorMessagesTab() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-medium truncate">{thread.patientName}</span>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {formatDate(thread.appointmentDate)}
+                        {formatMessageDate(thread.appointmentDate)}
                       </span>
                     </div>
                     <Badge variant="outline" className="text-[10px]">
@@ -541,7 +539,7 @@ export function DoctorMessagesTab() {
                 <h3 className="font-semibold">{selectedThread.patientName}</h3>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span>
-                    {formatDate(selectedThread.appointmentDate)}
+                    {formatMessageDate(selectedThread.appointmentDate)}
                     {selectedThread.appointmentTime ? ` • ${selectedThread.appointmentTime}` : ''}
                   </span>
                 </div>
@@ -614,7 +612,7 @@ export function DoctorMessagesTab() {
                           </div>
                         )}
                         <div className="flex items-center gap-1 mt-1 px-1">
-                          <span className="text-[10px] text-muted-foreground">{formatTime(message.created_at)}</span>
+                          <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.created_at)}</span>
                           {isDoctor && <Check className="w-3 h-3 text-muted-foreground" />}
                         </div>
                       </div>

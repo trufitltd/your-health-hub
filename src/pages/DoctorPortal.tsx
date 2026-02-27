@@ -50,9 +50,49 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
+import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useLocaleFormatter } from '@/lib/locale';
+import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
+
+const PROFILE_TRANSLATION_LANGUAGES = [
+  { code: 'ha', label: 'Hausa' },
+  { code: 'ig', label: 'Igbo' },
+  { code: 'yo', label: 'Yoruba' },
+  { code: 'sw', label: 'Swahili' },
+  { code: 'ar', label: 'Arabic' },
+  { code: 'fr', label: 'French' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'zh', label: 'Chinese (Mandarin)' },
+  { code: 'de', label: 'German' },
+] as const;
+
+type ProfileTranslationLanguageCode = (typeof PROFILE_TRANSLATION_LANGUAGES)[number]['code'];
+
+const createEmptyProfileTranslations = () =>
+  PROFILE_TRANSLATION_LANGUAGES.reduce(
+    (acc, lang) => {
+      acc.specialty[lang.code] = '';
+      acc.bio[lang.code] = '';
+      return acc;
+    },
+    {
+      specialty: {} as Record<ProfileTranslationLanguageCode, string>,
+      bio: {} as Record<ProfileTranslationLanguageCode, string>,
+    }
+  );
+
+const getJsonTranslationValue = (value: unknown, key: string) => {
+  if (!value || typeof value !== 'object') return '';
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === 'string' ? candidate : '';
+};
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -107,9 +147,13 @@ const DoctorPortal = () => {
     created_at: string;
     doctor_id: string | null;
     diagnosis: string | null;
+    diagnosis_translations?: Record<string, string> | null;
     treatment_plan: string | null;
+    treatment_plan_translations?: Record<string, string> | null;
     prescriptions: string | null;
+    prescriptions_translations?: Record<string, string> | null;
     follow_up_notes: string | null;
+    follow_up_notes_translations?: Record<string, string> | null;
   }>>([]);
   const [patientHealthRecords, setPatientHealthRecords] = useState<Array<{
     id: string;
@@ -133,6 +177,8 @@ const DoctorPortal = () => {
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
+  const { t, language } = useLanguage();
+  const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const unreadReviewsCount = unreadReviewIds.length;
@@ -396,6 +442,7 @@ const DoctorPortal = () => {
     newPassword: '',
     confirmPassword: '',
   });
+  const [profileTranslations, setProfileTranslations] = useState(createEmptyProfileTranslations);
 
   const patientFolderFieldOrder = [
     'patient_type',
@@ -415,7 +462,27 @@ const DoctorPortal = () => {
     'previous_diagnoses',
   ];
 
+  const folderLanguageText = CLERKING_PANEL_TEXT[language] ?? CLERKING_PANEL_TEXT.en;
+  const folderMetaTextByLanguage: Record<AppLanguage, { date: string; time: string; lastUpdated: string; accessNotice: string }> = {
+    en: { date: 'Date', time: 'Time', lastUpdated: 'Last Updated', accessNotice: 'Folder access is limited to patients you have consulted with.' },
+    ha: { date: 'Kwana', time: 'Lokaci', lastUpdated: 'Sabuntawa ta ƙarshe', accessNotice: 'Samun damar jaka yana iyakance ga majiyyatan da ka yi shawara da su.' },
+    ig: { date: 'Ụbọchị', time: 'Oge', lastUpdated: 'Emelitere ikpeazụ', accessNotice: 'Nweta folda a bụ naanị maka ndị ọrịa ị lere.' },
+    yo: { date: 'Ọjọ́', time: 'Àkókò', lastUpdated: 'Ìmúdójúìwọ̀n tó kẹ́yìn', accessNotice: 'Ìwọlé sí fọ́ldà yìí jẹ́ fún àwọn aláìsàn tí o ti bá ṣe ìmọ̀ràn nìkan.' },
+    sw: { date: 'Tarehe', time: 'Muda', lastUpdated: 'Ilisasishwa mwisho', accessNotice: 'Ufikiaji wa folda ni kwa wagonjwa uliowahi kuwashauri pekee.' },
+    ar: { date: 'التاريخ', time: 'الوقت', lastUpdated: 'آخر تحديث', accessNotice: 'الوصول إلى الملف يقتصر على المرضى الذين قمت باستشارتهم.' },
+    fr: { date: 'Date', time: 'Heure', lastUpdated: 'Dernière mise à jour', accessNotice: 'L’accès au dossier est limité aux patients que vous avez consultés.' },
+    es: { date: 'Fecha', time: 'Hora', lastUpdated: 'Última actualización', accessNotice: 'El acceso al expediente está limitado a pacientes que has consultado.' },
+    pt: { date: 'Data', time: 'Hora', lastUpdated: 'Última atualização', accessNotice: 'O acesso ao prontuário é limitado aos pacientes que você consultou.' },
+    nl: { date: 'Datum', time: 'Tijd', lastUpdated: 'Laatst bijgewerkt', accessNotice: 'Toegang tot het dossier is beperkt tot patiënten die u heeft geconsulteerd.' },
+    zh: { date: '日期', time: '时间', lastUpdated: '最后更新', accessNotice: '仅限您已接诊过的患者可查看该档案。' },
+    de: { date: 'Datum', time: 'Uhrzeit', lastUpdated: 'Zuletzt aktualisiert', accessNotice: 'Der Zugriff auf die Akte ist auf Patienten beschränkt, die Sie konsultiert haben.' },
+  };
+  const folderMetaText = folderMetaTextByLanguage[language] ?? folderMetaTextByLanguage.en;
+
   const formatFolderFieldLabel = (field: string) =>
+    (
+      folderLanguageText.fields as Record<string, { label?: string }>
+    )[field]?.label ||
     field
       .split('_')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -439,7 +506,7 @@ const DoctorPortal = () => {
   const formatEntryTimestamp = (rawTimestamp: string): string => {
     const date = new Date(rawTimestamp.trim());
     if (Number.isNaN(date.getTime())) return rawTimestamp.trim();
-    return date.toLocaleString();
+    return formatDateTime(date);
   };
 
   const formatFolderEntryText = (value: unknown, fallback: string): string => {
@@ -475,6 +542,24 @@ const DoctorPortal = () => {
     return dedupedLines.join('\n').trim();
   };
 
+  const getLocalizedFieldText = (
+    rawValue: unknown,
+    rawTranslations: unknown,
+    currentLanguage: AppLanguage
+  ): string => {
+    const base = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!rawTranslations || typeof rawTranslations !== 'object') return base;
+
+    const translations = rawTranslations as Record<string, unknown>;
+    const localized = translations[currentLanguage];
+    if (typeof localized === 'string' && localized.trim()) return localized.trim();
+
+    const english = translations.en;
+    if (typeof english === 'string' && english.trim()) return english.trim();
+
+    return base;
+  };
+
   const handleViewPatientFolder = async (apt: any) => {
     setSelectedAppointmentForFolder(apt);
     setViewFolderOpen(true);
@@ -484,9 +569,11 @@ const DoctorPortal = () => {
     setPatientHealthRecords([]);
 
     try {
+      if (!user?.id) throw new Error('Doctor must be authenticated to load patient folder');
+
       const [
         { data: folder, error: folderError },
-        { data: notes, error: notesError },
+        notesResult,
         { data: healthRecords, error: healthRecordsError }
       ] = await Promise.all([
         supabase
@@ -494,13 +581,7 @@ const DoctorPortal = () => {
           .select('*')
           .eq('patient_id', apt.patient_id)
           .maybeSingle(),
-        supabase
-          .from('doctor_consultation_notes')
-          .select('id, created_at, doctor_id, diagnosis, treatment_plan, prescriptions, follow_up_notes')
-          .eq('patient_id', apt.patient_id)
-          .eq('doctor_id', user?.id)
-          .order('created_at', { ascending: false })
-          .limit(10),
+        fetchDoctorConsultationNotesForFolder(apt.patient_id, user.id, 10),
         supabase
           .from('health_records')
           .select('id, file_name, file_url, file_type, file_size, uploaded_at, notes')
@@ -509,18 +590,27 @@ const DoctorPortal = () => {
       ]);
 
       if (folderError) throw folderError;
-      if (notesError) throw notesError;
+      if (notesResult.error) throw notesResult.error;
       if (healthRecordsError) throw healthRecordsError;
+      if (notesResult.missingTranslationColumns) {
+        console.warn(
+          'doctor_consultation_notes translation columns are missing. Falling back to legacy note fields.'
+        );
+      }
 
       setPatientFolder((folder as Record<string, any> | null) ?? null);
-      const typedNotes = ((notes as any) ?? []) as Array<{
+      const typedNotes = (notesResult.data ?? []) as Array<{
         id: string;
         created_at: string;
         doctor_id: string | null;
         diagnosis: string | null;
+        diagnosis_translations?: Record<string, string> | null;
         treatment_plan: string | null;
+        treatment_plan_translations?: Record<string, string> | null;
         prescriptions: string | null;
+        prescriptions_translations?: Record<string, string> | null;
         follow_up_notes: string | null;
+        follow_up_notes_translations?: Record<string, string> | null;
       }>;
       setPatientFolderNotes(typedNotes);
       setPatientHealthRecords((healthRecords as any) ?? []);
@@ -592,6 +682,20 @@ const DoctorPortal = () => {
   // Initialize form data when doctorRegistration loads
   useEffect(() => {
     if (doctorRegistration) {
+      const nextTranslations = createEmptyProfileTranslations();
+      const specialtyTranslations = doctorRegistration.specialty_translations;
+      const bioTranslations = doctorRegistration.bio_translations;
+
+      PROFILE_TRANSLATION_LANGUAGES.forEach((lang) => {
+        const bioColumnKey = `bio_${lang.code}` as keyof typeof doctorRegistration;
+        nextTranslations.bio[lang.code] =
+          (doctorRegistration[bioColumnKey] as string | undefined) ||
+          getJsonTranslationValue(bioTranslations, lang.code);
+
+        nextTranslations.specialty[lang.code] =
+          getJsonTranslationValue(specialtyTranslations, lang.code);
+      });
+
       setProfileFormData({
         fullName: doctorRegistration.full_name || '',
         email: doctorRegistration.email || '',
@@ -600,6 +704,7 @@ const DoctorPortal = () => {
         experience: doctorRegistration.experience || '',
         bio: doctorRegistration.bio || '',
       });
+      setProfileTranslations(nextTranslations);
     }
   }, [doctorRegistration]);
 
@@ -747,11 +852,17 @@ const DoctorPortal = () => {
     const aptTime = new Date(`${nextAppointment.date}T${nextAppointment.time}`);
     const diffMs = aptTime.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
-    
-    if (diffMins < 60) return `${diffMins} min`;
+
+    const minsLabel = t('common.timeUnit.minuteShort', 'min');
+    const hoursLabel = t('common.timeUnit.hourShort', 'h');
+    const minutesShortLabel = t('common.timeUnit.minutesShort', 'm');
+
+    if (diffMins < 60) return `${formatNumber(diffMins)} ${minsLabel}`;
     const hours = Math.floor(diffMins / 60);
     const mins = diffMins % 60;
-    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    return mins > 0
+      ? `${formatNumber(hours)}${hoursLabel} ${formatNumber(mins)}${minutesShortLabel}`
+      : `${formatNumber(hours)}${hoursLabel}`;
   };
 
   // Filter pending requests for the current doctor
@@ -761,7 +872,7 @@ const DoctorPortal = () => {
     }).map(apt => ({
     id: apt.id,
     patient: apt.patient_name || 'Unknown Patient',
-    age: apt.patient_age || 'N/A',
+    age: apt.patient_age || t('specialists.defaults.notAvailable', 'N/A'),
     requestedDate: apt.date,
     requestedTime: apt.time,
     reason: apt.notes || 'No reason provided',
@@ -919,7 +1030,7 @@ const DoctorPortal = () => {
   };
 
   const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
-    const dateLabel = arg.date.toLocaleDateString('en-US', {
+    const dateLabel = formatDate(arg.date, {
       weekday: 'long',
       month: 'long',
       day: 'numeric',
@@ -931,10 +1042,10 @@ const DoctorPortal = () => {
 
   const handleCalendarEventMount = (arg: EventMountArg) => {
     const eventTime = arg.event.start
-      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      ? formatTime(arg.event.start, { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
+    const eventStatusLabel = eventStatus ? getAppointmentStatusLabel(eventStatus) : t('common.appointments', 'Appointments');
     arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
     arg.el.style.cursor = 'pointer';
   };
@@ -953,7 +1064,7 @@ const DoctorPortal = () => {
     }
 
     const calendarDialogDateLabel = calendarDialogDate
-      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+      ? formatDate(new Date(`${calendarDialogDate}T00:00:00`), {
         weekday: 'long',
         month: 'long',
         day: 'numeric',
@@ -970,7 +1081,7 @@ const DoctorPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span className="capitalize">{status}</span>
+                  <span>{getAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
@@ -1012,7 +1123,9 @@ const DoctorPortal = () => {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>
-                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+                {calendarDialogDateLabel
+                  ? `${t('common.appointments', 'Appointments')} ${calendarDialogDateLabel}`
+                  : t('common.appointments', 'Appointments')}
               </DialogTitle>
               <DialogDescription>
                 Review appointments for the selected day.
@@ -1020,14 +1133,16 @@ const DoctorPortal = () => {
             </DialogHeader>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {calendarDialogDayAppointments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('doctorPortal.empty.noAppointmentsFound', 'No appointments found')}
+                </p>
               ) : (
                 calendarDialogDayAppointments.map((apt) => (
                   <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{apt.time}</span>
+                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
                         {getStatusBadge(apt.status)}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
@@ -1062,7 +1177,7 @@ const DoctorPortal = () => {
         >
           <DialogContent className="max-w-xl">
             <DialogHeader>
-              <DialogTitle>Appointment Details</DialogTitle>
+              <DialogTitle>{t('common.appointments', 'Appointments')}</DialogTitle>
               <DialogDescription>Manage the selected appointment.</DialogDescription>
             </DialogHeader>
             {calendarFocusedAppointment && (
@@ -1072,9 +1187,9 @@ const DoctorPortal = () => {
                     {calendarFocusedAppointment.patient_name || 'Unknown Patient'}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>{formatDate(calendarFocusedAppointment.date)}</span>
                     <span>•</span>
-                    <span>{calendarFocusedAppointment.time}</span>
+                    <span>{formatClockTime(calendarFocusedAppointment.time)}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
                   <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
@@ -1090,7 +1205,7 @@ const DoctorPortal = () => {
                         setCalendarEventDialogOpen(false);
                       }}
                     >
-                      View Folder
+                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
                     </Button>
                   )}
                   {calendarFocusedAppointment.status === 'confirmed' && (
@@ -1146,7 +1261,7 @@ const DoctorPortal = () => {
           patientsMap.set(apt.patient_id, {
             id: apt.patient_id,
             name: apt.patient_name,
-            age: apt.patient_age || 'N/A',
+            age: apt.patient_age || t('specialists.defaults.notAvailable', 'N/A'),
             lastVisit: apt.date,
             appointments: [],
             latestAppointment: null as any
@@ -1243,24 +1358,61 @@ const DoctorPortal = () => {
     setIsSavingProfile(true);
     
     try {
+      const specialtyTranslationsPayload = PROFILE_TRANSLATION_LANGUAGES.reduce<Record<string, string>>(
+        (acc, lang) => {
+          const value = profileTranslations.specialty[lang.code]?.trim();
+          if (value) acc[lang.code] = value;
+          return acc;
+        },
+        {}
+      );
+
+      const bioTranslationsPayload = PROFILE_TRANSLATION_LANGUAGES.reduce<Record<string, string>>(
+        (acc, lang) => {
+          const value = profileTranslations.bio[lang.code]?.trim();
+          if (value) acc[lang.code] = value;
+          return acc;
+        },
+        {}
+      );
+
       const { error } = await supabase
         .from('doctor_registrations')
         .update({
-          full_name: profileFormData.fullName,
-          email: profileFormData.email,
-          phone_number: profileFormData.phone,
-          specialty: profileFormData.specialty,
-          experience: profileFormData.experience,
-          bio: profileFormData.bio,
+          full_name: profileFormData.fullName.trim(),
+          email: profileFormData.email.trim(),
+          phone_number: profileFormData.phone.trim(),
+          specialty: profileFormData.specialty.trim(),
+          experience: profileFormData.experience.trim(),
+          bio: profileFormData.bio.trim(),
+          bio_ha: profileTranslations.bio.ha.trim() || null,
+          bio_ig: profileTranslations.bio.ig.trim() || null,
+          bio_yo: profileTranslations.bio.yo.trim() || null,
+          bio_sw: profileTranslations.bio.sw.trim() || null,
+          bio_ar: profileTranslations.bio.ar.trim() || null,
+          bio_fr: profileTranslations.bio.fr.trim() || null,
+          bio_es: profileTranslations.bio.es.trim() || null,
+          bio_pt: profileTranslations.bio.pt.trim() || null,
+          bio_nl: profileTranslations.bio.nl.trim() || null,
+          bio_zh: profileTranslations.bio.zh.trim() || null,
+          bio_de: profileTranslations.bio.de.trim() || null,
+          bio_translations: bioTranslationsPayload,
+          specialty_translations: specialtyTranslationsPayload,
         })
         .eq('user_id', user.id);
 
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
-      toast({ title: 'Success', description: 'Profile updated successfully!' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.profileUpdated', 'Profile updated successfully!'),
+      });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to update profile.' });
+      toast({
+        title: t('common.error', 'Error'),
+        description: t('common.profileUpdateFailed', 'Failed to update profile.'),
+      });
     } finally {
       setIsSavingProfile(false);
     }
@@ -1271,15 +1423,23 @@ const DoctorPortal = () => {
     const confirmPassword = passwordFormData.confirmPassword.trim();
 
     if (!newPassword || !confirmPassword) {
-      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      toast({
+        title: t('common.missingFields', 'Missing fields'),
+        description: t('common.enterAndConfirmNewPassword', 'Enter and confirm your new password.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword.length < 8) {
-      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({
+        title: t('common.weakPassword', 'Weak password'),
+        description: t('common.passwordMinimumLength', 'Password must be at least 8 characters.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      toast({ title: t('common.passwordsDoNotMatch', 'Passwords do not match'), variant: 'destructive' });
       return;
     }
 
@@ -1289,11 +1449,14 @@ const DoctorPortal = () => {
       if (error) throw error;
 
       setPasswordFormData({ newPassword: '', confirmPassword: '' });
-      toast({ title: 'Success', description: 'Password changed successfully.' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.passwordChanged', 'Password changed successfully.'),
+      });
     } catch (error: any) {
       toast({
-        title: 'Error',
-        description: error?.message || 'Failed to change password.',
+        title: t('common.error', 'Error'),
+        description: error?.message || t('common.passwordChangeFailed', 'Failed to change password.'),
         variant: 'destructive',
       });
     } finally {
@@ -1336,14 +1499,16 @@ const DoctorPortal = () => {
       queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
       
       toast({
-        title: 'Success',
-        description: newAvailability ? 'You are now available for consultations' : 'You are now unavailable for new consultations',
+        title: t('common.success', 'Success'),
+        description: newAvailability
+          ? t('scheduleEditor.toast.nowAvailable', 'You are now available for consultations')
+          : t('scheduleEditor.toast.nowUnavailable', 'You are now unavailable for new consultations'),
       });
     } catch (error) {
       console.error('Failed to update availability:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to update availability status. Please try again.',
+        title: t('common.error', 'Error'),
+        description: t('scheduleEditor.toast.failedAvailabilityStatus', 'Failed to update availability status. Please try again.'),
         variant: 'destructive',
       });
       // Revert the toggle if update failed
@@ -1361,17 +1526,49 @@ const DoctorPortal = () => {
   };
 
   const getStatusBadge = (status: string) => {
+    const statusLabel = getAppointmentStatusLabel(status);
     switch (status) {
+      case 'pending':
+      case 'requested':
+      case 'awaiting_approval':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">{statusLabel}</Badge>;
+      case 'confirmed':
+        return <Badge className="bg-success/10 text-success border-success/20">{statusLabel}</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{statusLabel}</Badge>;
       case 'in-progress':
-        return <Badge className="bg-primary/10 text-primary border-primary/20">In Progress</Badge>;
+        return <Badge className="bg-primary/10 text-primary border-primary/20">{statusLabel}</Badge>;
       case 'upcoming':
-        return <Badge variant="outline">Upcoming</Badge>;
+        return <Badge variant="outline">{statusLabel}</Badge>;
       case 'cancelled':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Cancelled</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{statusLabel}</Badge>;
+      case 'rejected':
+        return <Badge variant="destructive">{statusLabel}</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{statusLabel}</Badge>;
+    }
+  };
+
+  const getAppointmentStatusLabel = (status: string) => {
+    switch (status) {
+      case 'pending':
+      case 'requested':
+      case 'awaiting_approval':
+        return t('appointmentStatus.pending', 'Pending');
+      case 'confirmed':
+        return t('appointmentStatus.confirmed', 'Confirmed');
+      case 'completed':
+        return t('appointmentStatus.completed', 'Completed');
+      case 'rejected':
+        return t('appointmentStatus.rejected', 'Rejected');
+      case 'upcoming':
+        return t('appointmentStatus.upcoming', 'Upcoming');
+      case 'in-progress':
+        return t('doctorPortal.status.inProgress', 'In Progress');
+      case 'cancelled':
+        return t('doctorPortal.status.cancelled', 'Cancelled');
+      default:
+        return status;
     }
   };
 
@@ -1443,14 +1640,18 @@ const DoctorPortal = () => {
               <Link to="/install" className="hidden md:block">
                 <Button variant="outline" size="sm" className="gap-2">
                   <Download className="w-4 h-4" />
-                  Download App
+                  {t('doctorPortal.downloadApp', 'Download App')}
                 </Button>
               </Link>
 
               {/* Availability Toggle */}
               <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
-                <span className="hidden sm:inline text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
+                <span className="hidden sm:inline text-sm font-medium">
+                  {isAvailable
+                    ? t('doctorPortal.available', 'Available')
+                    : t('doctorPortal.unavailable', 'Unavailable')}
+                </span>
                 <Switch
                   checked={isAvailable}
                   onCheckedChange={handleAvailabilityToggle}
@@ -1467,7 +1668,7 @@ const DoctorPortal = () => {
                     onClick={handleInstallApp}
                   >
                     <Download className="w-4 h-4 mr-2" />
-                    Install App
+                    {t('common.installApp', 'Install App')}
                   </Button>
 
                   <Button
@@ -1490,7 +1691,7 @@ const DoctorPortal = () => {
               >
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                  {stats.pendingRequests + unreadReviewsCount}
+                  {formatNumber(stats.pendingRequests + unreadReviewsCount)}
                 </span>
               </Button>
 
@@ -1503,7 +1704,9 @@ const DoctorPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0 hidden sm:block text-left">
                       <p className="text-sm font-medium truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                      <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {doctorRegistration?.specialty || t('specialists.defaults.generalPractice', 'General Practice')}
+                      </p>
                     </div>
                   </button>
                 </DropdownMenuTrigger>
@@ -1515,14 +1718,17 @@ const DoctorPortal = () => {
                     }}
                   >
                     <Settings className="w-4 h-4 mr-2" />
-                    Profile Settings
+                    {t('common.profileSettings', 'Profile Settings')}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleSignOut}>
                     <LogOut className="w-4 h-4 mr-2" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="hidden lg:block">
+                <LanguageSelector />
+              </div>
 
               <Button 
                 variant="ghost" 
@@ -1552,21 +1758,38 @@ const DoctorPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                      <p className="text-sm text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        {doctorRegistration?.specialty || t('specialists.defaults.generalPractice', 'General Practice')}
+                      </p>
                     </div>
                   </div>
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                  <div className="lg:hidden px-3 pb-2">
+                    <LanguageSelector />
+                  </div>
                   {[
-                    { id: 'overview', label: 'Dashboard', icon: BarChart3 },
-                    { id: 'appointments', label: 'Appointments', icon: Calendar, badge: stats.pendingRequests },
-                    { id: 'patients', label: 'My Patients', icon: Users },
-                    { id: 'availability', label: 'Availability', icon: Clock },
-                    { id: 'earnings', label: 'Earnings', icon: Banknote },
-                    { id: 'reviews', label: 'Reviews', icon: Star, badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? '99+' : unreadReviewsCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'settings', label: 'Settings', icon: Settings },
+                    { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
+                    { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar, badge: stats.pendingRequests },
+                    { id: 'patients', label: t('doctorPortal.menu.myPatients', 'My Patients'), icon: Users },
+                    { id: 'availability', label: t('doctorPortal.menu.availability', 'Availability'), icon: Clock },
+                    { id: 'earnings', label: t('doctorPortal.menu.earnings', 'Earnings'), icon: Banknote },
+                    {
+                      id: 'reviews',
+                      label: t('doctorPortal.menu.reviews', 'Reviews'),
+                      icon: Star,
+                      badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadReviewsCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
+                    {
+                      id: 'messages',
+                      label: t('common.messages', 'Messages'),
+                      icon: MessageSquare,
+                      badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
+                    { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -1588,7 +1811,7 @@ const DoctorPortal = () => {
                           ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
                           : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
                           }`}>
-                          {item.badge}
+                          {typeof item.badge === 'number' ? formatNumber(item.badge) : item.badge}
                         </span>
                       )}
                     </button>
@@ -1602,7 +1825,7 @@ const DoctorPortal = () => {
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >
                     <LogOut className="w-5 h-5" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </Button>
                 </div>
               </CardContent>
@@ -1621,23 +1844,24 @@ const DoctorPortal = () => {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                   <div>
                     <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
-                      Welcome back, Dr {displayName.split(' ')[0]}! 👋
+                      {t('doctorPortal.welcomeBack', 'Welcome back')}, Dr {displayName.split(' ')[0]}! 👋
                     </h1>
                     <p className="text-xs sm:text-sm text-primary-foreground/80">
-                      You have {upcomingSchedule.length} consultations scheduled in the next 24 hours.
+                      {t('doctorPortal.overview.consultationsNext24h', 'You have {count} consultations scheduled in the next 24 hours.')
+                        .replace('{count}', formatNumber(upcomingSchedule.length))}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
                       {nextAppointment ? (
                         <>
-                          <p className="text-sm text-primary-foreground/80">Next appointment in</p>
+                          <p className="text-sm text-primary-foreground/80">{t('doctorPortal.labels.nextAppointmentIn', 'Next appointment in')}</p>
                           <p className="text-2xl font-bold">{getTimeUntilNext()}</p>
                         </>
                       ) : (
                         <>
-                          <p className="text-sm text-primary-foreground/80">No upcoming</p>
-                          <p className="text-2xl font-bold">appointments</p>
+                          <p className="text-sm text-primary-foreground/80">{t('doctorPortal.empty.noUpcomingShort', 'No upcoming')}</p>
+                          <p className="text-2xl font-bold">{t('common.appointments', 'Appointments')}</p>
                         </>
                       )}
                     </div>
@@ -1649,12 +1873,14 @@ const DoctorPortal = () => {
             <Card className="border-primary/20 bg-primary/5">
               <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-sm">
-                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                  {t('doctorPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')}{" "}
+                  <span className="font-semibold">{t('doctorPortal.downloadApp', 'Download App')}</span>{" "}
+                  {t('doctorPortal.installBannerTextSuffix', 'to install on your phone.')}
                 </p>
                 <Link to="/install">
                   <Button size="sm" className="gap-2">
                     <Download className="w-4 h-4" />
-                    Open Install Page
+                    {t('doctorPortal.openInstallPage', 'Open Install Page')}
                   </Button>
                 </Link>
               </CardContent>
@@ -1670,9 +1896,9 @@ const DoctorPortal = () => {
                 <div className="flex items-start gap-3">
                   <Clock className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-warning mb-1">Welcome to MyE-Doctor! 🎉</h3>
+                    <h3 className="font-semibold text-warning mb-1">{t('doctorPortal.verification.pendingTitle', 'Welcome to MyE-Doctor! 🎉')}</h3>
                     <p className="text-sm text-muted-foreground">
-                      Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.
+                      {t('doctorPortal.verification.pendingBody', "Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.")}
                     </p>
                   </div>
                 </div>
@@ -1688,9 +1914,9 @@ const DoctorPortal = () => {
                 <div className="flex items-start gap-3">
                   <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-success mb-1">Account Approved ✓</h3>
+                    <h3 className="font-semibold text-success mb-1">{t('doctorPortal.verification.approvedTitle', 'Account Approved ✓')}</h3>
                     <p className="text-sm text-muted-foreground">
-                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.
+                      {t('doctorPortal.verification.approvedBody', 'Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.')}
                     </p>
                   </div>
                 </div>
@@ -1706,9 +1932,9 @@ const DoctorPortal = () => {
                 <div className="flex items-start gap-3">
                   <XCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-destructive mb-1">Account Not Approved</h3>
+                    <h3 className="font-semibold text-destructive mb-1">{t('doctorPortal.verification.rejectedTitle', 'Account Not Approved')}</h3>
                     <p className="text-sm text-muted-foreground">
-                      Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.
+                      {t('doctorPortal.verification.rejectedBody', 'Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.')}
                     </p>
                   </div>
                 </div>
@@ -1718,10 +1944,10 @@ const DoctorPortal = () => {
             {/* Quick Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               {[
-                { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
-                { label: 'Pending', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
-                { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
+                { label: t('doctorPortal.labels.totalPatients', 'Total Patients'), value: statsLoading ? '...' : formatNumber(stats.totalPatients), icon: Users, color: 'bg-primary/10 text-primary' },
+                { label: t('doctorPortal.labels.thisMonth', 'This Month'), value: statsLoading ? '...' : formatNumber(stats.consultationsThisMonth), icon: Calendar, color: 'bg-success/10 text-success' },
+                { label: t('appointmentStatus.pending', 'Pending'), value: formatNumber(stats.pendingRequests), icon: Bell, color: 'bg-warning/10 text-warning' },
+                { label: t('doctorPortal.labels.rating', 'Rating'), value: statsLoading ? '...' : (stats.rating > 0 ? formatNumber(stats.rating, { maximumFractionDigits: 1 }) : t('specialists.defaults.notAvailable', 'N/A')), icon: Star, color: 'bg-accent/10 text-accent' },
               ].map((stat, index) => (
                 <motion.div
                   key={stat.label}
@@ -1749,7 +1975,7 @@ const DoctorPortal = () => {
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="overview">{t('common.overview', 'Overview')}</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
@@ -1758,16 +1984,16 @@ const DoctorPortal = () => {
                   {/* Upcoming Schedule Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">Upcoming Schedule</CardTitle>
+                      <CardTitle className="text-lg">{t('doctorPortal.headers.upcomingSchedule', 'Upcoming Schedule')}</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                        View All <ChevronRight className="w-4 h-4 ml-1" />
+                        {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
                         {upcomingSchedule.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">No appointments scheduled for the next 24 hours</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.empty.noAppointmentsNext24h', 'No appointments scheduled for the next 24 hours')}</p>
                           </div>
                         ) : (
                           upcomingSchedule.slice(0, 4).map((apt) => (
@@ -1788,7 +2014,7 @@ const DoctorPortal = () => {
                                 </div>
                                 <div>
                                   <p className="font-medium text-sm">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-xs text-muted-foreground">{apt.time}</p>
+                                  <p className="text-xs text-muted-foreground">{formatClockTime(apt.time)}</p>
                                 </div>
                               </div>
                               {getStatusBadge(apt.status)}
@@ -1802,16 +2028,16 @@ const DoctorPortal = () => {
                   {/* Pending Requests Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">Pending Requests</CardTitle>
+                      <CardTitle className="text-lg">{t('doctorPortal.headers.pendingRequests', 'Pending Requests')}</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                        View All <ChevronRight className="w-4 h-4 ml-1" />
+                        {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
                         {pendingRequests.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">No pending requests</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.empty.noPendingRequests', 'No pending requests')}</p>
                           </div>
                         ) : (
                           pendingRequests.map((request) => (
@@ -1843,23 +2069,23 @@ const DoctorPortal = () => {
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <div>
-                      <CardTitle className="text-lg">Recent Reviews</CardTitle>
-                      <CardDescription>What your patients are saying</CardDescription>
+                      <CardTitle className="text-lg">{t('doctorPortal.headers.recentReviews', 'Recent Reviews')}</CardTitle>
+                      <CardDescription>{t('doctorPortal.headers.recentReviewsDescription', 'What your patients are saying')}</CardDescription>
                     </div>
                     <div className="flex items-center gap-2">
                       <Star className="w-5 h-5 text-warning fill-warning" />
-                      <span className="font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
+                      <span className="font-bold">{statsLoading ? '...' : (doctorStats?.rating || t('specialists.defaults.notAvailable', 'N/A'))}</span>
                       <span className="text-muted-foreground text-sm">({recentReviews.length} reviews)</span>
                     </div>
                   </CardHeader>
                   <CardContent>
                     {reviewsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading reviews...</p>
+                        <p className="text-muted-foreground">{t('doctorPortal.loading.reviews', 'Loading reviews...')}</p>
                       </div>
                     ) : recentReviews.length === 0 ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">No reviews yet</p>
+                        <p className="text-muted-foreground">{t('doctorPortal.empty.noReviewsYet', 'No reviews yet')}</p>
                       </div>
                     ) : (
                       <div className="grid md:grid-cols-3 gap-4">
@@ -1879,7 +2105,7 @@ const DoctorPortal = () => {
                             <p className="text-sm mb-2">"{review.comment}"</p>
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
                               <span>{review.patient}</span>
-                              <span>{new Date(review.date).toLocaleDateString()}</span>
+                              <span>{formatDate(review.date)}</span>
                             </div>
                           </div>
                         ))}
@@ -1899,8 +2125,8 @@ const DoctorPortal = () => {
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <CardTitle>Appointments</CardTitle>
-                        <CardDescription>Manage all your appointments in one place</CardDescription>
+                        <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
                       <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
                         <Button
@@ -1910,7 +2136,7 @@ const DoctorPortal = () => {
                           onClick={() => setAppointmentViewMode('list')}
                         >
                           <List className="w-4 h-4" />
-                          List
+                          {t('common.list', 'List')}
                         </Button>
                         <Button
                           size="sm"
@@ -1919,7 +2145,7 @@ const DoctorPortal = () => {
                           onClick={() => setAppointmentViewMode('calendar')}
                         >
                           <Calendar className="w-4 h-4" />
-                          Calendar
+                          {t('common.calendar', 'Calendar')}
                         </Button>
                       </div>
                     </div>
@@ -1929,33 +2155,33 @@ const DoctorPortal = () => {
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
                       <TabsList className="grid w-full grid-cols-5 mb-6">
                         <TabsTrigger value="pending" className="relative">
-                          Pending
+                          {t('appointmentStatus.pending', 'Pending')}
                           {stats.pendingRequests > 0 && (
                             <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
-                              {stats.pendingRequests}
+                              {formatNumber(stats.pendingRequests)}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="rejected">Rejected</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="upcoming">{t('appointmentStatus.upcoming', 'Upcoming')}</TabsTrigger>
+                        <TabsTrigger value="completed">{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="rejected">{t('appointmentStatus.rejected', 'Rejected')}</TabsTrigger>
+                        <TabsTrigger value="all">{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
                       {/* Pending Tab Content */}
                       <TabsContent value="pending" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
                           renderDoctorAppointmentsCalendar(
-                            'No pending requests',
-                            'New requests will appear here when patients book appointments'
+                            t('doctorPortal.empty.noPendingRequests', 'No pending requests'),
+                            t('doctorPortal.empty.newRequestsWillAppear', 'New requests will appear here when patients book appointments')
                           )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No pending requests</p>
-                                <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noPendingRequests', 'No pending requests')}</p>
+                                <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.newRequestsWillAppear', 'New requests will appear here when patients book appointments')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
@@ -1975,7 +2201,7 @@ const DoctorPortal = () => {
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {new Date(apt.date).toLocaleDateString()} at {apt.time}
+                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
                                       </p>
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
@@ -1983,14 +2209,14 @@ const DoctorPortal = () => {
                                   <div className="flex gap-2">
                                     {apt.patient_id && (
                                       <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                        View Folder
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
                                     <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
-                                      Decline
+                                      {t('doctorPortal.actions.decline', 'Decline')}
                                     </Button>
                                     <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(apt.id)}>
-                                      Accept
+                                      {t('doctorPortal.actions.accept', 'Accept')}
                                     </Button>
                                   </div>
                                 </div>
@@ -2003,21 +2229,21 @@ const DoctorPortal = () => {
                       {/* Upcoming Tab Content */}
                       <TabsContent value="upcoming" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No upcoming appointments')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noUpcomingAppointments', 'No upcoming appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No upcoming appointments</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noUpcomingAppointments', 'No upcoming appointments')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -2033,7 +2259,11 @@ const DoctorPortal = () => {
                                     </div>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
@@ -2051,7 +2281,7 @@ const DoctorPortal = () => {
                                         variant="outline"
                                         onClick={() => handleViewPatientFolder(apt)}
                                       >
-                                        View Folder
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
                                   </div>
@@ -2065,21 +2295,21 @@ const DoctorPortal = () => {
                       {/* Rejected Tab Content */}
                       <TabsContent value="rejected" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No rejected appointments')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noRejectedAppointments', 'No rejected appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No rejected appointments</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noRejectedAppointments', 'No rejected appointments')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2090,17 +2320,21 @@ const DoctorPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                       <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
                                     {apt.patient_id && (
                                       <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                        View Folder
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    <Badge variant="destructive">Rejected</Badge>
+                                    <Badge variant="destructive">{getAppointmentStatusLabel('rejected')}</Badge>
                                   </div>
                                 </div>
                               ))
@@ -2112,21 +2346,21 @@ const DoctorPortal = () => {
                       {/* Completed Tab Content */}
                       <TabsContent value="completed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No completed consultations')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noCompletedConsultations', 'No completed consultations'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <CheckCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No completed consultations</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noCompletedConsultations', 'No completed consultations')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2137,7 +2371,11 @@ const DoctorPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                       {(apt as any).rating && (
                                         <div className="flex items-center gap-1 mt-1">
                                           {[...Array(5)].map((_, i) => (
@@ -2152,7 +2390,7 @@ const DoctorPortal = () => {
                                   </div>
                                   {apt.patient_id && (
                                     <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      View Folder
+                                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                     </Button>
                                   )}
                                 </div>
@@ -2165,21 +2403,21 @@ const DoctorPortal = () => {
                       {/* All Tab Content */}
                       <TabsContent value="all" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No appointments found')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noAppointmentsFound', 'No appointments found'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No appointments found</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noAppointmentsFound', 'No appointments found')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2190,13 +2428,17 @@ const DoctorPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                       <Badge className="mt-1" variant={
                                         apt.status === 'pending' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {apt.status}
+                                        {getAppointmentStatusLabel(apt.status)}
                                       </Badge>
                                     </div>
                                   </div>
@@ -2211,16 +2453,16 @@ const DoctorPortal = () => {
                                   )}
                                   {apt.patient_id && (
                                     <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      View Folder
+                                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                     </Button>
                                   )}
                                   {apt.status === 'pending' && (
                                     <div className="flex gap-2">
                                       <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeclineRequest(apt.id)}>
-                                        Decline
+                                      {t('doctorPortal.actions.decline', 'Decline')}
                                       </Button>
                                       <Button size="sm" className="bg-success" onClick={() => handleAcceptRequest(apt.id)}>
-                                        Accept
+                                      {t('doctorPortal.actions.accept', 'Accept')}
                                       </Button>
                                     </div>
                                   )}
@@ -2239,18 +2481,18 @@ const DoctorPortal = () => {
                 <Card>
                   <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <CardTitle>My Patients</CardTitle>
-                      <CardDescription>All patients under your care</CardDescription>
+                      <CardTitle>{t('doctorPortal.menu.myPatients', 'My Patients')}</CardTitle>
+                      <CardDescription>{t('doctorPortal.headers.patientsDescription', 'All patients under your care')}</CardDescription>
                     </div>
-                    <Input placeholder="Search patients..." className="w-full sm:w-64" />
+                    <Input placeholder={t('doctorPortal.labels.searchPatients', 'Search patients...')} className="w-full sm:w-64" />
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
                       {patientsList.length === 0 ? (
                         <div className="text-center py-12">
                           <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-muted-foreground">No patients yet</p>
-                          <p className="text-sm text-muted-foreground mt-2">Patients will appear here once they book appointments with you</p>
+                          <p className="text-muted-foreground">{t('doctorPortal.empty.noPatientsYet', 'No patients yet')}</p>
+                          <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.patientsWillAppear', 'Patients will appear here once they book appointments with you')}</p>
                         </div>
                       ) : (
                         patientsList.map((patient) => (
@@ -2269,16 +2511,16 @@ const DoctorPortal = () => {
                               </div>
                               <div>
                                 <p className="font-semibold">{patient.name}</p>
-                                <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? 'years old' : ''}</p>
+                                <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? t('doctorPortal.labels.yearsOld', 'years old') : ''}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                  Last visit: {new Date(patient.lastVisit).toLocaleDateString()}
+                                  {t('doctorPortal.labels.lastVisit', 'Last visit')}: {formatDate(patient.lastVisit)}
                                 </p>
                               </div>
                             </div>
                             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
                               <div className="text-left sm:text-right mb-2 sm:mb-0">
-                                <p className="text-xs text-muted-foreground">Total appointments</p>
-                                <p className="text-sm font-medium">{patient.appointments.length}</p>
+                                <p className="text-xs text-muted-foreground">{t('doctorPortal.labels.totalAppointments', 'Total appointments')}</p>
+                                <p className="text-sm font-medium">{formatNumber(patient.appointments.length)}</p>
                               </div>
                               <div className="flex flex-col sm:flex-row gap-2">
                                 <Button
@@ -2288,7 +2530,7 @@ const DoctorPortal = () => {
                                   onClick={() => patient.latestAppointment && handleViewPatientFolder(patient.latestAppointment)}
                                   disabled={!patient.latestAppointment}
                                 >
-                                  View Folder
+                                  {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                 </Button>
                                 <Button
                                   size="sm"
@@ -2300,7 +2542,7 @@ const DoctorPortal = () => {
                                   }}
                                 >
                                   <MessageSquare className="w-4 h-4 mr-2" />
-                                  Message
+                                  {t('doctorPortal.actions.message', 'Message')}
                                 </Button>
                               </div>
                             </div>
@@ -2319,7 +2561,7 @@ const DoctorPortal = () => {
                 ) : (
                   <Card>
                     <CardContent className="pt-6">
-                      <p className="text-muted-foreground">Please sign in to manage your schedule.</p>
+                      <p className="text-muted-foreground">{t('doctorPortal.empty.signInToManageSchedule', 'Please sign in to manage your schedule.')}</p>
                     </CardContent>
                   </Card>
                 )}
@@ -2335,9 +2577,9 @@ const DoctorPortal = () => {
                               <Banknote className="w-6 h-6 text-success" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">This Month</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.thisMonth', 'This Month')}</p>
                               <p className="text-2xl font-bold">
-                                {earningsLoading ? '...' : `₦${stats.earnings.toLocaleString()}`}
+                                {earningsLoading ? '...' : formatCurrency(stats.earnings)}
                               </p>
                             </div>
                           </div>
@@ -2350,7 +2592,7 @@ const DoctorPortal = () => {
                               <TrendingUp className="w-6 h-6 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">Growth</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.growth', 'Growth')}</p>
                               <p className="text-2xl font-bold">
                                 {earningsLoading ? '...' : `${earningsData?.growth || 0 > 0 ? '+' : ''}${earningsData?.growth || 0}%`}
                               </p>
@@ -2365,7 +2607,7 @@ const DoctorPortal = () => {
                               <Calendar className="w-6 h-6 text-warning" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">Consultations</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.consultations', 'Consultations')}</p>
                               <p className="text-2xl font-bold">
                                 {earningsLoading ? '...' : earningsData?.thisMonthConsultations || 0}
                               </p>
@@ -2377,18 +2619,18 @@ const DoctorPortal = () => {
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>Earnings History</CardTitle>
-                        <CardDescription>Your consultation earnings over the last 6 months</CardDescription>
+                        <CardTitle>{t('doctorPortal.headers.earningsHistory', 'Earnings History')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.headers.earningsHistoryDescription', 'Your consultation earnings over the last 6 months')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         {earningsLoading ? (
                           <div className="h-64 flex items-center justify-center text-muted-foreground">
-                            <p>Loading earnings data...</p>
+                            <p>{t('doctorPortal.loading.earnings', 'Loading earnings data...')}</p>
                           </div>
                         ) : !earningsData?.monthlyData || earningsData.monthlyData.length === 0 ? (
                           <div className="h-64 flex items-center justify-center text-muted-foreground">
                             <BarChart3 className="w-12 h-12 mr-3" />
-                            <span>No earnings data available yet</span>
+                            <span>{t('doctorPortal.empty.noEarningsData', 'No earnings data available yet')}</span>
                           </div>
                         ) : (
                           <div className="space-y-4">
@@ -2401,8 +2643,8 @@ const DoctorPortal = () => {
                                   <div className="flex items-center justify-between text-sm">
                                     <span className="font-medium">{month.month}</span>
                                     <div className="text-right">
-                                      <span className="font-bold">₦{month.earnings.toLocaleString()}</span>
-                                      <span className="text-muted-foreground ml-2">({month.consultations} consultations)</span>
+                                      <span className="font-bold">{formatCurrency(month.earnings)}</span>
+                                      <span className="text-muted-foreground ml-2">({month.consultations} {t('doctorPortal.labels.consultations', 'consultations')})</span>
                                     </div>
                                   </div>
                                   <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
@@ -2426,14 +2668,14 @@ const DoctorPortal = () => {
                       <CardHeader>
                         <div className="flex items-center justify-between">
                           <div>
-                            <CardTitle>Patient Reviews</CardTitle>
-                            <CardDescription>Feedback from your consultations</CardDescription>
+                            <CardTitle>{t('doctorPortal.headers.patientReviews', 'Patient Reviews')}</CardTitle>
+                            <CardDescription>{t('doctorPortal.headers.patientReviewsDescription', 'Feedback from your consultations')}</CardDescription>
                           </div>
                           <div className="flex items-center gap-3 p-4 rounded-xl bg-muted">
                             <div className="text-center">
                               <div className="flex items-center gap-1">
                                 <Star className="w-6 h-6 text-warning fill-warning" />
-                                <span className="text-3xl font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
+                                <span className="text-3xl font-bold">{statsLoading ? '...' : (doctorStats?.rating || t('specialists.defaults.notAvailable', 'N/A'))}</span>
                               </div>
                               <p className="text-sm text-muted-foreground">{recentReviews.length} reviews</p>
                             </div>
@@ -2443,13 +2685,13 @@ const DoctorPortal = () => {
                       <CardContent>
                         {reviewsLoading ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">Loading reviews...</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.loading.reviews', 'Loading reviews...')}</p>
                           </div>
                         ) : recentReviews.length === 0 ? (
                           <div className="text-center py-8">
                             <Star className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No reviews yet</p>
-                            <p className="text-sm text-muted-foreground mt-2">Reviews from patients will appear here after consultations</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.empty.noReviewsYet', 'No reviews yet')}</p>
+                            <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.reviewsWillAppear', 'Reviews from patients will appear here after consultations')}</p>
                           </div>
                         ) : (
                           <div className="space-y-4">
@@ -2478,7 +2720,7 @@ const DoctorPortal = () => {
                                 </div>
                                 <p className="text-sm mb-2">{review.comment}</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                                  {formatDate(review.date, { month: 'long', day: 'numeric', year: 'numeric' })}
                                 </p>
                               </div>
                             ))}
@@ -2495,8 +2737,8 @@ const DoctorPortal = () => {
                   <TabsContent value="settings" className="space-y-6">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Profile Settings</CardTitle>
-                        <CardDescription>Manage your doctor profile</CardDescription>
+                        <CardTitle>{t('common.profileSettings', 'Profile Settings')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.headers.manageDoctorProfile', 'Manage your doctor profile')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="space-y-6">
@@ -2507,7 +2749,7 @@ const DoctorPortal = () => {
                             </Avatar>
                             <div>
                               <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? 'General Practice'}</p>
+                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? t('specialists.defaults.generalPractice', 'General Practice')}</p>
                               <div className="mt-2">
                                 <input
                                   type="file"
@@ -2525,7 +2767,9 @@ const DoctorPortal = () => {
                                   disabled={isUploadingPhoto}
                                   onClick={() => document.getElementById('doctor-photo-upload')?.click()}
                                 >
-                                  {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                                  {isUploadingPhoto
+                                    ? t('doctorPortal.actions.uploading', 'Uploading...')
+                                    : t('doctorPortal.actions.changePhoto', 'Change Photo')}
                                 </Button>
                               </div>
                             </div>
@@ -2533,7 +2777,7 @@ const DoctorPortal = () => {
 
                           <div className="grid md:grid-cols-2 gap-4">
                             <div>
-                              <label className="text-sm font-medium">Full Name</label>
+                              <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                               <Input 
                                 value={profileFormData.fullName || doctorRegistration?.full_name || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
@@ -2541,7 +2785,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Email</label>
+                              <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                               <Input 
                                 value={profileFormData.email || doctorRegistration?.email || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
@@ -2549,7 +2793,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Phone</label>
+                              <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                               <Input 
                                 value={profileFormData.phone || doctorRegistration?.phone_number || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
@@ -2557,7 +2801,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Specialty</label>
+                              <label className="text-sm font-medium">{t('common.specialty', 'Specialty')}</label>
                               <Input 
                                 value={profileFormData.specialty || doctorRegistration?.specialty || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, specialty: e.target.value})}
@@ -2565,7 +2809,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Experience</label>
+                              <label className="text-sm font-medium">{t('common.experience', 'Experience')}</label>
                               <Input 
                                 value={profileFormData.experience || doctorRegistration?.experience || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, experience: e.target.value})}
@@ -2575,17 +2819,70 @@ const DoctorPortal = () => {
                           </div>
 
                           <div>
-                            <label className="text-sm font-medium">Bio</label>
+                            <label className="text-sm font-medium">{t('common.bio', 'Bio')}</label>
                             <Textarea 
                               value={profileFormData.bio || doctorRegistration?.bio || ''} 
                               onChange={(e) => setProfileFormData({...profileFormData, bio: e.target.value})}
-                              placeholder="Tell patients about yourself, your experience, and approach to healthcare..."
+                              placeholder={t('doctorPortal.settings.bioPlaceholder', 'Tell patients about yourself, your experience, and approach to healthcare...')}
                               className="mt-1 min-h-[100px]" 
                             />
                           </div>
 
+                          <div className="space-y-4">
+                            <div>
+                              <p className="text-sm font-medium">{t('doctorPortal.settings.multilingualTitle', 'Multilingual Profile Content')}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {t('doctorPortal.settings.multilingualDescription', 'Add translated specialty and bio for patients using other languages.')}
+                              </p>
+                            </div>
+
+                            <div className="space-y-4">
+                              {PROFILE_TRANSLATION_LANGUAGES.map((lang) => (
+                                <div key={lang.code} className="rounded-lg border border-border p-4 space-y-3">
+                                  <p className="text-sm font-semibold">{lang.label}</p>
+                                  <div>
+                                    <label className="text-xs font-medium text-muted-foreground">{t('common.specialty', 'Specialty')} ({lang.code.toUpperCase()})</label>
+                                    <Input
+                                      value={profileTranslations.specialty[lang.code]}
+                                      onChange={(e) =>
+                                        setProfileTranslations((prev) => ({
+                                          ...prev,
+                                          specialty: {
+                                            ...prev.specialty,
+                                            [lang.code]: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                      className="mt-1"
+                                      placeholder={t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', lang.label)}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-xs font-medium text-muted-foreground">{t('common.bio', 'Bio')} ({lang.code.toUpperCase()})</label>
+                                    <Textarea
+                                      value={profileTranslations.bio[lang.code]}
+                                      onChange={(e) =>
+                                        setProfileTranslations((prev) => ({
+                                          ...prev,
+                                          bio: {
+                                            ...prev.bio,
+                                            [lang.code]: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                      className="mt-1 min-h-[88px]"
+                                      placeholder={t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', lang.label)}
+                                    />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
                           <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
-                            {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                            {isSavingProfile
+                              ? t('doctorPortal.actions.saving', 'Saving...')
+                              : t('doctorPortal.actions.saveChanges', 'Save Changes')}
                           </Button>
                         </div>
                       </CardContent>
@@ -2593,33 +2890,35 @@ const DoctorPortal = () => {
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>Change Password</CardTitle>
-                        <CardDescription>Update your account password</CardDescription>
+                        <CardTitle>{t('common.changePassword', 'Change Password')}</CardTitle>
+                        <CardDescription>{t('common.updateAccountPassword', 'Update your account password')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="space-y-4 max-w-md">
                           <div>
-                            <label className="text-sm font-medium">New Password</label>
+                            <label className="text-sm font-medium">{t('common.newPassword', 'New Password')}</label>
                             <Input
                               type="password"
                               value={passwordFormData.newPassword}
                               onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
                               className="mt-1"
-                              placeholder="At least 8 characters"
+                              placeholder={t('common.passwordMinHint', 'At least 8 characters')}
                             />
                           </div>
                           <div>
-                            <label className="text-sm font-medium">Confirm New Password</label>
+                            <label className="text-sm font-medium">{t('common.confirmNewPassword', 'Confirm New Password')}</label>
                             <Input
                               type="password"
                               value={passwordFormData.confirmPassword}
                               onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
                               className="mt-1"
-                              placeholder="Re-enter new password"
+                              placeholder={t('common.passwordReenterHint', 'Re-enter new password')}
                             />
                           </div>
                           <Button onClick={handleChangePassword} disabled={isChangingPassword}>
-                            {isChangingPassword ? 'Updating...' : 'Update Password'}
+                            {isChangingPassword
+                              ? t('doctorPortal.actions.updating', 'Updating...')
+                              : t('doctorPortal.actions.updatePassword', 'Update Password')}
                           </Button>
                         </div>
                       </CardContent>
@@ -2632,26 +2931,26 @@ const DoctorPortal = () => {
         
         {/* View Folder Modal */}
         <Dialog open={viewFolderOpen} onOpenChange={setViewFolderOpen}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
-            <DialogHeader className="pr-10">
-              <DialogTitle>Patient Folder</DialogTitle>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
+              <DialogHeader className="pr-10">
+              <DialogTitle>{folderLanguageText.viewPatientFolder}</DialogTitle>
               <DialogDescription>
-                Folder for {selectedAppointmentForFolder?.patient_name}
+                {selectedAppointmentForFolder?.patient_name}
               </DialogDescription>
             </DialogHeader>
             <ScrollArea className="max-h-[70vh] pr-2">
             <div className="space-y-4">
               <div className="p-4 rounded-lg bg-muted/50">
                 <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="font-medium">Patient:</span> {selectedAppointmentForFolder?.patient_name}</div>
-                  <div><span className="font-medium">Date:</span> {selectedAppointmentForFolder?.date}</div>
-                  <div><span className="font-medium">Time:</span> {selectedAppointmentForFolder?.time}</div>
-                  <div><span className="font-medium">Last Updated:</span> {patientFolder?.updated_at ? new Date(patientFolder.updated_at).toLocaleString() : 'N/A'}</div>
+                  <div><span className="font-medium">{t('portal.patient', 'Patient')}:</span> {selectedAppointmentForFolder?.patient_name}</div>
+                  <div><span className="font-medium">{folderMetaText.date}:</span> {selectedAppointmentForFolder?.date}</div>
+                  <div><span className="font-medium">{folderMetaText.time}:</span> {formatClockTime(selectedAppointmentForFolder?.time)}</div>
+                  <div><span className="font-medium">{folderMetaText.lastUpdated}:</span> {patientFolder?.updated_at ? formatDateTime(patientFolder.updated_at) : t('specialists.defaults.notAvailable', 'N/A')}</div>
                 </div>
               </div>
 
               {isLoadingPatientFolder ? (
-                <div className="text-sm text-muted-foreground">Loading patient folder...</div>
+                <div className="text-sm text-muted-foreground">{t('doctorPortal.loading.patientFolder', 'Loading patient folder...')}</div>
               ) : (
                 <>
                   {patientFolder ? (
@@ -2662,8 +2961,12 @@ const DoctorPortal = () => {
                           <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[60px]">
                             <p className="text-sm whitespace-pre-wrap">
                               {formatFolderEntryText(
-                                patientFolder[field],
-                                `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`
+                                getLocalizedFieldText(
+                                  patientFolder[field],
+                                  patientFolder[`${field}_translations`],
+                                  language
+                                ),
+                                folderLanguageText.notRecorded
                               )}
                             </p>
                           </div>
@@ -2671,23 +2974,26 @@ const DoctorPortal = () => {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground">No patient folder found yet.</p>
+                    <p className="text-sm text-muted-foreground">{folderLanguageText.noPatientFolder}</p>
                   )}
                   <div>
-                    <label className="text-sm font-medium">Recent Consultation Entries</label>
+                    <label className="text-sm font-medium">{folderLanguageText.recentEntries}</label>
                     <div className="mt-2 space-y-2">
                       {patientFolderNotes.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No consultation entries found.</p>
+                        <p className="text-sm text-muted-foreground">{folderLanguageText.noEntries}</p>
                       ) : (
                         patientFolderNotes.map((note) => (
                           <div key={note.id} className="p-3 rounded-lg bg-muted/30">
-                            <p className="text-xs text-muted-foreground mb-1">{new Date(note.created_at).toLocaleString()}</p>
-                            <p className="text-sm"><span className="font-medium">Assessment:</span> {note.diagnosis || 'Not recorded'}</p>
-                            <p className="text-sm"><span className="font-medium">Plan:</span> {note.treatment_plan || 'Not recorded'}</p>
-                            <p className="text-sm"><span className="font-medium">E-Prescription:</span> {note.prescriptions || 'Not recorded'}</p>
+                            <p className="text-xs text-muted-foreground mb-1">{formatDateTime(note.created_at)}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.assessment.label}:</span> {getLocalizedFieldText(note.diagnosis, note.diagnosis_translations, language) || folderLanguageText.notRecorded}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.treatment_plan.label}:</span> {getLocalizedFieldText(note.treatment_plan, note.treatment_plan_translations, language) || folderLanguageText.notRecorded}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.e_prescription.label}:</span> {getLocalizedFieldText(note.prescriptions, note.prescriptions_translations, language) || folderLanguageText.notRecorded}</p>
                             <p className="text-sm whitespace-pre-wrap">
-                              <span className="font-medium">Full Clerking Note:</span>{' '}
-                              {formatFolderEntryText(note.follow_up_notes, 'Not recorded')}
+                              <span className="font-medium">{folderLanguageText.fullClerkingNote}:</span>{' '}
+                              {formatFolderEntryText(
+                                getLocalizedFieldText(note.follow_up_notes, note.follow_up_notes_translations, language),
+                                folderLanguageText.notRecorded
+                              )}
                             </p>
                           </div>
                         ))
@@ -2695,10 +3001,10 @@ const DoctorPortal = () => {
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm font-medium">Uploaded Health Records</label>
+                    <label className="text-sm font-medium">{t('patientPortal.records.uploadedInvestigations', 'Uploaded Investigations')}</label>
                     <div className="mt-2 space-y-2">
                       {patientHealthRecords.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No uploaded health records found.</p>
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noRecordsUploadedYet', 'No investigations uploaded yet')}</p>
                       ) : (
                         patientHealthRecords.map((record) => (
                           <div key={record.id} className="p-3 rounded-lg bg-muted/30">
@@ -2706,7 +3012,7 @@ const DoctorPortal = () => {
                               <div className="min-w-0">
                                 <p className="text-sm font-medium truncate">{record.file_name}</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {new Date(record.uploaded_at).toLocaleString()}
+                                  {formatDateTime(record.uploaded_at)}
                                   {record.file_size ? ` • ${(record.file_size / 1024).toFixed(1)} KB` : ''}
                                 </p>
                                 {record.notes && (
@@ -2718,7 +3024,7 @@ const DoctorPortal = () => {
                                 variant="outline"
                                 onClick={() => window.open(record.file_url, '_blank')}
                               >
-                                View
+                                {t('doctorPortal.actions.viewFolder', 'View')}
                               </Button>
                             </div>
                           </div>
@@ -2731,7 +3037,7 @@ const DoctorPortal = () => {
               <div>
                 <div className="mt-2 p-3 rounded-lg bg-muted/30">
                   <p className="text-xs text-muted-foreground">
-                    Folder access is limited to patients you have consulted with.
+                    {folderMetaText.accessNotice}
                   </p>
                 </div>
               </div>
@@ -2739,7 +3045,7 @@ const DoctorPortal = () => {
             </ScrollArea>
             <DialogFooter>
               <Button variant="outline" onClick={() => setViewFolderOpen(false)}>
-                Close
+                {t('common.close', 'Close')}
               </Button>
             </DialogFooter>
           </DialogContent>

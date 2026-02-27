@@ -38,6 +38,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface Doctor {
   id: string;
@@ -65,6 +68,9 @@ interface VerificationNotes {
 
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
+  const { t } = useLanguage();
+  const { formatDate, formatDateTime } = useLocaleFormatter();
+  const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
@@ -699,16 +705,13 @@ const CentralAdmin = () => {
             </Link>
 
             <div className="flex items-center gap-4">
-              <Link to="/install" className="hidden md:block">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Download className="w-4 h-4" />
-                  Download App
-                </Button>
-              </Link>
+              <div className="hidden md:block">
+                <LanguageSelector />
+              </div>
 
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <Shield className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium">Medical Director</span>
+                <span className="text-sm font-medium">{t('portal.centralAdmin', 'Central Admin')}</span>
               </div>
 
               <button 
@@ -735,15 +738,18 @@ const CentralAdmin = () => {
             <Card className="lg:sticky lg:top-24 rounded-lg">
               <CardContent className="p-3 sm:p-4">
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                  <div className="lg:hidden px-3 pb-2">
+                    <LanguageSelector />
+                  </div>
                   {[
-                    { id: 'overview', label: 'Dashboard', icon: BarChart3 },
+                    { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
-                    { id: 'settings', label: 'Settings', icon: Settings },
+                    { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -782,7 +788,7 @@ const CentralAdmin = () => {
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >
                     <LogOut className="w-5 h-5" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </Button>
                 </div>
               </CardContent>
@@ -916,7 +922,7 @@ const CentralAdmin = () => {
                                 <p className="text-xs text-muted-foreground">{message.email}</p>
                               </div>
                               <span className="text-xs text-muted-foreground">
-                                {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                                {message.created_at ? formatDate(message.created_at) : ''}
                               </span>
                             </div>
                             <p className="text-sm font-medium mt-2">{message.subject}</p>
@@ -1075,7 +1081,7 @@ const CentralAdmin = () => {
                                   <p className="text-xs text-muted-foreground">{message.email}</p>
                                 </div>
                                 <span className="text-xs text-muted-foreground">
-                                  {message.created_at ? new Date(message.created_at).toLocaleDateString() : ''}
+                                  {message.created_at ? formatDate(message.created_at) : ''}
                                 </span>
                               </div>
                               <p className="text-sm font-medium mt-2">{message.subject}</p>
@@ -1125,7 +1131,7 @@ const CentralAdmin = () => {
                               <div>
                                 <p className="text-sm font-semibold">Received</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {selectedMessage.created_at ? new Date(selectedMessage.created_at).toLocaleString() : ''}
+                                  {selectedMessage.created_at ? formatDateTime(selectedMessage.created_at) : ''}
                                 </p>
                               </div>
                               <div>
@@ -1296,7 +1302,7 @@ const CentralAdmin = () => {
                                   <span className="font-medium">Experience:</span> {doctor.experience}
                                 </p>
                                 <p className="text-sm">
-                                  <span className="font-medium">Registered:</span> {new Date(doctor.created_at).toLocaleDateString()}
+                                  <span className="font-medium">Registered:</span> {formatDate(doctor.created_at)}
                                 </p>
                               </div>
                               <div className="flex gap-2 flex-wrap">
@@ -1384,7 +1390,7 @@ const CentralAdmin = () => {
                               <div className="p-2 rounded-lg bg-muted/50">
                                 <p className="text-muted-foreground text-xs">Patient Rating</p>
                                 <p className="text-lg font-bold flex items-center gap-1">
-                                  {doctor.rating || 'N/A'}<Star className="w-3 h-3 text-warning fill-warning" />
+                                  {doctor.rating || notAvailableLabel}<Star className="w-3 h-3 text-warning fill-warning" />
                                 </p>
                               </div>
                               <div className="p-2 rounded-lg bg-muted/50">
@@ -1627,23 +1633,23 @@ const CentralAdmin = () => {
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Phone Number</p>
-                    <p className="font-medium">{(selectedDoctor as any).phone_number || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).phone_number || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Gender</p>
-                    <p className="font-medium capitalize">{(selectedDoctor as any).gender || 'N/A'}</p>
+                    <p className="font-medium capitalize">{(selectedDoctor as any).gender || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Age</p>
-                    <p className="font-medium">{(selectedDoctor as any).age || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).age || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Marital Status</p>
-                    <p className="font-medium capitalize">{(selectedDoctor as any).marital_status || 'N/A'}</p>
+                    <p className="font-medium capitalize">{(selectedDoctor as any).marital_status || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Registration Date</p>
-                    <p className="font-medium">{new Date(selectedDoctor.created_at).toLocaleDateString()}</p>
+                    <p className="font-medium">{formatDate(selectedDoctor.created_at)}</p>
                   </div>
                 </div>
               </div>
@@ -1654,15 +1660,15 @@ const CentralAdmin = () => {
                 <div className="grid grid-cols-3 gap-4 text-sm">
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">City</p>
-                    <p className="font-medium">{(selectedDoctor as any).city || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).city || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">State</p>
-                    <p className="font-medium">{(selectedDoctor as any).state || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).state || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Country</p>
-                    <p className="font-medium">{(selectedDoctor as any).country || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).country || notAvailableLabel}</p>
                   </div>
                 </div>
               </div>
@@ -1677,15 +1683,15 @@ const CentralAdmin = () => {
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Hospital Affiliation</p>
-                    <p className="font-medium">{(selectedDoctor as any).hospital_affiliation || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).hospital_affiliation || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Experience</p>
-                    <p className="font-medium">{selectedDoctor.experience || 'N/A'}</p>
+                    <p className="font-medium">{selectedDoctor.experience || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">License Number</p>
-                    <p className="font-medium">{selectedDoctor.license_number || 'N/A'}</p>
+                    <p className="font-medium">{selectedDoctor.license_number || notAvailableLabel}</p>
                   </div>
                 </div>
               </div>
@@ -1696,11 +1702,11 @@ const CentralAdmin = () => {
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">ID Type</p>
-                    <p className="font-medium capitalize">{(selectedDoctor as any).identification_type?.replace('_', ' ') || 'N/A'}</p>
+                    <p className="font-medium capitalize">{(selectedDoctor as any).identification_type?.replace('_', ' ') || notAvailableLabel}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">ID Number</p>
-                    <p className="font-medium">{(selectedDoctor as any).identification_number || 'N/A'}</p>
+                    <p className="font-medium">{(selectedDoctor as any).identification_number || notAvailableLabel}</p>
                   </div>
                 </div>
               </div>
@@ -1781,11 +1787,11 @@ const CentralAdmin = () => {
                 <div className="space-y-3">
                   <div className="p-4 rounded-lg bg-muted/50">
                     <p className="text-sm mb-2">
-                      <span className="font-medium">Verification Date:</span> {new Date(selectedDoctor.verification_date).toLocaleDateString()}
+                      <span className="font-medium">Verification Date:</span> {formatDate(selectedDoctor.verification_date)}
                     </p>
                     {(selectedDoctor as any).verified_at && (
                       <p className="text-sm">
-                        <span className="font-medium">Verified At:</span> {new Date((selectedDoctor as any).verified_at).toLocaleString()}
+                        <span className="font-medium">Verified At:</span> {formatDateTime((selectedDoctor as any).verified_at)}
                       </p>
                     )}
                   </div>

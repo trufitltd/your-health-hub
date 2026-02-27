@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Star, Trash2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useLanguage } from '@/contexts/LanguageContext';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,6 +30,7 @@ interface PatientWithStats {
 }
 
 export function PatientsTable() {
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
   const deletePatient = useMutation({
@@ -167,7 +169,7 @@ export function PatientsTable() {
                         <p className="text-lg font-bold">{patient.average_rating.toFixed(1)}</p>
                       </>
                     ) : (
-                      <p className="text-sm text-muted-foreground">N/A</p>
+                      <p className="text-sm text-muted-foreground">{t('specialists.defaults.notAvailable', 'N/A')}</p>
                     )}
                   </div>
                 </div>
