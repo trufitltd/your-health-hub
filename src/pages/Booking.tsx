@@ -13,8 +13,8 @@ export default function BookingPage() {
         // Not authenticated: Redirect to login with return path
         navigate('/auth?redirect=/booking');
       } else {
-        // Authenticated: Redirect to patient portal with booking action
-        navigate('/patient-portal?action=book');
+        // Authenticated: Start booking from doctor discovery
+        navigate('/doctor-discovery');
       }
     }
   }, [user, isLoading, navigate]);
