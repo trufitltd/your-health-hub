@@ -10,7 +10,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List
+  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List, Download
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +48,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
+import { usePwaInstall } from '@/hooks/usePwaInstall';
 import {
   formatAppointmentStatusLabel,
   normalizeAppointmentStatus,
@@ -167,6 +168,7 @@ const DoctorPortal = () => {
   const [isRescheduling, setIsRescheduling] = useState(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
+  const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const unreadReviewsCount = unreadReviewIds.length;
@@ -1902,6 +1904,28 @@ const DoctorPortal = () => {
     navigate('/');
   };
 
+  const handleInstallApp = async () => {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/i.test(ua);
+    const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
+    if (isIOS || isInAppBrowser) {
+      navigate('/install');
+      return;
+    }
+
+    const result = await promptInstall();
+    if (result === 'accepted') {
+      toast({ title: 'Installed', description: 'MyEdoctor has been installed successfully.' });
+      return;
+    }
+    if (result === 'dismissed') {
+      toast({ title: 'Install cancelled', description: 'You can install the app any time from this button.' });
+      return;
+    }
+    if (result === 'already_installed') return;
+    navigate('/install');
+  };
+
   const formatNaira = (value: number) => `₦${Math.round(value).toLocaleString()}`;
 
   const submitWithdrawalRequest = () => {
@@ -1940,6 +1964,13 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
+              <Link to="/install" className="hidden md:block">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Download className="w-4 h-4" />
+                  Download App
+                </Button>
+              </Link>
+
               {/* Availability Toggle */}
               <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
@@ -1950,6 +1981,30 @@ const DoctorPortal = () => {
                   className="ml-1"
                 />
               </div>
+
+              {!isPwaInstalled && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="hidden md:inline-flex"
+                    onClick={handleInstallApp}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Install App
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="md:hidden"
+                    onClick={handleInstallApp}
+                    aria-label="Install app"
+                  >
+                    <Download className="w-5 h-5" />
+                  </Button>
+                </>
+              )}
 
               <Button
                 variant="ghost"
@@ -2114,6 +2169,20 @@ const DoctorPortal = () => {
                 </div>
               </motion.div>
             )}
+
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm">
+                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                </p>
+                <Link to="/install">
+                  <Button size="sm" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    Open Install Page
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
 
             {/* Verification Status Banner */}
             {doctorRegistration?.verification_status === 'pending' && (
