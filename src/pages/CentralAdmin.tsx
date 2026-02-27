@@ -38,6 +38,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
+import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
 import { useLocaleFormatter } from '@/lib/locale';
@@ -137,11 +139,18 @@ const CentralAdmin = () => {
 
       const doctorsWithStats = await Promise.all(
         doctorsData.map(async (doc) => {
-          const { count: consultationCount } = await supabase
+          const { data: consultationRows, error: consultationError } = await supabase
             .from('appointments')
-            .select('id', { count: 'exact', head: true })
-            .eq('doctor_id', doc.user_id)
-            .eq('status', 'completed');
+            .select('status')
+            .eq('doctor_id', doc.user_id);
+
+          if (consultationError) {
+            console.error('Error fetching consultation count for doctor:', doc.user_id, consultationError);
+          }
+
+          const consultationCount = (consultationRows || []).filter(
+            (row: { status?: string | null }) => normalizeAppointmentStatus(row.status) === 'completed',
+          ).length;
 
           const { data: ratingRows, error: ratingError } = await supabase
             .from('appointments')
@@ -190,7 +199,10 @@ const CentralAdmin = () => {
         return [];
       }
       
-      return data || [];
+      return (data || []).map((apt: any) => ({
+        ...apt,
+        status: normalizeAppointmentStatus(apt.status),
+      }));
     },
     enabled: !!user && isAdmin,
   });
@@ -749,6 +761,7 @@ const CentralAdmin = () => {
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
+                    { id: 'pricing', label: 'Pricing', icon: TrendingUp },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -868,6 +881,7 @@ const CentralAdmin = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
 
@@ -1404,6 +1418,11 @@ const CentralAdmin = () => {
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+
+              {/* Pricing Tab */}
+              <TabsContent value="pricing" className="space-y-6">
+                <PricingManagementPanel />
               </TabsContent>
 
               {/* Quality Assurance Tab */}

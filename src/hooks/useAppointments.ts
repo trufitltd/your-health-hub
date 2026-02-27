@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useEffect } from 'react';
+import { normalizeAppointmentStatus, normalizeRescheduleRequestStatus } from '@/services/marketplaceTypes';
 
 export interface Appointment {
   id: string;
@@ -12,8 +13,23 @@ export interface Appointment {
   time: string;
   type: 'Video' | 'Audio';
   notes: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  status: 'pending_payment' | 'pending_approval' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
   created_at: string;
+  duration_minutes?: number | null;
+  final_price?: number | null;
+  price_breakdown?: Record<string, unknown> | null;
+  reschedule_request_status?: 'none' | 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired' | null;
+  reschedule_requested_by?: 'patient' | 'doctor' | null;
+  reschedule_requested_at?: string | null;
+  reschedule_decision_at?: string | null;
+  reschedule_proposed_date?: string | null;
+  reschedule_proposed_time?: string | null;
+  reschedule_proposed_duration_minutes?: number | null;
+  reschedule_proposed_consultation_type?: 'chat' | 'voice' | 'video' | null;
+  reschedule_proposed_final_price?: number | null;
+  reschedule_upgrade_amount?: number | null;
+  reschedule_request_note?: string | null;
+  reschedule_response_note?: string | null;
 }
 
 /**
@@ -38,7 +54,13 @@ export const useAppointments = () => {
       
       // Fetch doctor profile pictures
       const doctorIds = (data || []).map(apt => apt.doctor_id).filter(Boolean);
-      if (doctorIds.length === 0) return data as Appointment[];
+      if (doctorIds.length === 0) {
+        return (data || []).map((apt: any) => ({
+          ...apt,
+          status: normalizeAppointmentStatus(apt.status),
+          reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+        })) as Appointment[];
+      }
       
       const { data: doctorData } = await supabase
         .from('doctor_registrations')
@@ -47,8 +69,10 @@ export const useAppointments = () => {
       
       const doctorPictureMap = new Map(doctorData?.map(d => [d.user_id, d.profile_picture_url]) || []);
       
-      return (data || []).map(apt => ({
+      return (data || []).map((apt: any) => ({
         ...apt,
+        status: normalizeAppointmentStatus(apt.status),
+        reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
         doctor_profile_picture: doctorPictureMap.get(apt.doctor_id) || null
       })) as Appointment[];
     },

@@ -35,7 +35,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { useAuth } from '@/hooks/useAuth';
-import { useAppointments } from '@/hooks/useAppointments';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
@@ -51,7 +50,15 @@ import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
-import { LanguageSelector } from '@/components/LanguageSelector';
+import {
+  formatAppointmentStatusLabel,
+  normalizeAppointmentStatus,
+  normalizeRescheduleRequestStatus,
+  type AppointmentStatus,
+} from '@/services/marketplaceTypes';
+import { WalletService } from '@/services/WalletService';
+import { PatientWalletService } from '@/services/PatientWalletService';
+import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
@@ -102,9 +109,14 @@ const formatDateKey = (date: Date) => {
 };
 
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
-  pending: {
+  pending_payment: {
     dot: '#d97706',
     bg: '#d97706',
+    text: '#ffffff'
+  },
+  pending_approval: {
+    dot: '#b45309',
+    bg: '#b45309',
     text: '#ffffff'
   },
   confirmed: {
@@ -112,19 +124,24 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     bg: '#0f8f76',
     text: '#ffffff'
   },
+  in_progress: {
+    dot: '#2563eb',
+    bg: '#2563eb',
+    text: '#ffffff'
+  },
   completed: {
     dot: '#16a34a',
     bg: '#16a34a',
     text: '#ffffff'
   },
-  rejected: {
-    dot: '#dc2626',
-    bg: '#dc2626',
-    text: '#ffffff'
-  },
   cancelled: {
     dot: '#6b7280',
     bg: '#6b7280',
+    text: '#ffffff'
+  },
+  no_show: {
+    dot: '#dc2626',
+    bg: '#dc2626',
     text: '#ffffff'
   },
   default: {
@@ -133,6 +150,16 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     text: '#ffffff'
   }
 } as const;
+
+const PAST_CONFIRMED_CALENDAR_STYLE = {
+  dot: '#d97706',
+  bg: '#f59e0b',
+  text: '#ffffff',
+} as const;
+
+type WalletTransactionRow = {
+  status: string | null;
+};
 
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -165,8 +192,8 @@ const DoctorPortal = () => {
     notes: string | null;
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all'>('confirmed');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
@@ -174,6 +201,14 @@ const DoctorPortal = () => {
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
+  const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
+  const [withdrawalAmount, setWithdrawalAmount] = useState('');
+  const [withdrawalNarration, setWithdrawalNarration] = useState('');
+  const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
+  const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleTime, setRescheduleTime] = useState('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
@@ -426,6 +461,24 @@ const DoctorPortal = () => {
   
   // Fetch doctor earnings
   const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
+  const { data: doctorWallet, isLoading: walletLoading } = useQuery({
+    queryKey: ['doctor-wallet', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      return WalletService.getDoctorWallet(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: walletTransactions = [], isLoading: walletTransactionsLoading } = useQuery({
+    queryKey: ['doctor-wallet-transactions', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      return WalletService.getWalletTransactions(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -755,7 +808,14 @@ const DoctorPortal = () => {
       const patientIds = appointments.map(apt => apt.patient_id).filter(Boolean);
       console.log('Patient IDs:', patientIds);
       
-      if (patientIds.length === 0) return appointments.map(apt => ({ ...apt, patient_age: null }));
+      if (patientIds.length === 0) {
+        return appointments.map((apt: any) => ({
+          ...apt,
+          status: normalizeAppointmentStatus(apt.status),
+          reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+          patient_age: null,
+        }));
+      }
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
@@ -766,8 +826,10 @@ const DoctorPortal = () => {
       
       // Merge the data
       const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
-      return appointments.map(apt => ({
+      return appointments.map((apt: any) => ({
         ...apt,
+        status: normalizeAppointmentStatus(apt.status),
+        reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
         patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
         patient_profile_picture: patientDataMap.get(apt.patient_id)?.profile_picture_url || null
@@ -776,58 +838,252 @@ const DoctorPortal = () => {
     enabled: !!user?.id,
   });
 
-  const handleAcceptRequest = async (appointmentId: string) => {
+  const handleDeclineRequest = async (appointmentOrId: string | any) => {
+    const appointmentId = typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id;
+    const appointment =
+      (typeof appointmentOrId === 'string'
+        ? doctorVisibleAppointments.find((apt) => apt.id === appointmentOrId)
+        : appointmentOrId) || null;
+    const pendingReschedule = appointment ? isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null }) : false;
+
+    if (!appointmentId) return;
+
     try {
-      console.log('Accepting appointment:', appointmentId, 'User ID:', user?.id);
-      const { data, error } = await supabase
-        .from('appointments')
-        .update({ status: 'confirmed' })
-        .eq('id', appointmentId);
-      
-      if (error) {
-        console.error('Error accepting appointment:', error);
-        throw error;
+      if (pendingReschedule) {
+        await AppointmentRescheduleService.respondToReschedule({
+          appointmentId,
+          action: 'decline',
+        });
+        toast({
+          title: 'Reschedule declined',
+          description: 'The current appointment remains unchanged.',
+        });
+        refetch();
+        return;
       }
-      
-      console.log('Appointment accepted successfully:', data);
-      toast({ title: 'Accepted', description: 'Appointment has been confirmed.' });
+
+      console.log('Cancelling appointment:', appointmentId, 'User ID:', user?.id);
+      const result = await PatientWalletService.cancelAppointmentWithRefund(appointmentId, 'Doctor cancelled appointment');
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Appointment cancelled',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to the patient wallet.`
+          : 'Appointment has been cancelled.',
+      });
       refetch();
     } catch (error) {
-      console.error('Failed to accept appointment:', error);
-      toast({ title: 'Error', description: 'Failed to accept appointment.' });
+      console.error('Failed to cancel appointment:', error);
+      toast({ title: 'Error', description: 'Failed to cancel appointment.' });
     }
   };
 
-  const handleDeclineRequest = async (appointmentId: string) => {
+  const handleApproveRequest = async (appointmentOrId: string | any) => {
+    if (!user?.id) return;
+    const appointmentId = typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id;
+    const appointment =
+      (typeof appointmentOrId === 'string'
+        ? doctorVisibleAppointments.find((apt) => apt.id === appointmentOrId)
+        : appointmentOrId) || null;
+    const pendingReschedule = appointment ? isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null }) : false;
+
+    if (!appointmentId) return;
+
     try {
-      console.log('Declining appointment:', appointmentId, 'User ID:', user?.id);
-      const { data, error } = await supabase
-        .from('appointments')
-        .update({ status: 'rejected' })
-        .eq('id', appointmentId);
-      
-      if (error) {
-        console.error('Error declining appointment:', error);
-        throw error;
+      if (pendingReschedule) {
+        const result = await AppointmentRescheduleService.respondToReschedule({
+          appointmentId,
+          action: 'approve',
+        });
+        const charged = Number(result.charged_upgrade_amount || 0);
+        toast({
+          title: 'Reschedule approved',
+          description: charged > 0
+            ? `Appointment updated. ₦${charged.toLocaleString()} charged from patient wallet.`
+            : 'Appointment updated to the proposed slot.',
+        });
+        refetch();
+        return;
       }
-      
-      console.log('Appointment declined successfully:', data);
-      toast({ title: 'Declined', description: 'Appointment has been declined.' });
+
+      const { error } = await supabase
+        .from('appointments')
+        .update({ status: 'confirmed' })
+        .eq('id', appointmentId)
+        .eq('doctor_id', user.id)
+        .eq('status', 'pending_approval');
+
+      if (error) throw error;
+
+      toast({
+        title: 'Appointment confirmed',
+        description: 'The appointment has been approved and moved to confirmed.',
+      });
       refetch();
     } catch (error) {
-      console.error('Failed to decline appointment:', error);
-      toast({ title: 'Error', description: 'Failed to decline appointment.' });
+      console.error('Failed to approve appointment:', error);
+      toast({ title: 'Error', description: 'Failed to approve appointment.' });
+    }
+  };
+
+  const handleMarkNoShow = async (appointmentId: string) => {
+    try {
+      const result = await PatientWalletService.markAppointmentNoShow(appointmentId, 'Doctor marked patient as no-show');
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Marked as no-show',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to the patient wallet.`
+          : 'Appointment has been marked as no-show.',
+      });
+      refetch();
+    } catch (error) {
+      console.error('Failed to mark no-show:', error);
+      toast({ title: 'Error', description: 'Failed to mark appointment as no-show.' });
+    }
+  };
+
+  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
+    getAppointmentDateTime(apt).getTime() <= Date.now();
+  const isPendingRescheduleRequest = (apt: { reschedule_request_status?: string | null }) =>
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isPatientRequestedReschedule = (apt: { reschedule_requested_by?: string | null }) =>
+    (apt.reschedule_requested_by || '').trim().toLowerCase() === 'patient';
+  const isDoctorRequestedReschedule = (apt: { reschedule_requested_by?: string | null }) =>
+    (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
+  const getCalendarAppointmentDate = (apt: {
+    date: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_date || apt.date)
+      : apt.date
+  );
+  const getCalendarAppointmentTime = (apt: {
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_time || apt.time)
+      : apt.time
+  );
+  const hasEffectiveAppointmentTimePassed = (apt: {
+    date: string;
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => {
+    const dateValue = getCalendarAppointmentDate(apt);
+    const timeValue = getCalendarAppointmentTime(apt);
+    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    if (!Number.isNaN(effectiveDateTime.getTime())) {
+      return effectiveDateTime.getTime() <= Date.now();
+    }
+    return hasAppointmentTimePassed(apt);
+  };
+  const toTimeInputValue = (value: string) => {
+    const trimmed = value.trim();
+    if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+    if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed.slice(0, 5);
+
+    const twelveHour = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHour) {
+      const hourValue = parseInt(twelveHour[1], 10);
+      const minuteValue = twelveHour[2];
+      const period = twelveHour[3].toUpperCase();
+      const normalizedHour = period === 'PM' ? (hourValue % 12) + 12 : hourValue % 12;
+      return `${String(normalizedHour).padStart(2, '0')}:${minuteValue}`;
+    }
+
+    return '';
+  };
+
+  const doctorVisibleAppointments = useMemo(
+    () => (fetchedAppointments || []).filter((apt) => apt.status !== 'pending_payment'),
+    [fetchedAppointments],
+  );
+  const rescheduleAppointment = useMemo(
+    () => doctorVisibleAppointments.find((apt) => apt.id === rescheduleAppointmentId) || null,
+    [doctorVisibleAppointments, rescheduleAppointmentId],
+  );
+
+  const openRescheduleDialog = (appointment: any) => {
+    if (isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null })) {
+      toast({
+        title: 'Request already pending',
+        description: 'A reschedule request is already awaiting a response.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setRescheduleAppointmentId(appointment.id || null);
+    setRescheduleDate(appointment.date || '');
+    setRescheduleTime(toTimeInputValue(String(appointment.time || '')));
+    setRescheduleDialogOpen(true);
+  };
+
+  const submitReschedule = async () => {
+    if (!rescheduleAppointmentId || !rescheduleAppointment) return;
+    if (!rescheduleDate || !rescheduleTime) {
+      toast({
+        title: 'Missing fields',
+        description: 'Select both date and time for rescheduling.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const normalizedTime = /^\d{2}:\d{2}$/.test(rescheduleTime) ? `${rescheduleTime}:00` : rescheduleTime;
+    const targetDateTime = new Date(`${rescheduleDate}T${normalizedTime}`);
+    if (Number.isNaN(targetDateTime.getTime()) || targetDateTime.getTime() <= Date.now()) {
+      toast({
+        title: 'Invalid date/time',
+        description: 'Choose a future appointment time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsRescheduling(true);
+    try {
+      await AppointmentRescheduleService.requestReschedule({
+        appointmentId: rescheduleAppointmentId,
+        proposedDate: rescheduleDate,
+        proposedTime: normalizedTime,
+        proposedDurationMinutes: Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30),
+        proposedFinalPrice: Number((rescheduleAppointment as { final_price?: number | null }).final_price || 0),
+      });
+
+      toast({
+        title: 'Reschedule requested',
+        description: 'Patient approval is required before this new slot is applied.',
+      });
+      setRescheduleDialogOpen(false);
+      setRescheduleAppointmentId(null);
+      refetch();
+    } catch (error) {
+      console.error('Failed to reschedule appointment:', error);
+      toast({
+        title: 'Reschedule failed',
+        description: 'Could not reschedule this appointment. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRescheduling(false);
     }
   };
 
   // Calculate upcoming appointments (next 24 hours) and next appointment
-  const today = new Date().toISOString().split('T')[0];
   const now = new Date();
   const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   
-  const upcomingSchedule = (fetchedAppointments || []).filter(apt => {
+  const upcomingSchedule = doctorVisibleAppointments.filter(apt => {
     const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-    return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'pending');
+    return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'in_progress');
   }).sort((a, b) => {
     const dateA = new Date(`${a.date}T${a.time}`);
     const dateB = new Date(`${b.date}T${b.time}`);
@@ -835,10 +1091,10 @@ const DoctorPortal = () => {
   });
   
   // Find next appointment
-  const upcomingAppointments = (fetchedAppointments || [])
+  const upcomingAppointments = doctorVisibleAppointments
     .filter(apt => {
       const aptDate = new Date(`${apt.date}T${apt.time}`);
-      return aptDate > now && (apt.status === 'confirmed' || apt.status === 'pending');
+      return aptDate > now && (apt.status === 'confirmed' || apt.status === 'in_progress');
     })
     .sort((a, b) => {
       const dateA = new Date(`${a.date}T${a.time}`);
@@ -865,22 +1121,43 @@ const DoctorPortal = () => {
       : `${formatNumber(hours)}${hoursLabel}`;
   };
 
-  // Filter pending requests for the current doctor
-  const pendingRequests = (fetchedAppointments || []).filter(apt => {
-    console.log('Checking appointment:', apt.id, 'Status:', apt.status);
-    return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
+  // Pending doctor-approval queue (only paid appointments).
+  const pendingRequests = doctorVisibleAppointments.filter(apt => {
+    const isPending = apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+    if (!isPending) return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }
+    return true;
     }).map(apt => ({
     id: apt.id,
+    appointment: apt,
     patient: apt.patient_name || 'Unknown Patient',
-    age: apt.patient_age || t('specialists.defaults.notAvailable', 'N/A'),
-    requestedDate: apt.date,
-    requestedTime: apt.time,
-    reason: apt.notes || 'No reason provided',
+    age: apt.patient_age || 'N/A',
+    requestedDate: getCalendarAppointmentDate(apt as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }),
+    requestedTime: getCalendarAppointmentTime(apt as {
+      time: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_time?: string | null;
+    }),
+    reason: (apt as { reschedule_request_note?: string | null }).reschedule_request_note || apt.notes || 'No reason provided',
+    isReschedulePending: isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+    requestedBy: (apt as { reschedule_requested_by?: string | null }).reschedule_requested_by || null,
+    proposedDate: (apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || null,
+    proposedTime: (apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || null,
     priority: 'normal',
   }));
   
-  console.log('Final pending requests:', pendingRequests);
-
   // Move stats calculation after pendingRequests
   const stats = {
     totalPatients: doctorStats?.totalPatients || 0,
@@ -889,48 +1166,97 @@ const DoctorPortal = () => {
     earnings: earningsData?.thisMonthEarnings || 0,
     rating: doctorStats?.rating || 0,
   };
+  const confirmedCount = doctorVisibleAppointments.filter((apt) => {
+    if (apt.status !== 'confirmed') return false;
+    if ((apt as any).date && (apt as any).time) return !hasAppointmentTimePassed(apt as { date: string; time: string });
+    return true;
+  }).length;
+  const walletAvailableBalance = Number(doctorWallet?.available_balance || 0);
+  const walletPendingBalance = Number(doctorWallet?.pending_balance || 0);
+  const pendingWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'pending').length;
+  const availableWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'available').length;
+  const withdrawalAmountNumber = Number(withdrawalAmount || 0);
+  const canRequestWithdrawal =
+    withdrawalAmountNumber > 0 &&
+    withdrawalAmountNumber <= walletAvailableBalance;
 
   const filteredAppointmentsByStatus = useMemo(() => {
-    if (!fetchedAppointments) return [];
-    const now = new Date();
+    if (!doctorVisibleAppointments) return [];
     
     let filtered;
     switch (appointmentStatusFilter) {
-      case 'pending':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'pending');
+      case 'pending_approval':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) => apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
-      case 'upcoming':
-        filtered = fetchedAppointments.filter(apt => {
-          const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-          return aptDateTime > now && apt.status === 'confirmed';
-        });
+      case 'confirmed':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) =>
+            (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'in_progress':
+        filtered = doctorVisibleAppointments.filter((apt) => apt.status === 'in_progress');
         break;
       case 'completed':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'completed');
+        filtered = doctorVisibleAppointments.filter(apt => apt.status === 'completed');
         break;
-      case 'rejected':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'rejected');
+      case 'cancelled':
+        filtered = doctorVisibleAppointments.filter(apt => apt.status === 'cancelled');
+        break;
+      case 'no_show':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) => apt.status === 'no_show' && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'all':
       default:
-        filtered = fetchedAppointments;
+        filtered = doctorVisibleAppointments;
     }
     
-    // Sort: pending by created_at desc, upcoming by date asc, completed by date desc
+    // Sort: approval queue by created_at desc, active by date asc, others by latest first.
     return filtered.sort((a, b) => {
-      if (appointmentStatusFilter === 'pending') {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      } else if (appointmentStatusFilter === 'upcoming') {
+      if (appointmentStatusFilter === 'pending_approval') {
+        const aRescheduleAt = (a as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const bRescheduleAt = (b as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const aTs = new Date(aRescheduleAt || a.created_at).getTime();
+        const bTs = new Date(bRescheduleAt || b.created_at).getTime();
+        return bTs - aTs;
+      }
+
+      if (appointmentStatusFilter === 'confirmed') {
+        const nowTs = Date.now();
+        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const aIsPast = dateTimeA < nowTs;
+        const bIsPast = dateTimeB < nowTs;
+
+        if (aIsPast !== bIsPast) {
+          return aIsPast ? 1 : -1;
+        }
+
+        return aIsPast ? (dateTimeB - dateTimeA) : (dateTimeA - dateTimeB);
+      }
+
+      if (appointmentStatusFilter === 'in_progress') {
         const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
         const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
         return dateTimeA - dateTimeB;
-      } else {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
-        return dateTimeB - dateTimeA;
       }
+
+      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      return dateTimeB - dateTimeA;
     });
-  }, [fetchedAppointments, appointmentStatusFilter]);
+  }, [doctorVisibleAppointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (appointmentStatusFilter === 'in_progress') {
+      setAppointmentStatusFilter('confirmed');
+    }
+  }, [appointmentStatusFilter]);
 
   useEffect(() => {
     if (appointmentViewMode !== 'calendar') return;
@@ -940,15 +1266,24 @@ const DoctorPortal = () => {
       return;
     }
 
-    setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
+    setSelectedCalendarDate(getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }));
   }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
 
   const appointmentsByDate = useMemo(() => {
     return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
-      if (!acc[apt.date]) {
-        acc[apt.date] = [];
+      const dateKey = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
       }
-      acc[apt.date].push(apt);
+      acc[dateKey].push(apt);
       return acc;
     }, {});
   }, [filteredAppointmentsByStatus]);
@@ -963,10 +1298,30 @@ const DoctorPortal = () => {
       })
       .map((apt) => apt.status);
   }, [filteredAppointmentsByStatus]);
+  const hasPastConfirmedInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => apt.status === 'confirmed' && hasAppointmentTimePassed(apt)),
+    [filteredAppointmentsByStatus],
+  );
+  const hasPendingRescheduleInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
+    [filteredAppointmentsByStatus],
+  );
 
   const calendarDialogDayAppointments = useMemo(() => {
     if (!calendarDialogDate) return [];
-    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => {
+      const timeA = getCalendarAppointmentTime(a as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const timeB = getCalendarAppointmentTime(b as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      return timeA.localeCompare(timeB);
+    });
   }, [appointmentsByDate, calendarDialogDate]);
 
   const calendarFocusedAppointment = useMemo(() => {
@@ -993,24 +1348,48 @@ const DoctorPortal = () => {
 
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
-      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+      const isPastConfirmed = apt.status === 'confirmed' && hasAppointmentTimePassed(apt);
+      const eventDate = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      const eventTime = getCalendarAppointmentTime(apt as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const styles = pendingReschedule
+        ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
+        : isPastConfirmed
+        ? PAST_CONFIRMED_CALENDAR_STYLE
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       return {
         id: apt.id,
         title: apt.patient_name || 'Unknown Patient',
-        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        start: `${eventDate}T${normalizeTime(eventTime)}`,
         allDay: false,
         backgroundColor: styles.bg,
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
           status: apt.status,
-          appointmentDate: apt.date
+          appointmentDate: eventDate,
+          isPastConfirmed,
+          isPendingReschedule: pendingReschedule,
         }
       };
     });
   }, [filteredAppointmentsByStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]
+    ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    })
+    : 'empty'}`;
 
   const handleCalendarDayClick = (dateStr: string) => {
     const dayKey = dateStr.slice(0, 10);
@@ -1045,8 +1424,19 @@ const DoctorPortal = () => {
       ? formatTime(arg.event.start, { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? getAppointmentStatusLabel(eventStatus) : t('common.appointments', 'Appointments');
-    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    const isPastConfirmed = Boolean(arg.event.extendedProps.isPastConfirmed);
+    const isPendingReschedule = Boolean(arg.event.extendedProps.isPendingReschedule);
+    const eventStatusLabel = eventStatus ? formatAppointmentStatusLabel(eventStatus) : 'Appointment';
+    const pendingRescheduleSuffix = t('doctorPortal.calendar.reschedulePendingSuffix', ' (Reschedule Pending)');
+    const timePassedSuffix = t('doctorPortal.calendar.timePassedSuffix', ' (Time Passed)');
+    arg.el.setAttribute(
+      'title',
+      `${arg.event.title} • ${eventTime} • ${eventStatusLabel}${isPendingReschedule ? pendingRescheduleSuffix : ''}${isPastConfirmed ? timePassedSuffix : ''}`,
+    );
+    if (isPastConfirmed) {
+      arg.el.style.boxShadow = 'inset 0 0 0 1px rgba(120, 53, 15, 0.35)';
+      arg.el.style.opacity = '0.9';
+    }
     arg.el.style.cursor = 'pointer';
   };
 
@@ -1081,10 +1471,22 @@ const DoctorPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span>{getAppointmentStatusLabel(status)}</span>
+                  <span>{formatAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
+            {hasPastConfirmedInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PAST_CONFIRMED_CALENDAR_STYLE.dot }} />
+                <span>{t('doctorPortal.calendar.confirmedTimePassed', 'Confirmed (Time Passed)')}</span>
+              </div>
+            )}
+            {hasPendingRescheduleInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#2563eb' }} />
+                <span>{t('doctorPortal.calendar.reschedulePending', 'Reschedule Pending')}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -1093,7 +1495,15 @@ const DoctorPortal = () => {
             key={calendarRenderKey}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
-            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            initialDate={selectedCalendarDate || (
+              filteredAppointmentsByStatus[0]
+                ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+                  date: string;
+                  reschedule_request_status?: string | null;
+                  reschedule_proposed_date?: string | null;
+                })
+                : undefined
+            )}
             headerToolbar={{
               left: 'prev,next today',
               center: 'title',
@@ -1128,7 +1538,7 @@ const DoctorPortal = () => {
                   : t('common.appointments', 'Appointments')}
               </DialogTitle>
               <DialogDescription>
-                Review appointments for the selected day.
+                {t('doctorPortal.calendar.reviewAppointmentsForDay', 'Review appointments for the selected day.')}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
@@ -1144,11 +1554,23 @@ const DoctorPortal = () => {
                         <Clock className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
                         {getStatusBadge(apt.status)}
+                        {getRescheduleRequestBadge(apt as {
+                          reschedule_request_status?: string | null;
+                          reschedule_requested_by?: string | null;
+                        })}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
-                        {apt.patient_name || 'Unknown Patient'}
+                        {apt.patient_name || t('doctorPortal.defaults.unknownPatient', 'Unknown Patient')}
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
+                      {isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) && (
+                        <p className="text-xs text-blue-700 mt-1 truncate">
+                          {t('doctorPortal.calendar.proposedSlotPrefix', 'Proposed')}:{' '}
+                          {new Date(
+                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                          ).toLocaleDateString()} {t('common.at', 'at')} {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('doctorPortal.notes.none', 'No notes')}</p>
                     </div>
                     <Button
                       size="sm"
@@ -1159,7 +1581,7 @@ const DoctorPortal = () => {
                         setCalendarEventDialogOpen(true);
                       }}
                     >
-                      View
+                      {t('common.view', 'View')}
                     </Button>
                   </div>
                 ))
@@ -1178,13 +1600,13 @@ const DoctorPortal = () => {
           <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>{t('common.appointments', 'Appointments')}</DialogTitle>
-              <DialogDescription>Manage the selected appointment.</DialogDescription>
+              <DialogDescription>{t('doctorPortal.calendar.manageSelectedAppointment', 'Manage the selected appointment.')}</DialogDescription>
             </DialogHeader>
             {calendarFocusedAppointment && (
               <div className="space-y-4">
                 <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
                   <p className="text-sm font-semibold">
-                    {calendarFocusedAppointment.patient_name || 'Unknown Patient'}
+                    {calendarFocusedAppointment.patient_name || t('doctorPortal.defaults.unknownPatient', 'Unknown Patient')}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                     <span>{formatDate(calendarFocusedAppointment.date)}</span>
@@ -1192,7 +1614,27 @@ const DoctorPortal = () => {
                     <span>{formatClockTime(calendarFocusedAppointment.time)}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
-                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
+                  {getRescheduleRequestBadge(calendarFocusedAppointment as {
+                    reschedule_request_status?: string | null;
+                    reschedule_requested_by?: string | null;
+                  })}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50/60 p-2 text-xs text-blue-900">
+                      <p className="font-medium">{t('doctorPortal.calendar.proposedSlot', 'Proposed Slot')}</p>
+                      <p>
+                        {new Date(
+                          String((calendarFocusedAppointment as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || calendarFocusedAppointment.date)
+                        ).toLocaleDateString()}{' '}
+                        {t('common.at', 'at')} {(calendarFocusedAppointment as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || calendarFocusedAppointment.time}
+                      </p>
+                    </div>
+                  )}
+                  {calendarFocusedAppointment.status === 'confirmed' && hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    <p className="text-xs font-medium text-amber-700">
+                      {t('doctorPortal.calendar.appointmentTimePassedHint', 'Appointment time passed. Keep this in confirmed until you mark no-show or complete follow-up.')}
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || t('doctorPortal.notes.noneProvided', 'No notes provided.')}</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
@@ -1208,7 +1650,8 @@ const DoctorPortal = () => {
                       {t('doctorPortal.actions.viewFolder', 'View Folder')}
                     </Button>
                   )}
-                  {calendarFocusedAppointment.status === 'confirmed' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') && (
                     <JoinConsultationButton
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={calendarFocusedAppointment.patient_name || ''}
@@ -1217,30 +1660,84 @@ const DoctorPortal = () => {
                       size="sm"
                     />
                   )}
-                  {calendarFocusedAppointment.status === 'pending' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') &&
+                    hasAppointmentTimePassed(calendarFocusedAppointment) && (
                     <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          openRescheduleDialog(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.reschedule', 'Reschedule')}
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
                         className="text-destructive border-destructive/30"
                         onClick={() => {
-                          handleDeclineRequest(calendarFocusedAppointment.id);
+                          handleMarkNoShow(calendarFocusedAppointment.id);
                           setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Decline
+                        {t('doctorPortal.actions.markNoShow', 'Mark No Show')}
+                      </Button>
+                    </>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    calendarFocusedAppointment.status === 'pending_approval' && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          handleApproveRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.approve', 'Approve')}
                       </Button>
                       <Button
                         size="sm"
-                        className="bg-success hover:bg-success/90"
+                        variant="destructive"
                         onClick={() => {
-                          handleAcceptRequest(calendarFocusedAppointment.id);
+                          handleDeclineRequest(calendarFocusedAppointment);
                           setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Accept
+                        {t('common.cancel', 'Cancel')}
                       </Button>
                     </>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isPatientRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          handleApproveRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.approveReschedule', 'Approve Reschedule')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          handleDeclineRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.declineRequest', 'Decline Request')}
+                      </Button>
+                    </>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isDoctorRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
+                    <Badge variant="secondary">{t('doctorPortal.badges.waitingPatientApproval', 'Waiting for patient approval')}</Badge>
                   )}
                 </div>
               </div>
@@ -1255,7 +1752,7 @@ const DoctorPortal = () => {
   const patientsList = useMemo(() => {
     const patientsMap = new Map<string, any>();
     
-    (fetchedAppointments || []).forEach(apt => {
+    doctorVisibleAppointments.forEach(apt => {
       if (apt.patient_id && apt.patient_name) {
         if (!patientsMap.has(apt.patient_id)) {
           patientsMap.set(apt.patient_id, {
@@ -1298,7 +1795,7 @@ const DoctorPortal = () => {
 	    });
 
     return Array.from(patientsMap.values());
-  }, [fetchedAppointments]);
+  }, [doctorVisibleAppointments]);
 
   const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? 'Doctor';
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? '';
@@ -1516,68 +2013,45 @@ const DoctorPortal = () => {
     }
   };
 
-  const requireAuth = () => {
-    if (!user) {
-      toast({ title: 'Please sign in', description: 'You must be signed in to access this feature.' });
-      navigate('/auth');
-      return false;
-    }
-    return true;
-  };
-
   const getStatusBadge = (status: string) => {
     const statusLabel = getAppointmentStatusLabel(status);
     switch (status) {
-      case 'pending':
-      case 'requested':
-      case 'awaiting_approval':
-        return <Badge className="bg-warning/10 text-warning border-warning/20">{statusLabel}</Badge>;
+      case 'pending_payment':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">{t('appointmentStatus.pendingPayment', 'Pending Payment')}</Badge>;
+      case 'pending_approval':
+        return <Badge className="bg-amber-100 text-amber-700 border-amber-300">{t('appointmentStatus.pendingApproval', 'Pending Approval')}</Badge>;
       case 'confirmed':
-        return <Badge className="bg-success/10 text-success border-success/20">{statusLabel}</Badge>;
+        return <Badge className="bg-success/10 text-success border-success/20">{t('appointmentStatus.confirmed', 'Confirmed')}</Badge>;
+      case 'in_progress':
+        return <Badge className="bg-primary/10 text-primary border-primary/20">{t('appointmentStatus.inProgress', 'In Progress')}</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{statusLabel}</Badge>;
-      case 'in-progress':
-        return <Badge className="bg-primary/10 text-primary border-primary/20">{statusLabel}</Badge>;
-      case 'upcoming':
-        return <Badge variant="outline">{statusLabel}</Badge>;
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">{t('appointmentStatus.completed', 'Completed')}</Badge>;
       case 'cancelled':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{statusLabel}</Badge>;
-      case 'rejected':
-        return <Badge variant="destructive">{statusLabel}</Badge>;
+        return <Badge className="bg-slate-100 text-slate-700 border-slate-300">{t('appointmentStatus.cancelled', 'Cancelled')}</Badge>;
+      case 'no_show':
+        return <Badge variant="destructive">{t('appointmentStatus.noShow', 'No Show')}</Badge>;
       default:
-        return <Badge variant="outline">{statusLabel}</Badge>;
+        return <Badge variant="outline">{formatAppointmentStatusLabel(status)}</Badge>;
     }
   };
 
-  const getAppointmentStatusLabel = (status: string) => {
-    switch (status) {
-      case 'pending':
-      case 'requested':
-      case 'awaiting_approval':
-        return t('appointmentStatus.pending', 'Pending');
-      case 'confirmed':
-        return t('appointmentStatus.confirmed', 'Confirmed');
-      case 'completed':
-        return t('appointmentStatus.completed', 'Completed');
-      case 'rejected':
-        return t('appointmentStatus.rejected', 'Rejected');
-      case 'upcoming':
-        return t('appointmentStatus.upcoming', 'Upcoming');
-      case 'in-progress':
-        return t('doctorPortal.status.inProgress', 'In Progress');
-      case 'cancelled':
-        return t('doctorPortal.status.cancelled', 'Cancelled');
-      default:
-        return status;
+  const getRescheduleRequestBadge = (apt: {
+    reschedule_request_status?: string | null;
+    reschedule_requested_by?: string | null;
+  }) => {
+    if (!isPendingRescheduleRequest(apt)) return null;
+    if (isPatientRequestedReschedule(apt)) {
+      return <Badge className="bg-blue-100 text-blue-700 border-blue-300">{t('doctorPortal.badges.patientRescheduleRequest', 'Patient Reschedule Request')}</Badge>;
     }
+    return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-300">{t('doctorPortal.badges.doctorRescheduleRequest', 'Doctor Reschedule Request')}</Badge>;
   };
 
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
       case 'high':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Urgent</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{t('doctorPortal.priority.urgent', 'Urgent')}</Badge>;
       case 'normal':
-        return <Badge variant="outline">Normal</Badge>;
+        return <Badge variant="outline">{t('doctorPortal.priority.normal', 'Normal')}</Badge>;
       default:
         return <Badge variant="outline">{priority}</Badge>;
     }
@@ -1618,6 +2092,27 @@ const DoctorPortal = () => {
     }
     if (result === 'already_installed') return;
     navigate('/install');
+  };
+
+  const formatNaira = (value: number) => `₦${Math.round(value).toLocaleString()}`;
+
+  const submitWithdrawalRequest = () => {
+    if (!canRequestWithdrawal) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter an amount within your available balance.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    toast({
+      title: 'Withdrawal queue coming soon',
+      description: 'Your request flow is staged in UI. Backend payout processing will be enabled next.',
+    });
+    setWithdrawalDialogOpen(false);
+    setWithdrawalAmount('');
+    setWithdrawalNarration('');
   };
 
   return (
@@ -1944,10 +2439,10 @@ const DoctorPortal = () => {
             {/* Quick Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
               {[
-                { label: t('doctorPortal.labels.totalPatients', 'Total Patients'), value: statsLoading ? '...' : formatNumber(stats.totalPatients), icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: t('doctorPortal.labels.thisMonth', 'This Month'), value: statsLoading ? '...' : formatNumber(stats.consultationsThisMonth), icon: Calendar, color: 'bg-success/10 text-success' },
-                { label: t('appointmentStatus.pending', 'Pending'), value: formatNumber(stats.pendingRequests), icon: Bell, color: 'bg-warning/10 text-warning' },
-                { label: t('doctorPortal.labels.rating', 'Rating'), value: statsLoading ? '...' : (stats.rating > 0 ? formatNumber(stats.rating, { maximumFractionDigits: 1 }) : t('specialists.defaults.notAvailable', 'N/A')), icon: Star, color: 'bg-accent/10 text-accent' },
+                { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
+                { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
+                { label: 'Pending Approval', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
+                { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
               ].map((stat, index) => (
                 <motion.div
                   key={stat.label}
@@ -1998,7 +2493,7 @@ const DoctorPortal = () => {
                         ) : (
                           upcomingSchedule.slice(0, 4).map((apt) => (
                             <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${
-                              apt.status === 'confirmed' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
+                              (apt.status === 'confirmed' || apt.status === 'in_progress') ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
                             }`}>
                               <div className="flex items-center gap-3">
                                 <div className="relative">
@@ -2025,10 +2520,10 @@ const DoctorPortal = () => {
                     </CardContent>
                   </Card>
 
-                  {/* Pending Requests Preview */}
+                  {/* Pending Approval Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">{t('doctorPortal.headers.pendingRequests', 'Pending Requests')}</CardTitle>
+                      <CardTitle className="text-lg">Pending Approval</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
                         {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
@@ -2037,7 +2532,7 @@ const DoctorPortal = () => {
                       <div className="space-y-3">
                         {pendingRequests.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">{t('doctorPortal.empty.noPendingRequests', 'No pending requests')}</p>
+                            <p className="text-muted-foreground">No pending-approval appointments</p>
                           </div>
                         ) : (
                           pendingRequests.map((request) => (
@@ -2046,16 +2541,30 @@ const DoctorPortal = () => {
                                 <div className="flex items-center gap-2">
                                   <p className="font-medium text-sm">{request.patient}</p>
                                   {getPriorityBadge(request.priority)}
+                                  {request.isReschedulePending && (
+                                    <Badge className="bg-blue-100 text-blue-700 border-blue-300">Reschedule</Badge>
+                                  )}
                                 </div>
+                                {request.isReschedulePending && request.proposedDate && request.proposedTime && (
+                                  <p className="text-xs text-blue-700 mt-1">
+                                    Proposed: {new Date(request.proposedDate).toLocaleDateString()} at {request.proposedTime}
+                                  </p>
+                                )}
                                 <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
                               </div>
                               <div className="flex gap-2">
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
-                                  <XCircle className="w-4 h-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
-                                  <CheckCircle className="w-4 h-4" />
-                                </Button>
+                                {request.isReschedulePending && request.requestedBy === 'doctor' ? (
+                                  <Badge variant="secondary">Waiting patient</Badge>
+                                ) : (
+                                  <>
+                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleApproveRequest(request.appointment)}>
+                                      <CheckCircle className="w-4 h-4" />
+                                    </Button>
+                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.appointment)}>
+                                      <XCircle className="w-4 h-4" />
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </div>
                           ))
@@ -2153,39 +2662,55 @@ const DoctorPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-5 mb-6">
-                        <TabsTrigger value="pending" className="relative">
-                          {t('appointmentStatus.pending', 'Pending')}
+                      <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
+                        <TabsTrigger value="pending_approval" className="relative">
+                          Pending Approval
                           {stats.pendingRequests > 0 && (
                             <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
                               {formatNumber(stats.pendingRequests)}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="upcoming">{t('appointmentStatus.upcoming', 'Upcoming')}</TabsTrigger>
-                        <TabsTrigger value="completed">{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
-                        <TabsTrigger value="rejected">{t('appointmentStatus.rejected', 'Rejected')}</TabsTrigger>
-                        <TabsTrigger value="all">{t('common.all', 'All')}</TabsTrigger>
+                        <TabsTrigger value="confirmed" className="relative">
+                          Confirmed
+                          {confirmedCount > 0 && (
+                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                              {confirmedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="completed">Completed</TabsTrigger>
+                        <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
+                        <TabsTrigger value="no_show">No Show</TabsTrigger>
+                        <TabsTrigger value="all">All</TabsTrigger>
                       </TabsList>
 
-                      {/* Pending Tab Content */}
-                      <TabsContent value="pending" className="space-y-4">
+                      {/* Pending Approval Tab Content */}
+                      <TabsContent value="pending_approval" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
                           renderDoctorAppointmentsCalendar(
-                            t('doctorPortal.empty.noPendingRequests', 'No pending requests'),
-                            t('doctorPortal.empty.newRequestsWillAppear', 'New requests will appear here when patients book appointments')
+                            'No pending approvals',
+                            'Includes new paid bookings and reschedule requests awaiting action.'
                           )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">{t('doctorPortal.empty.noPendingRequests', 'No pending requests')}</p>
-                                <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.newRequestsWillAppear', 'New requests will appear here when patients book appointments')}</p>
+                                <p className="text-muted-foreground">No pending approvals</p>
+                                <p className="text-sm text-muted-foreground mt-2">Includes new bookings and reschedule requests awaiting action.</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const patientRequested = isPatientRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/40' : 'border-warning/30 bg-warning/5'
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="relative">
                                       <Avatar className="w-12 h-12">
@@ -2203,6 +2728,17 @@ const DoctorPortal = () => {
                                       <p className="text-sm text-muted-foreground">
                                         {formatDate(apt.date)} at {formatClockTime(apt.time)}
                                       </p>
+                                      {pendingReschedule && (
+                                        <p className="text-xs font-medium text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
+                                      {getRescheduleRequestBadge(apt as {
+                                        reschedule_request_status?: string | null;
+                                        reschedule_requested_by?: string | null;
+                                      })}
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
@@ -2212,34 +2748,53 @@ const DoctorPortal = () => {
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
-                                      {t('doctorPortal.actions.decline', 'Decline')}
-                                    </Button>
-                                    <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(apt.id)}>
-                                      {t('doctorPortal.actions.accept', 'Accept')}
-                                    </Button>
+                                    {pendingReschedule && patientRequested ? (
+                                      <>
+                                        <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                          Approve Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                          Decline Request
+                                        </Button>
+                                      </>
+                                    ) : pendingReschedule ? (
+                                      <Badge variant="secondary">Waiting for patient approval</Badge>
+                                    ) : (
+                                      <>
+                                        <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                          Approve
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                          Cancel
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
                       </TabsContent>
 
-                      {/* Upcoming Tab Content */}
-                      <TabsContent value="upcoming" className="space-y-4">
+                      {/* Confirmed Tab Content */}
+                      <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noUpcomingAppointments', 'No upcoming appointments'))
+                          renderDoctorAppointmentsCalendar('No confirmed or in-progress appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">{t('doctorPortal.empty.noUpcomingAppointments', 'No upcoming appointments')}</p>
+                                <p className="text-muted-foreground">No confirmed or in-progress appointments</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isPastConfirmed = hasAppointmentTimePassed(apt);
+                                return (
+                                <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                  isPastConfirmed ? 'border-amber-300/40 bg-amber-50/40' : 'border-primary/30 bg-primary/5'
+                                }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
                                       <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
@@ -2259,11 +2814,12 @@ const DoctorPortal = () => {
                                     </div>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">
-                                        {apt.patient_age
-                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
-                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
-                                      </p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      {isPastConfirmed && (
+                                        <p className="text-xs font-medium text-amber-700 mt-1">
+                                          Appointment time passed. Mark no-show or reschedule via patient follow-up.
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
@@ -2284,24 +2840,43 @@ const DoctorPortal = () => {
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
+                                    {isPastConfirmed && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => openRescheduleDialog(apt)}
+                                      >
+                                        Reschedule
+                                      </Button>
+                                    )}
+                                    {isPastConfirmed && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-destructive border-destructive/30"
+                                        onClick={() => handleMarkNoShow(apt.id)}
+                                      >
+                                        Mark No Show
+                                      </Button>
+                                    )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
                       </TabsContent>
 
-                      {/* Rejected Tab Content */}
-                      <TabsContent value="rejected" className="space-y-4">
+                      {/* No Show Tab Content */}
+                      <TabsContent value="no_show" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noRejectedAppointments', 'No rejected appointments'))
+                          renderDoctorAppointmentsCalendar('No no-show appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">{t('doctorPortal.empty.noRejectedAppointments', 'No rejected appointments')}</p>
+                                <p className="text-muted-foreground">No no-show appointments</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
@@ -2334,8 +2909,48 @@ const DoctorPortal = () => {
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    <Badge variant="destructive">{getAppointmentStatusLabel('rejected')}</Badge>
+                                    <Badge variant="destructive">No Show</Badge>
                                   </div>
+                                </div>
+                              ))
+                            )}
+                          </>
+                        )}
+                      </TabsContent>
+
+                      {/* Cancelled Tab Content */}
+                      <TabsContent value="cancelled" className="space-y-4">
+                        {appointmentViewMode === 'calendar' ? (
+                          renderDoctorAppointmentsCalendar('No cancelled appointments')
+                        ) : (
+                          <>
+                            {filteredAppointmentsByStatus.length === 0 ? (
+                              <div className="text-center py-12">
+                                <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No cancelled appointments</p>
+                              </div>
+                            ) : (
+                              filteredAppointmentsByStatus.map((apt) => (
+                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-muted-foreground/30 bg-muted/40">
+                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                    <div className="text-center w-20">
+                                      <p className="text-sm font-semibold">{apt.time}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                    </div>
+                                    <div className="w-px h-12 bg-border" />
+                                    <Avatar className="w-12 h-12">
+                                      <AvatarImage src={(apt as any).patient_profile_picture} />
+                                      <AvatarFallback className="bg-primary/10 text-primary">
+                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    </div>
+                                  </div>
+                                  <Badge variant="destructive">Cancelled</Badge>
                                 </div>
                               ))
                             )}
@@ -2412,8 +3027,16 @@ const DoctorPortal = () => {
                                 <p className="text-muted-foreground">{t('doctorPortal.empty.noAppointmentsFound', 'No appointments found')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const patientRequested = isPatientRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/30' : ''
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
                                       <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
@@ -2434,15 +3057,29 @@ const DoctorPortal = () => {
                                           : t('doctorPortal.labels.ageNA', 'Age N/A')}
                                       </p>
                                       <Badge className="mt-1" variant={
-                                        apt.status === 'pending' ? 'default' :
+                                        apt.status === 'pending_approval' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
+                                        apt.status === 'in_progress' ? 'secondary' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {getAppointmentStatusLabel(apt.status)}
+                                        {formatAppointmentStatusLabel(apt.status)}
                                       </Badge>
+                                      <div className="mt-1">
+                                        {getRescheduleRequestBadge(apt as {
+                                          reschedule_request_status?: string | null;
+                                          reschedule_requested_by?: string | null;
+                                        })}
+                                      </div>
+                                      {pendingReschedule && (
+                                        <p className="text-xs text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  {apt.status === 'confirmed' && (
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
@@ -2456,18 +3093,42 @@ const DoctorPortal = () => {
                                       {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                     </Button>
                                   )}
-                                  {apt.status === 'pending' && (
+                                  {!pendingReschedule && apt.status === 'pending_approval' && (
                                     <div className="flex gap-2">
-                                      <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeclineRequest(apt.id)}>
-                                      {t('doctorPortal.actions.decline', 'Decline')}
+                                      <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        Approve
                                       </Button>
-                                      <Button size="sm" className="bg-success" onClick={() => handleAcceptRequest(apt.id)}>
-                                      {t('doctorPortal.actions.accept', 'Accept')}
+                                      <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        Cancel
                                       </Button>
                                     </div>
                                   )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+                                    hasAppointmentTimePassed(apt) && (
+                                      <div className="flex gap-2">
+                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                          Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleMarkNoShow(apt.id)}>
+                                          Mark No Show
+                                        </Button>
+                                      </div>
+                                    )}
+                                  {pendingReschedule && patientRequested && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        Approve Reschedule
+                                      </Button>
+                                      <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        Decline Request
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && !patientRequested && (
+                                    <Badge variant="secondary">Waiting for patient approval</Badge>
+                                  )}
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2569,7 +3230,7 @@ const DoctorPortal = () => {
 
 
                   <TabsContent value="earnings" className="space-y-6">
-                    <div className="grid md:grid-cols-3 gap-4">
+                    <div className="grid md:grid-cols-4 gap-4">
                       <Card>
                         <CardContent className="pt-6">
                           <div className="flex items-center gap-4">
@@ -2579,7 +3240,7 @@ const DoctorPortal = () => {
                             <div>
                               <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.thisMonth', 'This Month')}</p>
                               <p className="text-2xl font-bold">
-                                {earningsLoading ? '...' : formatCurrency(stats.earnings)}
+                                {earningsLoading ? '...' : formatNaira(stats.earnings)}
                               </p>
                             </div>
                           </div>
@@ -2615,12 +3276,84 @@ const DoctorPortal = () => {
                           </div>
                         </CardContent>
                       </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center">
+                              <Banknote className="w-6 h-6 text-accent" />
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.wallet.walletAvailable', 'Wallet Available')}</p>
+                              <p className="text-2xl font-bold">
+                                {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
+                              </p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
                     </div>
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>{t('doctorPortal.headers.earningsHistory', 'Earnings History')}</CardTitle>
-                        <CardDescription>{t('doctorPortal.headers.earningsHistoryDescription', 'Your consultation earnings over the last 6 months')}</CardDescription>
+                        <CardTitle>Wallet Balance & Withdrawals</CardTitle>
+                        <CardDescription>{t('doctorPortal.wallet.trackPendingReleases', 'Track pending releases and prepare withdrawal requests')}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.availableBalance', 'Available Balance')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.pendingBalance', 'Pending Balance')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletPendingBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.readyEntries', 'Ready Entries')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : availableWalletEntries}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.pendingEntries', 'Pending Entries')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : pendingWalletEntries}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                          <p className="text-sm font-medium">{t('doctorPortal.wallet.withdrawalProcessStaged', 'Withdrawal process (staged)')}</p>
+                          <ol className="space-y-1 text-sm text-muted-foreground list-decimal pl-5">
+                            <li>{t('doctorPortal.wallet.stepEnterAmount', 'Enter amount from your available balance.')}</li>
+                            <li>{t('doctorPortal.wallet.stepConfirmDetails', 'Confirm account and narration details.')}</li>
+                            <li>{t('doctorPortal.wallet.stepSubmitRequest', 'Submit request for admin/manual payout review.')}</li>
+                            <li>{t('doctorPortal.wallet.stepMarkPaid', 'Mark request as paid and debit wallet in next release.')}</li>
+                          </ol>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs text-muted-foreground">
+                              {t('doctorPortal.wallet.backendDeferredHint', 'Backend payout orchestration is intentionally deferred until approval workflow is finalized.')}
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => setWithdrawalDialogOpen(true)}
+                              disabled={walletLoading}
+                            >
+                              {t('doctorPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t('doctorPortal.earnings.historyTitle', 'Earnings History')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.earnings.lastSixMonths', 'Your consultation earnings over the last 6 months')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         {earningsLoading ? (
@@ -2643,8 +3376,8 @@ const DoctorPortal = () => {
                                   <div className="flex items-center justify-between text-sm">
                                     <span className="font-medium">{month.month}</span>
                                     <div className="text-right">
-                                      <span className="font-bold">{formatCurrency(month.earnings)}</span>
-                                      <span className="text-muted-foreground ml-2">({month.consultations} {t('doctorPortal.labels.consultations', 'consultations')})</span>
+                                      <span className="font-bold">{formatNaira(month.earnings)}</span>
+                                      <span className="text-muted-foreground ml-2">({month.consultations} consultations)</span>
                                     </div>
                                   </div>
                                   <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
@@ -2929,6 +3662,130 @@ const DoctorPortal = () => {
             </div>
         </div>
         
+        <Dialog open={withdrawalDialogOpen} onOpenChange={setWithdrawalDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Request Withdrawal</DialogTitle>
+              <DialogDescription>
+                {t('doctorPortal.withdrawal.stagedFlowDescription', 'This flow is staged in UI for now. Submission will connect to payout processing in the next phase.')}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.wallet.availableBalance', 'Available Balance')}</label>
+                <div className="mt-1 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  {walletLoading ? t('doctorPortal.wallet.loadingWallet', 'Loading wallet...') : formatNaira(walletAvailableBalance)}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.withdrawal.amountLabel', 'Withdrawal Amount (₦)')}</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="100"
+                  value={withdrawalAmount}
+                  onChange={(e) => setWithdrawalAmount(e.target.value)}
+                  placeholder={t('doctorPortal.withdrawal.amountPlaceholder', 'Enter amount')}
+                  className="mt-1"
+                />
+                {withdrawalAmount && !canRequestWithdrawal && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {t('doctorPortal.withdrawal.invalidAmountHint', 'Amount must be greater than zero and not exceed your available balance.')}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.withdrawal.narrationOptional', 'Narration (optional)')}</label>
+                <Textarea
+                  value={withdrawalNarration}
+                  onChange={(e) => setWithdrawalNarration(e.target.value)}
+                  placeholder={t('doctorPortal.withdrawal.narrationPlaceholder', 'e.g., Weekly payout request')}
+                  className="mt-1 min-h-[88px]"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setWithdrawalDialogOpen(false)}>
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button onClick={submitWithdrawalRequest}>
+                {t('common.submitRequest', 'Submit Request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={rescheduleDialogOpen}
+          onOpenChange={(open) => {
+            setRescheduleDialogOpen(open);
+            if (!open) {
+              setRescheduleAppointmentId(null);
+              setRescheduleDate('');
+              setRescheduleTime('');
+            }
+          }}
+        >
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>{t('doctorPortal.reschedule.requestTitle', 'Request Reschedule')}</DialogTitle>
+                <DialogDescription>
+                  {rescheduleAppointment
+                    ? t('doctorPortal.reschedule.proposeForPatient', 'Propose a new date/time for {patient}.').replace('{patient}', rescheduleAppointment.patient_name || t('doctorPortal.defaults.thisPatient', 'this patient'))
+                    : t('doctorPortal.reschedule.proposeForAppointment', 'Propose a new date/time for this appointment.')}
+                </DialogDescription>
+              </DialogHeader>
+            <div className="space-y-4">
+              {rescheduleAppointment && (
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <p>
+                    <span className="font-medium">{t('doctorPortal.reschedule.currentLabel', 'Current')}:</span>{' '}
+                    {new Date(rescheduleAppointment.date).toLocaleDateString()} {t('common.at', 'at')} {rescheduleAppointment.time}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t('doctorPortal.reschedule.patientApprovalRequiredHint', 'Patient must approve this request before the appointment is moved.')}
+                  </p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">{t('doctorPortal.reschedule.newDate', 'New Date')}</label>
+                  <Input
+                    type="date"
+                    className="mt-1"
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{t('doctorPortal.reschedule.newTime', 'New Time')}</label>
+                  <Input
+                    type="time"
+                    className="mt-1"
+                    value={rescheduleTime}
+                    onChange={(e) => setRescheduleTime(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRescheduleDialogOpen(false);
+                  setRescheduleAppointmentId(null);
+                }}
+                disabled={isRescheduling}
+              >
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button onClick={submitReschedule} disabled={isRescheduling}>
+                {isRescheduling ? t('common.submitting', 'Submitting...') : t('common.submitRequest', 'Submit Request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* View Folder Modal */}
         <Dialog open={viewFolderOpen} onOpenChange={setViewFolderOpen}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
