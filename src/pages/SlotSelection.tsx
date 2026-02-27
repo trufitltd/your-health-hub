@@ -13,6 +13,7 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import { toast } from '@/components/ui/use-toast';
 import { Calendar, Clock, ChevronRight, AlertCircle, CreditCard } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface LocationState {
   doctorId?: string;
@@ -25,6 +26,7 @@ export default function SlotSelection() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const { formatDate: formatLocaleDate, formatClockTime, formatCurrency } = useLocaleFormatter();
   const state = location.state as LocationState;
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -282,7 +284,7 @@ export default function SlotSelection() {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return formatLocaleDate(date, { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
   return (
@@ -426,7 +428,7 @@ export default function SlotSelection() {
                       Select Time
                     </CardTitle>
                     <CardDescription>
-                      Available times on {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                      Available times on {formatLocaleDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -460,7 +462,7 @@ export default function SlotSelection() {
                                   : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
                               }`}
                             >
-                              {time}
+                              {formatClockTime(time)}
                               {isBooked && <span className="block text-[10px] mt-0.5">Booked</span>}
                               {isPast && !isBooked && <span className="block text-[10px] mt-0.5">Past</span>}
                             </motion.button>
@@ -494,15 +496,15 @@ export default function SlotSelection() {
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
                         <span className="text-muted-foreground">Date</span>
-                        <span className="font-medium">{new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+                        <span className="font-medium">{formatLocaleDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
                         <span className="text-muted-foreground">Time</span>
-                        <span className="font-medium">{selectedTime}</span>
+                        <span className="font-medium">{formatClockTime(selectedTime)}</span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-primary/10 border border-primary/20">
                         <span className="text-muted-foreground">Consultation Fee</span>
-                        <span className="font-semibold text-primary">₦{state.specialty?.toLowerCase().includes('general') ? '5,000' : '10,000'}</span>
+                        <span className="font-semibold text-primary">{formatCurrency(state.specialty?.toLowerCase().includes('general') ? 5000 : 10000)}</span>
                       </div>
                     </div>
                   </CardContent>

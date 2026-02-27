@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 
 interface DoctorCard {
   id: string;
@@ -16,6 +17,7 @@ interface DoctorCard {
   avatar_url?: string | null;
   bio?: string | null;
   experience?: string | null;
+  registration?: Record<string, unknown> | null;
 }
 
 interface DoctorScheduleRow {
@@ -25,18 +27,21 @@ interface DoctorScheduleRow {
   is_available: boolean;
 }
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const formatTime = (time: string) => {
+const formatTime = (time: string, amLabel: string, pmLabel: string) => {
   if (!time) return '';
   const [hours, minutes] = time.split(':');
   const hour = Number(hours);
-  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const suffix = hour >= 12 ? pmLabel : amLabel;
   const displayHour = ((hour + 11) % 12) + 1;
   return `${displayHour}:${minutes} ${suffix}`;
 };
 
-const getNextAvailable = (schedules: DoctorScheduleRow[] | undefined) => {
+const getNextAvailable = (
+  schedules: DoctorScheduleRow[] | undefined,
+  dayNames: string[],
+  amLabel: string,
+  pmLabel: string
+) => {
   if (!schedules || schedules.length === 0) return null;
   const now = new Date();
   for (let offset = 0; offset < 7; offset += 1) {
@@ -46,16 +51,347 @@ const getNextAvailable = (schedules: DoctorScheduleRow[] | undefined) => {
     const daySchedules = schedules.filter((schedule) => schedule.day_of_week === day && schedule.is_available);
     if (daySchedules.length > 0) {
       const first = daySchedules.sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
-      return `${DAY_NAMES[day]}, ${formatTime(first.start_time)}`;
+      return `${dayNames[day]}, ${formatTime(first.start_time, amLabel, pmLabel)}`;
     }
   }
   return null;
 };
 
+const SPECIALTY_TRANSLATIONS: Record<string, Partial<Record<AppLanguage, string>>> = {
+  'general practice': {
+    en: 'General Practice',
+    ha: 'Babban Magani',
+    ig: "Ọgwụ N'ozuzu",
+    yo: 'Itoju Gbogbogbo',
+    sw: 'Tiba ya Jumla',
+    ar: 'طب عام',
+    fr: 'Médecine générale',
+    es: 'Medicina general',
+    pt: 'Clínica geral',
+    nl: 'Huisartsgeneeskunde',
+    zh: '全科',
+    de: 'Allgemeinmedizin',
+  },
+  'general medicine': {
+    en: 'General Medicine',
+    ha: 'Babban Magunguna',
+    ig: "Ọgwụ N'ozuzu",
+    yo: 'Oogun Gbogbogbo',
+    sw: 'Tiba ya jumla',
+    ar: 'الطب العام',
+    fr: 'Médecine générale',
+    es: 'Medicina general',
+    pt: 'Medicina geral',
+    nl: 'Algemene geneeskunde',
+    zh: '全科医学',
+    de: 'Allgemeinmedizin',
+  },
+  cardiology: {
+    ha: 'Ilimin Zuciya',
+    ig: 'Ọrịa Obi',
+    yo: 'Amoye ọkan',
+    sw: 'Moyo',
+    ar: 'أمراض القلب',
+    fr: 'Cardiologie',
+    es: 'Cardiología',
+    pt: 'Cardiologia',
+    nl: 'Cardiologie',
+    zh: '心脏科',
+    de: 'Kardiologie',
+  },
+  dermatology: {
+    ha: 'Ilimin Fata',
+    ig: 'Ọrịa Akpụkpọ Ahụ',
+    yo: 'Amoye awọ ara',
+    sw: 'Ngozi',
+    ar: 'الأمراض الجلدية',
+    fr: 'Dermatologie',
+    es: 'Dermatología',
+    pt: 'Dermatologia',
+    nl: 'Dermatologie',
+    zh: '皮肤科',
+    de: 'Dermatologie',
+  },
+  pediatrics: {
+    ha: 'Ilimin Yara',
+    ig: 'Ọrịa Ụmụaka',
+    yo: 'Amoye ọmọde',
+    sw: 'Watoto',
+    ar: 'طب الأطفال',
+    fr: 'Pédiatrie',
+    es: 'Pediatría',
+    pt: 'Pediatria',
+    nl: 'Kindergeneeskunde',
+    zh: '儿科',
+    de: 'Pädiatrie',
+  },
+  gynecology: {
+    ha: "Ilimin Mata da Haihuwa",
+    ig: 'Ọrịa ụmụnwaanyị',
+    yo: 'Amoye obinrin',
+    sw: 'Uzazi wa wanawake',
+    ar: 'طب النساء',
+    fr: 'Gynécologie',
+    es: 'Ginecología',
+    pt: 'Ginecologia',
+    nl: 'Gynaecologie',
+    zh: '妇科',
+    de: 'Gynäkologie',
+  },
+  obstetrics: {
+    ha: 'Ilimin Juna Biyu',
+    ig: 'Nlekọta ime',
+    yo: 'Aboyun',
+    sw: 'Uzazi',
+    ar: 'التوليد',
+    fr: 'Obstétrique',
+    es: 'Obstetricia',
+    pt: 'Obstetrícia',
+    nl: 'Verloskunde',
+    zh: '产科',
+    de: 'Geburtshilfe',
+  },
+  orthopedics: {
+    ha: 'Ilimin Kashi',
+    ig: 'Ọkpụkpụ',
+    yo: 'Amoye egungun',
+    sw: 'Mifupa',
+    ar: 'جراحة العظام',
+    fr: 'Orthopédie',
+    es: 'Ortopedia',
+    pt: 'Ortopedia',
+    nl: 'Orthopedie',
+    zh: '骨科',
+    de: 'Orthopädie',
+  },
+  neurology: {
+    ha: 'Ilimin Jijiyoyi',
+    ig: 'Akwara ụbụrụ',
+    yo: 'Amoye ọpọlọ',
+    sw: 'Mishipa ya fahamu',
+    ar: 'طب الأعصاب',
+    fr: 'Neurologie',
+    es: 'Neurología',
+    pt: 'Neurologia',
+    nl: 'Neurologie',
+    zh: '神经科',
+    de: 'Neurologie',
+  },
+  psychiatry: {
+    ha: 'Ilimin Kwalwa',
+    ig: 'Ahụike uche',
+    yo: 'Amoye ọpọlọ',
+    sw: 'Afya ya akili',
+    ar: 'الطب النفسي',
+    fr: 'Psychiatrie',
+    es: 'Psiquiatría',
+    pt: 'Psiquiatria',
+    nl: 'Psychiatrie',
+    zh: '精神科',
+    de: 'Psychiatrie',
+  },
+  ophthalmology: {
+    ha: 'Ilimin Ido',
+    ig: 'Ọrịa anya',
+    yo: 'Amoye oju',
+    sw: 'Macho',
+    ar: 'طب العيون',
+    fr: 'Ophtalmologie',
+    es: 'Oftalmología',
+    pt: 'Oftalmologia',
+    nl: 'Oogheelkunde',
+    zh: '眼科',
+    de: 'Augenheilkunde',
+  },
+  ent: {
+    ha: 'Kunne-Hanci-Makogwaro',
+    ig: 'Ntị-Imi-Akpọrọ',
+    yo: 'Eti-imu-ọfun',
+    sw: 'Sikio-pua-koo',
+    ar: 'أنف وأذن وحنجرة',
+    fr: 'ORL',
+    es: 'Otorrinolaringología',
+    pt: 'Otorrinolaringologia',
+    nl: 'KNO',
+    zh: '耳鼻喉科',
+    de: 'HNO',
+  },
+  'ear nose and throat': {
+    ha: 'Kunne-Hanci-Makogwaro',
+    ig: 'Ntị-Imi-Akpọrọ',
+    yo: 'Eti-imu-ọfun',
+    sw: 'Sikio-pua-koo',
+    ar: 'أنف وأذن وحنجرة',
+    fr: 'ORL',
+    es: 'Otorrinolaringología',
+    pt: 'Otorrinolaringologia',
+    nl: 'KNO',
+    zh: '耳鼻喉科',
+    de: 'HNO',
+  },
+  'otorhinolaryngology': {
+    ha: 'Kunne-Hanci-Makogwaro',
+    ig: 'Ntị-Imi-Akpọrọ',
+    yo: 'Eti-imu-ọfun',
+    sw: 'Sikio-pua-koo',
+    ar: 'أنف وأذن وحنجرة',
+    fr: 'ORL',
+    es: 'Otorrinolaringología',
+    pt: 'Otorrinolaringologia',
+    nl: 'KNO',
+    zh: '耳鼻喉科',
+    de: 'HNO',
+  },
+  urology: {
+    ha: 'Ilimin Fitsari',
+    ig: 'Ụzọ mmamịrị',
+    yo: 'Amoye ito',
+    sw: 'Mkojo',
+    ar: 'طب المسالك البولية',
+    fr: 'Urologie',
+    es: 'Urología',
+    pt: 'Urologia',
+    nl: 'Urologie',
+    zh: '泌尿科',
+    de: 'Urologie',
+  },
+  oncology: {
+    ha: 'Ilimin Ciwon daji',
+    ig: 'Ọrịa kansa',
+    yo: 'Amoye akàn',
+    sw: 'Saratani',
+    ar: 'طب الأورام',
+    fr: 'Oncologie',
+    es: 'Oncología',
+    pt: 'Oncologia',
+    nl: 'Oncologie',
+    zh: '肿瘤科',
+    de: 'Onkologie',
+  },
+  nephrology: {
+    ha: 'Ilimin Koda',
+    ig: 'Akụrụ',
+    yo: 'Amoye kidinrin',
+    sw: 'Figo',
+    ar: 'طب الكلى',
+    fr: 'Néphrologie',
+    es: 'Nefrología',
+    pt: 'Nefrologia',
+    nl: 'Nefrologie',
+    zh: '肾内科',
+    de: 'Nephrologie',
+  },
+  pulmonology: {
+    ha: 'Ilimin Huhu',
+    ig: 'Akpa ume',
+    yo: 'Amoye ẹdọforo',
+    sw: 'Mapafu',
+    ar: 'طب الرئة',
+    fr: 'Pneumologie',
+    es: 'Neumología',
+    pt: 'Pneumologia',
+    nl: 'Longgeneeskunde',
+    zh: '呼吸科',
+    de: 'Pneumologie',
+  },
+  endocrinology: {
+    ha: 'Ilimin Hormones',
+    ig: 'Endokrinoloji',
+    yo: 'Amoye homonu',
+    sw: 'Endokrinolojia',
+    ar: 'طب الغدد الصماء',
+    fr: 'Endocrinologie',
+    es: 'Endocrinología',
+    pt: 'Endocrinologia',
+    nl: 'Endocrinologie',
+    zh: '内分泌科',
+    de: 'Endokrinologie',
+  },
+  gastroenterology: {
+    ha: 'Ilimin Ciki',
+    ig: 'Eriri afọ',
+    yo: 'Amoye ikun',
+    sw: 'Mfumo wa chakula',
+    ar: 'طب الجهاز الهضمي',
+    fr: 'Gastro-entérologie',
+    es: 'Gastroenterología',
+    pt: 'Gastroenterologia',
+    nl: 'Gastro-enterologie',
+    zh: '消化科',
+    de: 'Gastroenterologie',
+  },
+};
+
+const normalizeSpecialtyKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[()]/g, '')
+    .replace(/[^\w\s/&-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getLocalizedBio = (registration: Record<string, unknown> | null | undefined, language: AppLanguage) => {
+  if (!registration || language === 'en') {
+    return (registration?.bio as string | null | undefined) || null;
+  }
+
+  const directKey = `bio_${language}`;
+  const direct = registration[directKey];
+  if (typeof direct === 'string' && direct.trim().length > 0) {
+    return direct;
+  }
+
+  const translations = registration.bio_translations;
+  if (translations && typeof translations === 'object') {
+    const localized = (translations as Record<string, unknown>)[language];
+    if (typeof localized === 'string' && localized.trim().length > 0) {
+      return localized;
+    }
+  }
+
+  return (registration.bio as string | null | undefined) || null;
+};
+
+const getLocalizedSpecialty = (
+  registration: Record<string, unknown> | null | undefined,
+  specialty: string | null | undefined,
+  language: AppLanguage,
+  fallbackGeneralPractice: string
+) => {
+  if (!specialty || specialty.trim().length === 0) {
+    return fallbackGeneralPractice;
+  }
+
+  if (registration && language !== 'en') {
+    const translations = registration.specialty_translations;
+    if (translations && typeof translations === 'object') {
+      const localized = (translations as Record<string, unknown>)[language];
+      if (typeof localized === 'string' && localized.trim().length > 0) {
+        return localized.trim();
+      }
+    }
+  }
+
+  const normalized = normalizeSpecialtyKey(specialty);
+  const mapped = SPECIALTY_TRANSLATIONS[normalized];
+  return (mapped?.[language] || specialty).trim();
+};
+
 export default function SpecialistsPage() {
+  const { t, language } = useLanguage();
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSpecialty, setSelectedSpecialty] = useState('All Specialties');
+  const [selectedSpecialty, setSelectedSpecialty] = useState('__all__');
   const [expandedBios, setExpandedBios] = useState<Set<string>>(new Set());
+  const allSpecialtiesLabel = t('specialists.filters.allSpecialties', 'All Specialties');
+  const dayNames = [
+    t('specialists.days.sun', 'Sun'),
+    t('specialists.days.mon', 'Mon'),
+    t('specialists.days.tue', 'Tue'),
+    t('specialists.days.wed', 'Wed'),
+    t('specialists.days.thu', 'Thu'),
+    t('specialists.days.fri', 'Fri'),
+    t('specialists.days.sat', 'Sat'),
+  ];
 
   // Scroll to top when page mounts
   useEffect(() => {
@@ -80,15 +416,16 @@ export default function SpecialistsPage() {
       const doctorIds = (data || []).map(d => d.id);
       const { data: registrations } = await supabase
         .from('doctor_registrations')
-        .select('user_id,bio,experience')
+        .select('*')
         .in('user_id', doctorIds);
 
-      const registrationMap = new Map(registrations?.map(r => [r.user_id, r]) || []);
+      const registrationMap = new Map((registrations || []).map((r: Record<string, unknown>) => [r.user_id as string, r]));
 
       return (data || []).map(d => ({
         ...d,
-        bio: registrationMap.get(d.id)?.bio || null,
-        experience: registrationMap.get(d.id)?.experience || null
+        bio: (registrationMap.get(d.id)?.bio as string | null | undefined) || null,
+        experience: (registrationMap.get(d.id)?.experience as string | null | undefined) || null,
+        registration: registrationMap.get(d.id) || null,
       })) as DoctorCard[];
     },
   });
@@ -160,13 +497,30 @@ export default function SpecialistsPage() {
           .filter((specialty) => specialty && specialty.trim().length > 0)
       )
     ).sort();
-    return ['All Specialties', ...values];
-  }, [doctors]);
+    return [{ value: '__all__', label: allSpecialtiesLabel }, ...values.map((value) => ({ value, label: value }))];
+  }, [doctors, allSpecialtiesLabel]);
+
+  const translateSpecialty = (specialty: string | null | undefined) => {
+    return getLocalizedSpecialty(
+      null,
+      specialty,
+      language,
+      t('specialists.defaults.generalPractice', 'General Practice')
+    );
+  };
 
   const filteredDoctors = doctors.filter((doctor) => {
-    const matchesSearch = doctor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (doctor.specialty || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSpecialty = selectedSpecialty === 'All Specialties' || doctor.specialty === selectedSpecialty;
+    const localizedSpecialty = getLocalizedSpecialty(
+      doctor.registration,
+      doctor.specialty,
+      language,
+      t('specialists.defaults.generalPractice', 'General Practice')
+    );
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = doctor.name.toLowerCase().includes(query) ||
+      (doctor.specialty || '').toLowerCase().includes(query) ||
+      localizedSpecialty.toLowerCase().includes(query);
+    const matchesSpecialty = selectedSpecialty === '__all__' || doctor.specialty === selectedSpecialty;
     return matchesSearch && matchesSpecialty;
   });
 
@@ -180,12 +534,17 @@ export default function SpecialistsPage() {
             animate={{ opacity: 1, y: 0 }}
             className="text-center max-w-3xl mx-auto mb-12"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">Our Specialists</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">
+              {t('specialists.hero.badge', 'Our Specialists')}
+            </span>
             <h1 className="text-4xl md:text-5xl font-bold mt-3 mb-6">
-              Find Your Perfect Doctor
+              {t('specialists.hero.title', 'Find Your Perfect Doctor')}
             </h1>
             <p className="text-lg text-muted-foreground">
-              Browse our network of certified specialists and book your consultation today
+              {t(
+                'specialists.hero.description',
+                'Browse our network of certified specialists and book your consultation today'
+              )}
             </p>
           </motion.div>
 
@@ -200,7 +559,7 @@ export default function SpecialistsPage() {
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
               <Input
                 type="text"
-                placeholder="Search by doctor name or specialty..."
+                placeholder={t('specialists.search.placeholder', 'Search by doctor name or specialty...')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-12 h-14 text-base rounded-2xl shadow-card"
@@ -217,23 +576,23 @@ export default function SpecialistsPage() {
           <div className="flex gap-2 overflow-x-auto pb-4 mb-8 scrollbar-hide">
             {specialties.map((specialty) => (
               <button
-                key={specialty}
-                onClick={() => setSelectedSpecialty(specialty)}
+                key={specialty.value}
+                onClick={() => setSelectedSpecialty(specialty.value)}
                 className={cn(
                   'px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all duration-200',
-                  selectedSpecialty === specialty
+                  selectedSpecialty === specialty.value
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 )}
               >
-                {specialty}
+                {specialty.value === '__all__' ? specialty.label : translateSpecialty(specialty.label)}
               </button>
             ))}
           </div>
 
           {/* Results Count */}
           <p className="text-muted-foreground mb-6">
-            Showing {filteredDoctors.length} specialists
+            {t('specialists.results.showing', 'Showing')} {filteredDoctors.length} {t('specialists.results.specialists', 'specialists')}
           </p>
 
           {/* Doctors Grid */}
@@ -244,9 +603,15 @@ export default function SpecialistsPage() {
                 ? Number((ratingInfo.total / ratingInfo.count).toFixed(1))
                 : null;
               const reviews = ratingInfo?.count || 0;
-              const nextAvailable = getNextAvailable(schedulesByDoctor.get(doctor.id));
+              const nextAvailable = getNextAvailable(
+                schedulesByDoctor.get(doctor.id),
+                dayNames,
+                t('specialists.time.am', 'AM'),
+                t('specialists.time.pm', 'PM')
+              );
               const isBioExpanded = expandedBios.has(doctor.id);
-              const hasLongBio = (doctor.bio || '').trim().length > 140;
+              const localizedBio = getLocalizedBio(doctor.registration, language);
+              const hasLongBio = (localizedBio || '').trim().length > 140;
 
               return (
               <motion.div
@@ -264,13 +629,22 @@ export default function SpecialistsPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{doctor.name}</h3>
-                    <p className="text-sm text-primary">{doctor.specialty || 'General Practice'}</p>
+                    <p className="text-sm text-primary">
+                      {getLocalizedSpecialty(
+                        doctor.registration,
+                        doctor.specialty,
+                        language,
+                        t('specialists.defaults.generalPractice', 'General Practice')
+                      )}
+                    </p>
                     {doctor.experience && (
-                      <p className="text-xs text-muted-foreground mt-1">Experience: {doctor.experience} years</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t('specialists.card.experience', 'Experience')}: {doctor.experience} {t('specialists.card.years', 'years')}
+                      </p>
                     )}
                     <div className="text-xs text-muted-foreground mt-1">
                       <p className={isBioExpanded ? '' : 'line-clamp-2'}>
-                        {doctor.bio || 'No bio provided.'}
+                        {localizedBio || t('specialists.defaults.noBio', 'No bio provided.')}
                       </p>
                       {hasLongBio && (
                         <button
@@ -288,7 +662,9 @@ export default function SpecialistsPage() {
                             });
                           }}
                         >
-                          {isBioExpanded ? 'Read less' : 'Read more'}
+                          {isBioExpanded
+                            ? t('specialists.card.readLess', 'Read less')
+                            : t('specialists.card.readMore', 'Read more')}
                         </button>
                       )}
                     </div>
@@ -298,21 +674,23 @@ export default function SpecialistsPage() {
                 <div className="flex items-center gap-4 mb-4 text-sm">
                   <div className="flex items-center gap-1">
                     <Star className="w-4 h-4 text-warning fill-warning" />
-                    <span className="font-medium">{rating ?? 'N/A'}</span>
+                    <span className="font-medium">{rating ?? t('specialists.defaults.notAvailable', 'N/A')}</span>
                     <span className="text-muted-foreground">({reviews})</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
                   <Clock className="w-4 h-4" />
-                  <span>Next: {nextAvailable || 'Check availability'}</span>
+                  <span>
+                    {t('specialists.card.next', 'Next')}: {nextAvailable || t('specialists.card.checkAvailability', 'Check availability')}
+                  </span>
                 </div>
 
                 <div className="flex items-center justify-end pt-4 border-t border-border">
                   <Link to={`/booking?doctor=${doctor.id}`}>
                     <Button variant="gradient" size="sm">
                       <Video className="w-4 h-4" />
-                      Book Now
+                      {t('common.bookNow', 'Book Now')}
                     </Button>
                   </Link>
                 </div>
@@ -323,13 +701,17 @@ export default function SpecialistsPage() {
 
           {doctorsLoading && (
             <div className="text-center py-16">
-              <p className="text-muted-foreground">Loading specialists...</p>
+              <p className="text-muted-foreground">
+                {t('specialists.states.loading', 'Loading specialists...')}
+              </p>
             </div>
           )}
 
           {!doctorsLoading && filteredDoctors.length === 0 && (
             <div className="text-center py-16">
-              <p className="text-muted-foreground">No specialists found matching your criteria.</p>
+              <p className="text-muted-foreground">
+                {t('specialists.states.noResults', 'No specialists found matching your criteria.')}
+              </p>
             </div>
           )}
         </div>
