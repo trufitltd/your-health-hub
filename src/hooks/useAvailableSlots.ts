@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 
 export interface Doctor {
   id: string;
@@ -25,6 +26,12 @@ export interface AvailableSlot {
   booked_count: number;
   available_slots: number;
 }
+
+type AppointmentSlotRow = {
+  id: string;
+  status: string | null;
+  slot_locked_until: string | null;
+};
 
 /**
  * Fetch all active doctors
@@ -214,14 +221,22 @@ export const checkSlotAvailability = async (
     // Query for existing appointments at this time
     const { data, error } = await supabase
       .from('appointments')
-      .select('id')
+      .select('id,status,slot_locked_until')
       .eq('doctor_id', doctorId)
       .eq('date', date)
-      .eq('time', time)
-      .not('status', 'in', '(cancelled)');
+      .eq('time', time);
     
     if (error) throw error;
-    return (data?.length ?? 0) === 0; // Available if no conflicts
+
+    const now = Date.now();
+    const blockingRows = ((data || []) as AppointmentSlotRow[]).filter((row) => {
+      if (!isSlotBlockingAppointmentStatus(row.status)) return false;
+      if (!isPendingPaymentAppointmentStatus(row.status)) return true;
+      if (!row.slot_locked_until) return false;
+      return new Date(row.slot_locked_until).getTime() > now;
+    });
+
+    return blockingRows.length === 0;
   } catch (error) {
     console.error('Error checking slot availability:', error);
     // If there's an error, assume available to allow booking
