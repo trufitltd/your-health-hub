@@ -13,6 +13,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useLocaleFormatter } from '@/lib/locale';
 import {
   Star, Search, Filter, Clock, MapPin, Award, Heart,
   ChevronRight, Loader
@@ -41,8 +43,10 @@ interface Doctor {
 
 export default function DoctorDiscovery() {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { formatDate, formatTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const queryClient = useQueryClient();
   const { presenceMap } = useDoctorPresence();
   const [doctorTypeFilter, setDoctorTypeFilter] = useState<'all' | 'general' | 'specialist'>('all');
@@ -395,17 +399,17 @@ export default function DoctorDiscovery() {
   const formatDateForDisplay = (dateStr: string) => {
     if (!dateStr) return '';
     const date = new Date(dateStr + 'T00:00:00');
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   // Helper: Format time for display
   const formatTimeForDisplay = (timeStr: string) => {
     if (!timeStr) return '';
     const [hours, minutes] = timeStr.split(':');
-    const hour = parseInt(hours);
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    const displayHour = hour % 12 || 12;
-    return `${displayHour}:${minutes} ${ampm}`;
+    return formatTime(new Date(`2000-01-01T${hours}:${minutes}:00`), {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   };
 
   // Helper: Get availability filter display text
@@ -551,9 +555,9 @@ export default function DoctorDiscovery() {
                     className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
                     <option value={0}>Any Experience</option>
-                    <option value={5}>5+ Years</option>
-                    <option value={10}>10+ Years</option>
-                    <option value={15}>15+ Years</option>
+                    <option value={5}>{formatNumber(5)}+ Years</option>
+                    <option value={10}>{formatNumber(10)}+ Years</option>
+                    <option value={15}>{formatNumber(15)}+ Years</option>
                   </select>
 
                   <select
@@ -651,7 +655,9 @@ export default function DoctorDiscovery() {
                             </div>
                             <div className="flex gap-2 flex-col">
                               <Badge variant="outline" className="text-xs">
-                                {doctor.experience_years ? `${doctor.experience_years}y exp` : 'Experience N/A'}
+                                {doctor.experience_years
+                                  ? `${doctor.experience_years}y exp`
+                                  : `${t('specialists.card.experience', 'Experience')} ${t('specialists.defaults.notAvailable', 'N/A')}`}
                               </Badge>
                               <Badge className="text-xs bg-blue-100 text-blue-800">
                                 {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
@@ -692,7 +698,7 @@ export default function DoctorDiscovery() {
                           )}
 
                           <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                            <p className="text-sm font-semibold text-success">₦{getConsultationFee(doctor).toLocaleString()}</p>
+                            <p className="text-sm font-semibold text-success">{formatCurrency(getConsultationFee(doctor))}</p>
                             <p className="text-xs text-muted-foreground">Consultation Fee</p>
                           </div>
 
