@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Video, Phone, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 interface JoinConsultationButtonProps {
@@ -27,7 +28,11 @@ export function JoinConsultationButton({
   const isVideo = true;
   const isChat = false;
   const isAudio = true;
-  const isJoinable = !status || status === 'confirmed' || status === 'pending' || status === 'in-progress' || status === 'upcoming';
+  const normalizedStatus = normalizeAppointmentStatus(status);
+  const isJoinable =
+    !status ||
+    normalizedStatus === 'confirmed' ||
+    normalizedStatus === 'in_progress';
 
   const handleJoin = () => {
     if (!isJoinable) {
