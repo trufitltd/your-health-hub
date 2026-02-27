@@ -296,7 +296,7 @@ export class BookingService {
     if (!appointment) throw new Error('Appointment not found for payment');
 
     const status = normalizeAppointmentStatusRaw(appointment.status);
-    if (status === 'confirmed' || status === 'completed' || status === 'in_progress') {
+    if (status === 'pending_approval' || status === 'confirmed' || status === 'completed' || status === 'in_progress') {
       return { appointmentId: appointment.id, alreadyProcessed: true };
     }
 
@@ -320,7 +320,7 @@ export class BookingService {
     const { error: confirmError } = await this.supabase
       .from('appointments')
       .update({
-        status: 'confirmed',
+        status: 'pending_approval',
         slot_locked_until: null,
       })
       .eq('id', appointment.id);
@@ -364,11 +364,11 @@ export class BookingService {
 
       const { error } = await this.supabase
         .from('appointments')
-        .update({ status: 'expired', slot_locked_until: null })
+        .update({ status: 'cancelled', slot_locked_until: null })
         .eq('id', payment.appointment_id);
 
       if (error) {
-        throw new Error(`Failed to expire appointment after failed payment: ${error.message}`);
+        throw new Error(`Failed to cancel appointment after failed payment: ${error.message}`);
       }
     }
 

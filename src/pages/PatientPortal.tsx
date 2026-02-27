@@ -9,8 +9,9 @@ import type { DateClickArg, EventClickArg, EventInput, DayCellMountArg, EventMou
 import { Link } from 'react-router-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { useAppointments } from '@/hooks/useAppointments';
-import { useDoctors, useAvailableSlots, checkSlotAvailability } from '@/hooks/useAvailableSlots';
+import { useDoctors, useAvailableSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { SlotSelectionModal } from '@/components/SlotSelectionModal';
@@ -24,7 +25,6 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
@@ -49,12 +49,19 @@ import { useRecentConsultations } from '@/hooks/useRecentConsultations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { usePatientRegistration } from '@/hooks/usePatientRegistration';
 import { useHealthRecords } from '@/hooks/useHealthRecords';
-import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
-import { BookingService } from '@/services/BookingService';
+import { PatientWalletService } from '@/services/PatientWalletService';
+import { AvailabilityService } from '@/services/AvailabilityService';
+import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
+import {
+  formatAppointmentStatusLabel,
+  normalizeAppointmentStatus,
+  normalizeRescheduleRequestStatus,
+  type AppointmentStatus,
+} from '@/services/marketplaceTypes';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
 
@@ -66,9 +73,14 @@ const formatDateKey = (date: Date) => {
 };
 
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
-  pending: {
+  pending_payment: {
     dot: '#d97706',
     bg: '#d97706',
+    text: '#ffffff'
+  },
+  pending_approval: {
+    dot: '#b45309',
+    bg: '#b45309',
     text: '#ffffff'
   },
   confirmed: {
@@ -76,14 +88,14 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     bg: '#0f8f76',
     text: '#ffffff'
   },
+  in_progress: {
+    dot: '#2563eb',
+    bg: '#2563eb',
+    text: '#ffffff'
+  },
   completed: {
     dot: '#16a34a',
     bg: '#16a34a',
-    text: '#ffffff'
-  },
-  rejected: {
-    dot: '#dc2626',
-    bg: '#dc2626',
     text: '#ffffff'
   },
   cancelled: {
@@ -91,11 +103,22 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     bg: '#6b7280',
     text: '#ffffff'
   },
+  no_show: {
+    dot: '#dc2626',
+    bg: '#dc2626',
+    text: '#ffffff'
+  },
   default: {
     dot: '#334155',
     bg: '#334155',
     text: '#ffffff'
   }
+} as const;
+
+const PAST_CONFIRMED_CALENDAR_STYLE = {
+  dot: '#d97706',
+  bg: '#f59e0b',
+  text: '#ffffff',
 } as const;
 
 interface PatientPrescription {
@@ -191,11 +214,20 @@ const PatientPortal = () => {
   }, [activeTab, unreadMessagesCount]);
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
+  const { data: patientWallet } = useQuery({
+    queryKey: ['patient-wallet', user?.id],
+    queryFn: () => PatientWalletService.getPatientWallet(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
   const { records: healthRecords, isLoading: recordsLoading, uploadRecord, deleteRecord } = useHealthRecords(user?.id);
   const queryClient = useQueryClient();
+  const { initializePayment } = usePaystackPayment();
+  const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
+  const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -582,12 +614,6 @@ const PatientPortal = () => {
     return true;
   };
 
-  const handleBookAppointment = () => {
-    if (!requireAuthForBooking()) return;
-    // TODO: Open booking modal or navigate to detailed booking flow
-    toast({ title: 'Booking', description: 'Booking flow not implemented yet.' });
-  };
-
   // Booking modal state
   const [bookingOpen, setBookingOpen] = useState(false);
   const [slotSelectionOpen, setSlotSelectionOpen] = useState(false);
@@ -595,17 +621,20 @@ const PatientPortal = () => {
   const [specialistName, setSpecialistName] = useState('');
   const [bookingDate, setBookingDate] = useState('');
   const [bookingTime, setBookingTime] = useState('');
-  // appointment type removed - all bookings are generic
-  const [bookingNotes, setBookingNotes] = useState('');
-  const [bookingFinalPrice, setBookingFinalPrice] = useState<number | null>(null);
+  const [rescheduleDurationMinutes, setRescheduleDurationMinutes] = useState<number>(30);
+  const [rescheduleConsultationType, setRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [currentRescheduleConsultationType, setCurrentRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
+  const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'cancelled' | 'all'>('all');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all'>('all');
   const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
@@ -613,21 +642,13 @@ const PatientPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
-  const { initializePayment } = usePaystackPayment();
-  const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
-  // Handle external booking requests
+  // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {
     if (searchParams.get('action') === 'book') {
-      setSlotSelectionOpen(true);
-      // Clean up the URL without refreshing
-      setSearchParams(params => {
-        const newParams = new URLSearchParams(params);
-        newParams.delete('action');
-        return newParams;
-      }, { replace: true });
+      navigate('/doctor-discovery', { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, navigate]);
 
   // Handle post-consultation review deep-link
   useEffect(() => {
@@ -690,165 +711,420 @@ const PatientPortal = () => {
     });
   }, [appointments, appointmentsLoading, searchParams, setSearchParams, user?.id]);
 
+  // Load actual paid amount for the appointment from payments table when reschedule target selected
+  useEffect(() => {
+    let mounted = true;
+    const loadPaid = async () => {
+      if (!rescheduleAppointmentId) {
+        setReschedulePaidAmount(null);
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from('payments')
+          .select('amount,status')
+          .eq('appointment_id', rescheduleAppointmentId);
+        if (error) throw error;
+        const rows = (data || []);
+        const successStates = new Set(['completed', 'success', 'paid', 'succeeded']);
+        const successful = rows.filter((p: any) => {
+          const st = String(p.status || '').toLowerCase();
+          return successStates.has(st);
+        });
+        let sum = successful.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+        // Normalize kobo -> naira if amounts look like kobo (heuristic)
+        const storedFinal = Number((rescheduleAppointment as any)?.final_price || 0);
+        if (storedFinal > 0 && sum > storedFinal * 1.5 && sum > 1000) {
+          sum = Math.round(sum / 100);
+        }
+        if (mounted) setReschedulePaidAmount(Number.isFinite(sum) ? sum : 0);
+      } catch (err) {
+        if (mounted) setReschedulePaidAmount(null);
+      }
+    };
+
+    loadPaid();
+    return () => { mounted = false; };
+  }, [rescheduleAppointmentId]);
+
   const resetBookingState = () => {
     setSpecialistName('');
     setBookingDate('');
     setBookingTime('');
-    setBookingNotes('');
-    setBookingFinalPrice(null);
+    setRescheduleDurationMinutes(30);
+    setRescheduleRequestNote('');
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
     setRescheduleDoctorId(null);
     setBookingOpen(false);
+    setSlotSelectionOpen(false);
   };
 
   // Fetch available slots and doctors
   const { data: allSlots = [], isLoading: slotsLoading } = useAvailableSlots();
   const { data: doctors = [], isLoading: doctorsLoading } = useDoctors();
+  const rescheduleAppointment = useMemo(
+    () => appointments.find((apt) => apt.id === rescheduleAppointmentId) || null,
+    [appointments, rescheduleAppointmentId],
+  );
+  const currentRescheduleDurationMinutes = useMemo(() => {
+    if (!rescheduleAppointment) return 30;
+    const value = Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30);
+    return Number.isFinite(value) && value > 0 ? value : 30;
+  }, [rescheduleAppointment]);
+  const currentRescheduleFinalPrice = useMemo(() => {
+    if (!rescheduleAppointment) return 0;
+    const value = Number((rescheduleAppointment as { final_price?: number | null }).final_price || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, [rescheduleAppointment]);
+  const getConsultationTypeForPricing = (apt: { price_breakdown?: Record<string, unknown> | null }) => {
+    const type = String((apt.price_breakdown as Record<string, unknown> | null)?.consultation_type || 'video').toLowerCase();
+    if (type === 'chat' || type === 'voice' || type === 'video') return type;
+    return 'video';
+  };
+  const {
+    data: reschedulePreviewFinalPrice,
+    isLoading: reschedulePreviewLoading,
+    isFetching: reschedulePreviewFetching,
+    refetch: refetchReschedulePrice,
+  } = useQuery({
+    queryKey: [
+      'patient-reschedule-preview',
+      rescheduleAppointmentId,
+      selectedDoctorId,
+      rescheduleDurationMinutes,
+      rescheduleConsultationType,
+    ],
+    queryFn: () =>
+      AvailabilityService.calculatePricePreview({
+        doctorId: selectedDoctorId!,
+        duration: rescheduleDurationMinutes,
+        consultationType: rescheduleConsultationType,
+      }),
+    enabled:
+      !!rescheduleAppointment &&
+      !!selectedDoctorId &&
+      (bookingOpen || slotSelectionOpen),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  // Refetch price whenever duration or consultation type changes during reschedule
+  useEffect(() => {
+    if (bookingOpen && selectedDoctorId && rescheduleAppointment) {
+      refetchReschedulePrice();
+    }
+  }, [rescheduleDurationMinutes, rescheduleConsultationType, bookingOpen, selectedDoctorId, rescheduleAppointment, refetchReschedulePrice]);
+  const proposedRescheduleFinalPrice = useMemo(() => {
+    if (!rescheduleAppointment) return 0;
+    if (typeof reschedulePreviewFinalPrice === 'number' && Number.isFinite(reschedulePreviewFinalPrice)) {
+      return reschedulePreviewFinalPrice;
+    }
+    return currentRescheduleFinalPrice;
+  }, [rescheduleAppointment, reschedulePreviewFinalPrice, currentRescheduleFinalPrice]);
+  const rescheduleUpgradeAmount = useMemo(
+    () => {
+      // Amount to pay = max(0, ProposedPrice - AlreadyPaid)
+      const alreadyPaid = reschedulePaidAmount !== null ? reschedulePaidAmount : 0;
+      return Math.max(0, proposedRescheduleFinalPrice - alreadyPaid);
+    },
+    [proposedRescheduleFinalPrice, reschedulePaidAmount],
+  );
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
     resetBookingState();
-    setSlotSelectionOpen(true);
+    navigate('/doctor-discovery');
   };
 
-  const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
-    // Check if slot is available (conflict check)
-    try {
-      const isAvailable = await checkSlotAvailability(doctor.id, date, time);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        return;
-      }
-
-      setSelectedDoctorId(doctor.id);
-      setSpecialistName(doctor.name);
-      setBookingDate(date);
-      setBookingTime(time);
-      setBookingFinalPrice(null);
+  const handleSlotSelect = (
+    doctor: { id: string; name: string },
+    date: string,
+    time: string,
+    options?: { durationMinutes?: number },
+  ) => {
+    if (!rescheduleAppointmentId) {
+      toast({
+        title: 'Reschedule context missing',
+        description: 'Use Doctor Discovery for new appointments.',
+        variant: 'destructive',
+      });
       setSlotSelectionOpen(false);
-      setBookingOpen(true);
-    } catch (err: unknown) {
-      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : 'Failed to check slot availability';
-      toast({ title: 'Error', description: String(message) });
-    }
-  };
-
-  const createBooking = async () => {
-    if (!requireAuthForBooking()) return;
-    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId) {
-      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
       return;
     }
 
-    if (!paystackPublicKey) {
+    setSelectedDoctorId(doctor.id);
+    setSpecialistName(doctor.name);
+    setBookingDate(date);
+    setBookingTime(time);
+    if (typeof options?.durationMinutes === 'number' && Number.isFinite(options.durationMinutes)) {
+      setRescheduleDurationMinutes(options.durationMinutes);
+    }
+    setSlotSelectionOpen(false);
+    setBookingOpen(true);
+  };
+
+  const initReschedule = (apt: unknown) => {
+    if (!requireAuthForBooking()) return;
+    const aptData = apt as {
+      id?: string;
+      doctor_id?: string;
+      specialist_name?: string;
+      status?: string;
+      reschedule_request_status?: string | null;
+    };
+    if (!aptData.id || !aptData.doctor_id) {
       toast({
-        title: 'Configuration Error',
-        description: 'Payment gateway not configured. Please contact support.',
+        title: 'Cannot reschedule',
+        description: 'Appointment details are incomplete.',
         variant: 'destructive',
       });
       return;
     }
 
-    setIsBooking(true);
-    try {
-      // Final conflict check before insertion
-      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        setIsBooking(false);
-        return;
-      }
-
-      const booking = await BookingService.initiateBooking({
-        doctorId: selectedDoctorId,
-        preferredDate: bookingDate,
-        preferredTime: bookingTime,
-        duration: 30,
-        consultationType: 'video',
-        notes: bookingNotes,
+    const normalizedStatus = normalizeAppointmentStatus(aptData.status);
+    if (normalizeRescheduleRequestStatus(aptData.reschedule_request_status) === 'pending') {
+      toast({
+        title: 'Request already pending',
+        description: 'There is already a reschedule request awaiting action.',
+        variant: 'destructive',
       });
-
-      setBookingFinalPrice(booking.finalPrice);
-      setBookingOpen(false);
-
-      initializePayment({
-        email: booking.paymentInitialization.email || user?.email || '',
-        amount: booking.paymentInitialization.amountInKobo,
-        reference: booking.paymentInitialization.reference,
-        publicKey: paystackPublicKey,
-        metadata: booking.paymentInitialization.metadata,
-        onSuccess: () => {
-          setIsBooking(false);
-          toast({ title: 'Payment successful', description: `Appointment confirmed. Amount paid: ₦${booking.finalPrice.toLocaleString()}` });
-          resetBookingState();
-          invalidateAppointments();
-        },
-        onClose: () => {
-          setIsBooking(false);
-          toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
-        },
-      });
-    } catch (err: unknown) {
-      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
-      toast({ title: 'Booking failed', description: message });
-      setIsBooking(false);
+      return;
     }
-  };
 
-  const initReschedule = (apt: unknown) => {
-    if (!requireAuthForBooking()) return;
-    const aptData = apt as unknown as { id?: string; doctor_id?: string };
-    setRescheduleAppointmentId(aptData.id ?? null);
-    setRescheduleDoctorId(aptData.doctor_id ?? null);
-    // We don't pre-fill doctor/date/time because the user wants to CHANGE them.
-    // But we could pre-fill the doctor if we wanted to restrict rescheduling to the same doctor.
-    // For now, let's allow full flexibility as per the "Book Appointment" flow.
+    const canReschedule =
+      normalizedStatus === 'pending_approval' ||
+      normalizedStatus === 'confirmed' ||
+      normalizedStatus === 'no_show';
+
+    if (!canReschedule) {
+      toast({
+        title: 'Cannot reschedule',
+        description: 'Only pending approval, confirmed, or no-show appointments can be rescheduled.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setRescheduleAppointmentId(aptData.id);
+    setRescheduleDoctorId(aptData.doctor_id);
+    setSelectedDoctorId(aptData.doctor_id);
+    setSpecialistName(getDoctorNameById(aptData.doctor_id, aptData.specialist_name || 'Doctor'));
+    setBookingDate('');
+    setBookingTime('');
+    
+    // Extract current duration and consultation type from appointment
+    const currentDuration = Number((apt as { duration_minutes?: number | null }).duration_minutes || 30) || 30;
+    const currentConsultType = getConsultationTypeForPricing(apt as { price_breakdown?: Record<string, unknown> | null });
+    
+    setRescheduleDurationMinutes(currentDuration);
+    setCurrentRescheduleConsultationType(currentConsultType);
+    setRescheduleConsultationType(currentConsultType);
+    setRescheduleRequestNote('');
+    setBookingOpen(false);
     setSlotSelectionOpen(true);
   };
 
   const rescheduleBooking = async () => {
     if (!requireAuthForBooking()) return;
-    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId) {
-      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
+    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId || !rescheduleAppointment) {
+      toast({
+        title: 'Missing fields',
+        description: 'Please select a new date and time.',
+        variant: 'destructive',
+      });
       return;
+    }
+
+    const currentDoctorId = (rescheduleAppointment as { doctor_id?: string }).doctor_id || null;
+    if (!currentDoctorId || selectedDoctorId !== currentDoctorId) {
+      toast({
+        title: 'Invalid reschedule request',
+        description: 'Reschedule keeps the original doctor. Please pick another date/time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const normalizedTime = /^\d{2}:\d{2}$/.test(bookingTime) ? `${bookingTime}:00` : bookingTime;
+    const targetDateTime = new Date(`${bookingDate}T${normalizedTime}`);
+    if (Number.isNaN(targetDateTime.getTime()) || targetDateTime.getTime() <= Date.now()) {
+      toast({
+        title: 'Invalid date/time',
+        description: 'Please choose a future time slot.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (
+      (reschedulePreviewLoading || reschedulePreviewFetching || !Number.isFinite(reschedulePreviewFinalPrice))
+    ) {
+      toast({
+        title: 'Pricing unavailable',
+        description: 'Still calculating the new price. Please wait a moment and try again.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (rescheduleUpgradeAmount > 0) {
+      if (reschedulePaymentMethod === 'paystack') {
+        if (!paystackPublicKey) {
+          toast({
+            title: 'Payment not configured',
+            description: 'Payment gateway not configured. Contact support.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        // Initialize payment via Paystack for the server-calculated upgrade amount.
+        try {
+          const proposedTimeForPayment = normalizedTime.slice(0, 5);
+          const { data, error } = await supabase.functions.invoke('reschedule-payment-initiate', {
+            body: {
+              appointmentId: rescheduleAppointmentId,
+              proposedDate: bookingDate,
+              proposedTime: proposedTimeForPayment,
+              proposedDuration: rescheduleDurationMinutes,
+              proposedConsultationType: rescheduleConsultationType,
+            },
+          });
+          if (error) throw error;
+          const paymentInit = data as any;
+          if (!paymentInit?.reference) throw new Error('Payment initialization failed');
+
+          setIsBooking(true);
+          // Close the confirmation dialog before opening Paystack.
+          // Radix modal overlay can intercept pointer events above Paystack iframe.
+          setBookingOpen(false);
+          await new Promise((resolve) => setTimeout(resolve, 220));
+          let paymentCompleted = false;
+          initializePayment({
+            email: paymentInit.email || user?.email || '',
+            amount: paymentInit.amountInKobo,
+            reference: paymentInit.reference,
+            publicKey: paystackPublicKey,
+            metadata: paymentInit.metadata,
+            onSuccess: async (response: any) => {
+              paymentCompleted = true;
+              const paidReference = String(response?.reference || paymentInit.reference || '').trim();
+
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+
+                if (confirmError) throw confirmError;
+
+                const confirmResult = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
+                if (confirmResult.error) throw new Error(confirmResult.error);
+
+                toast({
+                  title: 'Payment successful',
+                  description: confirmResult.alreadyFinalized
+                    ? 'Your paid reschedule request is already pending doctor approval.'
+                    : 'Your reschedule request has been submitted and is pending doctor approval.',
+                });
+              } catch (confirmErr: any) {
+                console.warn('[reschedule] client confirmation fallback failed:', confirmErr);
+                toast({
+                  title: 'Payment successful',
+                  description: 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
+                });
+              } finally {
+                setIsBooking(false);
+                resetBookingState();
+                invalidateAppointments();
+                await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
+                setTimeout(() => {
+                  invalidateAppointments();
+                  queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
+                }, 2000);
+              }
+            },
+            onClose: () => {
+              if (paymentCompleted) return;
+              setIsBooking(false);
+              setBookingOpen(true);
+              toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
+            },
+          });
+        } catch (err: any) {
+          toast({ title: 'Payment initialization failed', description: err?.message || 'Could not start payment.', variant: 'destructive' });
+          setIsBooking(false);
+          setBookingOpen(true);
+        }
+        return;
+      }
+      // if user chose wallet but has insufficient funds, block
+      if (reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
+        toast({
+          title: 'Insufficient wallet balance',
+          description: `You need ₦${rescheduleUpgradeAmount.toLocaleString()} in wallet for this upgrade.`,
+          variant: 'destructive',
+        });
+        return;
+      }
     }
 
     setIsBooking(true);
     try {
-      // Final conflict check before update
-      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        setIsBooking(false);
-        return;
-      }
+      await AppointmentRescheduleService.requestReschedule({
+        appointmentId: rescheduleAppointmentId,
+        proposedDate: bookingDate,
+        proposedTime: normalizedTime,
+        proposedDurationMinutes: rescheduleDurationMinutes,
+        proposedFinalPrice: proposedRescheduleFinalPrice,
+        proposedConsultationType: rescheduleConsultationType,
+        requestNote: rescheduleRequestNote || null,
+      });
 
-      const payload = {
-        doctor_id: selectedDoctorId,
-        specialist_name: specialistName,
-        date: bookingDate,
-        time: bookingTime,
-        notes: bookingNotes,
-        status: 'pending', // Reset to pending on reschedule
-      };
-
-      const { error } = await supabase
-        .from('appointments')
-        .update(payload)
-        .eq('id', rescheduleAppointmentId);
-
-      if (error) {
-        throw error;
-      }
-
-      toast({ title: 'Rescheduled', description: 'Your appointment has been rescheduled.' });
+      toast({
+        title: 'Reschedule requested',
+        description: 'Your request has been sent for approval.',
+      });
       resetBookingState();
-      // Refresh appointments list
       invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
-      toast({ title: 'Reschedule failed', description: message });
+      toast({ title: 'Reschedule failed', description: message, variant: 'destructive' });
+    } finally {
+      setIsBooking(false);
+    }
+  };
+
+  const respondToRescheduleRequest = async (appointmentId: string, action: 'approve' | 'decline') => {
+    if (!requireAuthForBooking()) return;
+
+    setIsBooking(true);
+    try {
+      const response = await AppointmentRescheduleService.respondToReschedule({
+        appointmentId,
+        action,
+      });
+
+      toast({
+        title: action === 'approve' ? 'Reschedule approved' : 'Reschedule declined',
+        description:
+          action === 'approve'
+            ? response.charged_upgrade_amount > 0
+              ? `New slot confirmed. ₦${Number(response.charged_upgrade_amount || 0).toLocaleString()} charged from wallet.`
+              : 'New slot confirmed.'
+            : 'The reschedule request was declined.',
+      });
+      invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({
+        title: 'Request update failed',
+        description: message,
+        variant: 'destructive',
+      });
     } finally {
       setIsBooking(false);
     }
@@ -858,16 +1134,17 @@ const PatientPortal = () => {
     if (!cancelAppointmentId) return;
     setIsBooking(true);
     try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ status: 'cancelled' })
-        .eq('id', cancelAppointmentId);
-
-      if (error) throw error;
-
-      toast({ title: 'Cancelled', description: 'Appointment has been cancelled.' });
+      const result = await PatientWalletService.cancelAppointmentWithRefund(cancelAppointmentId);
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Appointment cancelled',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to your wallet balance.`
+          : 'Appointment was cancelled successfully.',
+      });
       setCancelAppointmentId(null);
       invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
       toast({ title: 'Cancellation failed', description: message });
@@ -981,19 +1258,34 @@ const PatientPortal = () => {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'pending_payment':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">Pending Payment</Badge>;
+      case 'pending_approval':
+        return <Badge className="bg-amber-100 text-amber-700 border-amber-300">Pending Approval</Badge>;
       case 'confirmed':
         return <Badge className="bg-success/10 text-success border-success/20">Confirmed</Badge>;
-      case 'pending':
-        return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
+      case 'in_progress':
+        return <Badge className="bg-primary/10 text-primary border-primary/20">In Progress</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">Completed</Badge>;
       case 'cancelled':
-        return <Badge variant="destructive">Cancelled</Badge>;
-      case 'rejected':
-        return <Badge variant="destructive">Rejected</Badge>;
+        return <Badge className="bg-slate-100 text-slate-700 border-slate-300">Cancelled</Badge>;
+      case 'no_show':
+        return <Badge variant="destructive">No Show</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{formatAppointmentStatusLabel(status)}</Badge>;
     }
+  };
+
+  const getRescheduleRequestBadge = (apt: {
+    reschedule_request_status?: string | null;
+    reschedule_requested_by?: string | null;
+  }) => {
+    if (!isPendingRescheduleRequest(apt)) return null;
+    if (isDoctorRequestedReschedule(apt)) {
+      return <Badge className="bg-blue-100 text-blue-700 border-blue-300">Doctor Reschedule Request</Badge>;
+    }
+    return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-300">Reschedule Request Sent</Badge>;
   };
 
   const getDoctorPresenceIndicator = (doctorId: string) => {
@@ -1006,29 +1298,87 @@ const PatientPortal = () => {
     return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
+  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
+    getAppointmentDateTime(apt).getTime() <= Date.now();
+  const isPendingRescheduleRequest = (apt: {
+    reschedule_request_status?: string | null;
+  }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isDoctorRequestedReschedule = (apt: {
+    reschedule_requested_by?: string | null;
+  }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
+  const isPatientRequestedReschedule = (apt: {
+    reschedule_requested_by?: string | null;
+  }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'patient';
+  const getCalendarAppointmentDate = (apt: {
+    date: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_date || apt.date)
+      : apt.date
+  );
+  const getCalendarAppointmentTime = (apt: {
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_time || apt.time)
+      : apt.time
+  );
+  const hasEffectiveAppointmentTimePassed = (apt: {
+    date: string;
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => {
+    const dateValue = getCalendarAppointmentDate(apt);
+    const timeValue = getCalendarAppointmentTime(apt);
+    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    if (!Number.isNaN(effectiveDateTime.getTime())) {
+      return effectiveDateTime.getTime() <= Date.now();
+    }
+    return hasAppointmentTimePassed(apt);
+  };
   const filteredAppointmentsByStatus = useMemo(() => {
     if (!appointments) return [];
-    const now = new Date();
     
     let filtered;
     switch (appointmentStatusFilter) {
-      case 'pending':
-        filtered = appointments.filter(apt => apt.status === 'pending');
+      case 'pending_payment':
+        filtered = appointments.filter((apt) => apt.status === 'pending_payment');
+        break;
+      case 'pending_approval':
+        filtered = appointments.filter(
+          (apt) =>
+            apt.status === 'pending_approval' ||
+            apt.status === 'pending_payment' ||
+            isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'confirmed':
-        filtered = appointments.filter(apt => {
-          const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-          return aptDateTime > now && apt.status === 'confirmed';
-        });
+        filtered = appointments.filter(
+          (apt) =>
+            (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'in_progress':
+        filtered = appointments.filter((apt) => apt.status === 'in_progress');
         break;
       case 'completed':
         filtered = appointments.filter(apt => apt.status === 'completed');
         break;
-      case 'rejected':
-        filtered = appointments.filter(apt => apt.status === 'rejected');
-        break;
       case 'cancelled':
         filtered = appointments.filter(apt => apt.status === 'cancelled');
+        break;
+      case 'no_show':
+        filtered = appointments.filter(
+          (apt) => apt.status === 'no_show' && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'all':
       default:
@@ -1036,19 +1386,45 @@ const PatientPortal = () => {
     }
     
     return filtered.sort((a, b) => {
-      if (appointmentStatusFilter === 'pending') {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      } else if (appointmentStatusFilter === 'confirmed') {
+      if (appointmentStatusFilter === 'pending_payment' || appointmentStatusFilter === 'pending_approval') {
+        const aRescheduleAt = (a as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const bRescheduleAt = (b as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const aTs = new Date(aRescheduleAt || a.created_at).getTime();
+        const bTs = new Date(bRescheduleAt || b.created_at).getTime();
+        return bTs - aTs;
+      }
+
+      if (appointmentStatusFilter === 'confirmed') {
+        const nowTs = Date.now();
+        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const aIsPast = dateTimeA < nowTs;
+        const bIsPast = dateTimeB < nowTs;
+
+        if (aIsPast !== bIsPast) {
+          return aIsPast ? 1 : -1;
+        }
+
+        return aIsPast ? (dateTimeB - dateTimeA) : (dateTimeA - dateTimeB);
+      }
+
+      if (appointmentStatusFilter === 'in_progress') {
         const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
         const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
         return dateTimeA - dateTimeB;
-      } else {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
-        return dateTimeB - dateTimeA;
       }
+
+      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      return dateTimeB - dateTimeA;
     });
   }, [appointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (appointmentStatusFilter === 'pending_payment' || appointmentStatusFilter === 'in_progress') {
+      setAppointmentStatusFilter('confirmed');
+    }
+  }, [appointmentStatusFilter]);
 
   useEffect(() => {
     if (appointmentViewMode !== 'calendar') return;
@@ -1058,15 +1434,24 @@ const PatientPortal = () => {
       return;
     }
 
-    setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
+    setSelectedCalendarDate(getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }));
   }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
 
   const appointmentsByDate = useMemo(() => {
     return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
-      if (!acc[apt.date]) {
-        acc[apt.date] = [];
+      const dateKey = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
       }
-      acc[apt.date].push(apt);
+      acc[dateKey].push(apt);
       return acc;
     }, {});
   }, [filteredAppointmentsByStatus]);
@@ -1081,10 +1466,30 @@ const PatientPortal = () => {
       })
       .map((apt) => apt.status);
   }, [filteredAppointmentsByStatus]);
+  const hasPastConfirmedInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => apt.status === 'confirmed' && hasAppointmentTimePassed(apt)),
+    [filteredAppointmentsByStatus],
+  );
+  const hasPendingRescheduleInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
+    [filteredAppointmentsByStatus],
+  );
 
   const calendarDialogDayAppointments = useMemo(() => {
     if (!calendarDialogDate) return [];
-    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => {
+      const timeA = getCalendarAppointmentTime(a as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const timeB = getCalendarAppointmentTime(b as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      return timeA.localeCompare(timeB);
+    });
   }, [appointmentsByDate, calendarDialogDate]);
 
   const calendarFocusedAppointment = useMemo(() => {
@@ -1111,25 +1516,49 @@ const PatientPortal = () => {
 
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
-      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+      const isPastConfirmed = apt.status === 'confirmed' && hasAppointmentTimePassed(apt);
+      const eventDate = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      const eventTime = getCalendarAppointmentTime(apt as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const styles = pendingReschedule
+        ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
+        : isPastConfirmed
+        ? PAST_CONFIRMED_CALENDAR_STYLE
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       const doctorName = getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name);
       return {
         id: apt.id,
         title: doctorName,
-        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        start: `${eventDate}T${normalizeTime(eventTime)}`,
         allDay: false,
         backgroundColor: styles.bg,
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
           status: apt.status,
-          appointmentDate: apt.date
+          appointmentDate: eventDate,
+          isPastConfirmed,
+          isPendingReschedule: pendingReschedule,
         }
       };
     });
   }, [filteredAppointmentsByStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]
+    ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    })
+    : 'empty'}`;
   const handleCalendarDayClick = (dateStr: string) => {
     const dayKey = dateStr.slice(0, 10);
     setSelectedCalendarDate(dayKey);
@@ -1163,8 +1592,17 @@ const PatientPortal = () => {
       ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
-    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    const isPastConfirmed = Boolean(arg.event.extendedProps.isPastConfirmed);
+    const isPendingReschedule = Boolean(arg.event.extendedProps.isPendingReschedule);
+    const eventStatusLabel = eventStatus ? formatAppointmentStatusLabel(eventStatus) : 'Appointment';
+    arg.el.setAttribute(
+      'title',
+      `${arg.event.title} • ${eventTime} • ${eventStatusLabel}${isPendingReschedule ? ' (Reschedule Pending)' : ''}${isPastConfirmed ? ' (Time Passed)' : ''}`,
+    );
+    if (isPastConfirmed) {
+      arg.el.style.boxShadow = 'inset 0 0 0 1px rgba(120, 53, 15, 0.35)';
+      arg.el.style.opacity = '0.9';
+    }
     arg.el.style.cursor = 'pointer';
   };
 
@@ -1199,10 +1637,22 @@ const PatientPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span className="capitalize">{status}</span>
+                  <span>{formatAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
+            {hasPastConfirmedInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PAST_CONFIRMED_CALENDAR_STYLE.dot }} />
+                <span>Confirmed (Time Passed)</span>
+              </div>
+            )}
+            {hasPendingRescheduleInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#2563eb' }} />
+                <span>Reschedule Pending</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -1211,7 +1661,15 @@ const PatientPortal = () => {
             key={calendarRenderKey}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
-            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            initialDate={selectedCalendarDate || (
+              filteredAppointmentsByStatus[0]
+                ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+                  date: string;
+                  reschedule_request_status?: string | null;
+                  reschedule_proposed_date?: string | null;
+                })
+                : undefined
+            )}
             headerToolbar={{
               left: 'prev,next today',
               center: 'title',
@@ -1258,10 +1716,18 @@ const PatientPortal = () => {
                         <Clock className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm font-medium">{apt.time}</span>
                         {getStatusBadge(apt.status)}
+                        {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
                         {getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                       </p>
+                      {isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) && (
+                        <p className="text-xs text-blue-700 mt-1 truncate">
+                          Proposed: {new Date(
+                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
                     </div>
                     <Button
@@ -1306,11 +1772,31 @@ const PatientPortal = () => {
                     <span>{calendarFocusedAppointment.time}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
+                  {getRescheduleRequestBadge(calendarFocusedAppointment as {
+                    reschedule_request_status?: string | null;
+                    reschedule_requested_by?: string | null;
+                  })}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50/60 p-2 text-xs text-blue-900">
+                      <p className="font-medium">Proposed Slot</p>
+                      <p>
+                        {new Date(
+                          String((calendarFocusedAppointment as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || calendarFocusedAppointment.date)
+                        ).toLocaleDateString()}{' '}
+                        at {(calendarFocusedAppointment as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || '--:--'}
+                      </p>
+                    </div>
+                  )}
+                  {calendarFocusedAppointment.status === 'confirmed' && hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    <p className="text-xs font-medium text-amber-700">
+                      Appointment time has passed. It remains confirmed until your doctor marks no-show or follow-up.
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
-                  {calendarFocusedAppointment.status === 'confirmed' && (
+                  {(calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') && (
                     <JoinConsultationButton
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
@@ -1331,29 +1817,74 @@ const PatientPortal = () => {
                       Leave Review
                     </Button>
                   )}
-                  {calendarFocusedAppointment.status === 'pending' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'pending_approval' ||
+                      calendarFocusedAppointment.status === 'confirmed' ||
+                      calendarFocusedAppointment.status === 'no_show') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        initReschedule(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      Reschedule
+                    </Button>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'pending_approval' ||
+                      calendarFocusedAppointment.status === 'confirmed') && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isDoctorRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
                     <>
                       <Button
                         size="sm"
-                        variant="outline"
                         onClick={() => {
-                          initReschedule(calendarFocusedAppointment);
+                          respondToRescheduleRequest(calendarFocusedAppointment.id, 'approve');
                           setCalendarEventDialogOpen(false);
                         }}
+                        disabled={isBooking}
                       >
-                        Reschedule
+                        Accept New Slot
                       </Button>
                       <Button
                         size="sm"
-                        variant="destructive"
+                        variant="outline"
+                        className="text-destructive border-destructive/30"
                         onClick={() => {
-                          setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                          respondToRescheduleRequest(calendarFocusedAppointment.id, 'decline');
                           setCalendarEventDialogOpen(false);
                         }}
+                        disabled={isBooking}
                       >
-                        Cancel
+                        Decline Request
                       </Button>
                     </>
+                  )}
+                  {calendarFocusedAppointment.status === 'no_show' &&
+                    !isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCalendarEventDialogOpen(false);
+                        openBooking();
+                      }}
+                    >
+                      Book Another Doctor
+                    </Button>
                   )}
                 </div>
               </div>
@@ -1364,7 +1895,74 @@ const PatientPortal = () => {
     );
   };
 
-  const pendingCount = appointments.filter(apt => apt.status === 'pending').length;
+  const pendingApprovalCount = appointments.filter((apt) => {
+    const status = apt.status;
+    const isPending = status === 'pending_approval' || status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+    if (!isPending) return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }
+    return true;
+  }).length;
+
+  const confirmedCount = appointments.filter((apt) => {
+    if (apt.status !== 'confirmed') return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasAppointmentTimePassed(apt as { date: string; time: string });
+    }
+    return true;
+  }).length;
+
+  const handlePayNow = async (apt: any) => {
+    if (!user) {
+      toast({ title: 'Please sign in', description: 'You must be signed in to pay for this appointment.' });
+      navigate('/auth');
+      return;
+    }
+    if (!paystackPublicKey) {
+      toast({ title: 'Payment not configured', description: 'Payment gateway not configured. Contact support.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      // For existing pending_payment appointments, use PaymentService to initialize payment
+      const { data: paymentInitData, error: paymentInitError } = await supabase.functions.invoke('payment-initialize', {
+        body: {
+          appointmentId: apt.id,
+          patientId: user.id,
+          type: 'appointment_confirmation',
+        }
+      });
+
+      if (paymentInitError) throw paymentInitError;
+      const paymentInit = paymentInitData as any;
+
+      initializePayment({
+        email: paymentInit?.email || user.email || '',
+        amount: paymentInit?.amountInKobo,
+        reference: paymentInit?.reference,
+        publicKey: paystackPublicKey,
+        metadata: paymentInit?.metadata,
+        onSuccess: () => {
+          toast({ title: 'Payment successful', description: 'Your appointment has been confirmed.' });
+          invalidateAppointments();
+          setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+        },
+        onClose: () => {
+          toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
+        },
+      });
+    } catch (err: any) {
+      console.error('Payment init error', err);
+      toast({ title: 'Payment error', description: err?.message || 'Unable to start payment.', variant: 'destructive' });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -1531,7 +2129,7 @@ const PatientPortal = () => {
                       const appointmentDate = new Date(apt.date);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                      return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                     }).length} upcoming appointments.
                   </p>
                 </div>
@@ -1543,6 +2141,16 @@ const PatientPortal = () => {
               </div>
             </motion.div>
 
+            <Card>
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">Wallet Balance</p>
+                  <p className="text-xs text-muted-foreground">Cancellation and no-show refunds are credited here.</p>
+                </div>
+                <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+              </CardContent>
+            </Card>
+
             {/* Slot Selection Modal */}
             <SlotSelectionModal
               open={slotSelectionOpen}
@@ -1551,43 +2159,154 @@ const PatientPortal = () => {
               isLoading={slotsLoading || doctorsLoading}
               onSlotSelect={handleSlotSelect}
               doctorId={rescheduleDoctorId}
+              mode="reschedule"
+              currentDurationMinutes={currentRescheduleDurationMinutes}
+              selectedDurationMinutes={rescheduleDurationMinutes}
+              onDurationChange={setRescheduleDurationMinutes}
+              currentConsultationType={currentRescheduleConsultationType}
+              selectedConsultationType={rescheduleConsultationType}
+              onConsultationTypeChange={setRescheduleConsultationType}
             />
 
-            {/* Booking Confirmation Modal */}
+            {/* Reschedule Confirmation Modal */}
             <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>{rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Appointment'}</DialogTitle>
-                  <DialogDescription>Review and confirm your appointment details.</DialogDescription>
+                  <DialogTitle>Confirm Reschedule Request</DialogTitle>
+                  <DialogDescription>
+                    {rescheduleUpgradeAmount > 0 
+                      ? 'Review the appointment changes and payment details'
+                      : 'Review and confirm your new appointment time'}
+                  </DialogDescription>
                 </DialogHeader>
 
                 <div className="grid gap-4 py-4">
-                  <div className="p-3 rounded-lg bg-muted/50">
-                    <p className="text-sm font-medium">Selected Slot</p>
-                    <div className="mt-2 space-y-1 text-sm">
-                      <div><span className="text-muted-foreground">Doctor:</span> {specialistName}</div>
-                      <div><span className="text-muted-foreground">Date:</span> {new Date(bookingDate).toLocaleDateString()}</div>
-                      <div><span className="text-muted-foreground">Time:</span> {bookingTime}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <Label>Consultation Fee</Label>
-                    <div className="p-2 text-sm">
-                      {bookingFinalPrice !== null
-                        ? `₦${bookingFinalPrice.toLocaleString()}`
-                        : 'Calculated securely at payment step'}
-                    </div>
-                  </div>
-                  <div>
-                    <Label>Additional Notes (Optional)</Label>
-                    <textarea
-                      className="w-full p-2 border rounded text-sm"
-                      rows={3}
-                      value={bookingNotes}
-                      onChange={(e) => setBookingNotes(e.target.value)}
-                      placeholder="Any additional information for the doctor..."
-                    />
-                  </div>
+                  {rescheduleAppointment && (
+                    <>
+                      <div className="p-3 rounded-lg border border-border bg-background/60">
+                        <p className="text-sm font-medium mb-2">Current Appointment</p>
+                        <div className="space-y-1 text-sm text-muted-foreground">
+                          <div>
+                            <span className="text-foreground font-medium">Doctor:</span>{' '}
+                            {getDoctorNameById((rescheduleAppointment as { doctor_id?: string }).doctor_id, rescheduleAppointment.specialist_name)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Date & Time:</span>{' '}
+                            {new Date(rescheduleAppointment.date).toLocaleDateString()} at {rescheduleAppointment.time}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Duration:</span>{' '}
+                            {currentRescheduleDurationMinutes} min
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Mode:</span>{' '}
+                            {currentRescheduleConsultationType.charAt(0).toUpperCase() + currentRescheduleConsultationType.slice(1)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Price Paid:</span>{' '}
+                            ₦{(reschedulePaidAmount !== null ? reschedulePaidAmount : currentRescheduleFinalPrice).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+                        <p className="text-sm font-medium mb-2">New Appointment</p>
+                        <div className="space-y-1 text-sm text-muted-foreground">
+                          <div>
+                            <span className="text-foreground font-medium">Doctor:</span>{' '}
+                            {specialistName}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Date & Time:</span>{' '}
+                            {new Date(bookingDate).toLocaleDateString()} at {bookingTime}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Duration:</span>{' '}
+                            {rescheduleDurationMinutes} min
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Mode:</span>{' '}
+                            {rescheduleConsultationType.charAt(0).toUpperCase() + rescheduleConsultationType.slice(1)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">New Price:</span>{' '}
+                            {reschedulePreviewLoading || reschedulePreviewFetching
+                              ? 'Calculating...'
+                              : `₦${proposedRescheduleFinalPrice.toLocaleString()}`}
+                          </div>
+                        </div>
+                      </div>
+
+                      {rescheduleUpgradeAmount > 0 && (
+                        <>
+                          <div className="rounded-lg border border-border bg-background/60 p-3">
+                            <div className="space-y-2 text-sm">
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">New Price</span>
+                                <span className="font-medium">₦{proposedRescheduleFinalPrice.toLocaleString()}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">Already Paid</span>
+                                <span className="font-medium">₦{(reschedulePaidAmount !== null ? reschedulePaidAmount : 0).toLocaleString()}</span>
+                              </div>
+                              <div className="border-t pt-2 flex items-center justify-between">
+                                <span className="font-medium">Balance to Pay</span>
+                                <span className="font-semibold text-amber-700">₦{rescheduleUpgradeAmount.toLocaleString()}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-2">
+                            <p className="text-sm font-medium mb-2">Payment Method</p>
+                            <div className="flex items-center gap-3 text-sm">
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="paystack"
+                                  checked={reschedulePaymentMethod === 'paystack'}
+                                  onChange={() => setReschedulePaymentMethod('paystack')}
+                                />
+                                <span>Paystack (recommended)</span>
+                              </label>
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="wallet"
+                                  checked={reschedulePaymentMethod === 'wallet'}
+                                  onChange={() => setReschedulePaymentMethod('wallet')}
+                                  disabled={patientWalletBalance < rescheduleUpgradeAmount}
+                                />
+                                <span>Use Wallet {patientWalletBalance < rescheduleUpgradeAmount ? '(insufficient)' : ''}</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {patientWalletBalance < rescheduleUpgradeAmount && reschedulePaymentMethod === 'wallet' && (
+                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                              Wallet balance insufficient. Please use Paystack or add funds to your wallet.
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      <div>
+                        <label className="text-sm font-medium">Note (optional)</label>
+                        <textarea
+                          className="mt-1 w-full rounded-md border border-input bg-background p-2 text-sm"
+                          rows={2}
+                          value={rescheduleRequestNote}
+                          onChange={(e) => setRescheduleRequestNote(e.target.value)}
+                          placeholder="Add any context about this reschedule request..."
+                        />
+                      </div>
+
+                      <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-xs text-emerald-900">
+                        This submits a reschedule request for doctor approval. Your current appointment remains scheduled until the request is approved.
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <DialogFooter>
@@ -1597,9 +2316,17 @@ const PatientPortal = () => {
                   }}>
                     Back
                   </Button>
-                  <Button variant="outline" onClick={() => setBookingOpen(false)}>Cancel</Button>
-                  <Button onClick={rescheduleAppointmentId ? rescheduleBooking : createBooking} disabled={isBooking}>
-                    {isBooking ? 'Submitting...' : (rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Booking')}
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setBookingOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={rescheduleBooking}
+                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
+                  >
+                    {isBooking ? 'Submitting...' : rescheduleUpgradeAmount > 0 ? 'Proceed to Payment' : 'Confirm Reschedule'}
                   </Button>
                 </DialogFooter>
                 <DialogClose />
@@ -1611,7 +2338,9 @@ const PatientPortal = () => {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Cancel Appointment</DialogTitle>
-                  <DialogDescription>Are you sure you want to cancel this appointment? This action cannot be undone.</DialogDescription>
+                  <DialogDescription>
+                    Are you sure you want to cancel this appointment? Paid appointments are refunded to your wallet balance.
+                  </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>No, Keep It</Button>
@@ -1652,7 +2381,7 @@ const PatientPortal = () => {
                       const appointmentDate = new Date(apt.date);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                      return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                     }).length === 0 ? (
                       <div className="text-center py-8">
                         <p className="text-muted-foreground">No upcoming appointments</p>
@@ -1667,7 +2396,7 @@ const PatientPortal = () => {
                           const appointmentDate = new Date(apt.date);
                           const today = new Date();
                           today.setHours(0, 0, 0, 0);
-                          return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                          return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                         }).slice(0, 3).map((apt) => (
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
@@ -1701,7 +2430,7 @@ const PatientPortal = () => {
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
                               </div>
-                              {apt.status === 'confirmed' && (
+                              {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                 <JoinConsultationButton
                                   appointmentId={apt.id}
                                   participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
@@ -1841,36 +2570,54 @@ const PatientPortal = () => {
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
                       <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
-                        <TabsTrigger value="pending" className="relative">
-                          Pending
-                          {pendingCount > 0 && (
+                        <TabsTrigger value="pending_approval" className="relative">
+                          Pending Approval
+                          {pendingApprovalCount > 0 && (
                             <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
-                              {pendingCount}
+                              {pendingApprovalCount}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
+                        <TabsTrigger value="confirmed" className="relative">
+                          Confirmed
+                          {confirmedCount > 0 && (
+                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                              {confirmedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
                         <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="rejected">Rejected</TabsTrigger>
                         <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
+                        <TabsTrigger value="no_show">No Show</TabsTrigger>
                         <TabsTrigger value="all">All</TabsTrigger>
                       </TabsList>
 
-                      {/* Pending Tab Content */}
-                      <TabsContent value="pending" className="space-y-4">
+                      {/* Pending Approval Tab Content */}
+                      <TabsContent value="pending_approval" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No pending appointments', 'Pending appointments await doctor confirmation')
+                          renderAppointmentsCalendar(
+                            'No pending approvals',
+                            'Includes new bookings awaiting doctor approval and reschedule requests awaiting action.'
+                          )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No pending appointments</p>
-                                <p className="text-sm text-muted-foreground mt-2">Pending appointments await doctor confirmation</p>
+                                <p className="text-muted-foreground">No pending approvals</p>
+                                <p className="text-sm text-muted-foreground mt-2">Includes new bookings and reschedule requests awaiting action.</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/40' : 'border-amber-300/30 bg-amber-50/30'
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="relative">
                                       <Avatar className="w-12 h-12">
@@ -1892,19 +2639,48 @@ const PatientPortal = () => {
                                       <p className="text-sm text-muted-foreground">
                                         {new Date(apt.date).toLocaleDateString()} at {apt.time}
                                       </p>
+                                      {pendingReschedule && (
+                                        <p className="text-xs font-medium text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
+                                      {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
-                                    <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                      Reschedule
-                                    </Button>
-                                    <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
-                                      Cancel
-                                    </Button>
+                                    {pendingReschedule && doctorRequested ? (
+                                      <>
+                                        <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking}>
+                                          Accept New Slot
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-destructive border-destructive/30"
+                                          onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                          disabled={isBooking}
+                                        >
+                                          Decline
+                                        </Button>
+                                      </>
+                                    ) : pendingReschedule ? (
+                                      <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                    ) : (
+                                      <>
+                                        <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                          Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                          Cancel
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -1913,17 +2689,21 @@ const PatientPortal = () => {
                       {/* Confirmed Tab Content */}
                       <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No confirmed appointments')
+                          renderAppointmentsCalendar('No confirmed or in-progress appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No confirmed appointments</p>
+                                <p className="text-muted-foreground">No confirmed or in-progress appointments</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isPastConfirmed = hasAppointmentTimePassed(apt);
+                                return (
+                                <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                  isPastConfirmed ? 'border-amber-300/40 bg-amber-50/40' : 'border-primary/30 bg-primary/5'
+                                }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
                                       <p className="text-sm font-semibold">{apt.time}</p>
@@ -1948,18 +2728,30 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">Appointment</p>
+                                      {isPastConfirmed && (
+                                        <p className="text-xs font-medium text-amber-700 mt-1">
+                                          Appointment time passed. Waiting for doctor action (no-show or follow-up).
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  <JoinConsultationButton
-                                    appointmentId={apt.id}
-                                    participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                                    status={apt.status}
-                                    variant="default"
-                                    size="sm"
-                                    className="gradient-primary"
-                                  />
+                                  <div className="flex flex-col sm:flex-row gap-2">
+                                    <JoinConsultationButton
+                                      appointmentId={apt.id}
+                                      participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                      status={apt.status}
+                                      variant="default"
+                                      size="sm"
+                                      className="gradient-primary"
+                                    />
+                                    {apt.status === 'confirmed' && (
+                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                        Reschedule
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2028,16 +2820,16 @@ const PatientPortal = () => {
                         )}
                       </TabsContent>
 
-                      {/* Rejected Tab Content */}
-                      <TabsContent value="rejected" className="space-y-4">
+                      {/* No Show Tab Content */}
+                      <TabsContent value="no_show" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No rejected appointments')
+                          renderAppointmentsCalendar('No no-show appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No rejected appointments</p>
+                                <p className="text-muted-foreground">No no-show appointments</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
@@ -2064,7 +2856,15 @@ const PatientPortal = () => {
                                       <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
-                                  <Badge variant="destructive">Rejected</Badge>
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="destructive">No Show</Badge>
+                                    <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                      Reschedule
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={openBooking}>
+                                      Book Another Doctor
+                                    </Button>
+                                  </div>
                                 </div>
                               ))
                             )}
@@ -2128,8 +2928,16 @@ const PatientPortal = () => {
                                 <p className="text-muted-foreground">No appointments found</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/30' : ''
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
                                       <p className="text-sm font-semibold">{apt.time}</p>
@@ -2150,15 +2958,30 @@ const PatientPortal = () => {
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">Appointment</p>
                                       <Badge className="mt-1" variant={
-                                        apt.status === 'pending' ? 'default' :
+                                        apt.status === 'pending_payment' ? 'default' :
+                                        apt.status === 'pending_approval' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
+                                        apt.status === 'in_progress' ? 'secondary' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {apt.status}
+                                        {formatAppointmentStatusLabel(apt.status)}
                                       </Badge>
+                                      <div className="mt-1">
+                                        {getRescheduleRequestBadge(apt as {
+                                          reschedule_request_status?: string | null;
+                                          reschedule_requested_by?: string | null;
+                                        })}
+                                      </div>
+                                      {pendingReschedule && (
+                                        <p className="text-xs text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  {apt.status === 'confirmed' && (
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
@@ -2178,7 +3001,17 @@ const PatientPortal = () => {
                                       Leave Review
                                     </Button>
                                   )}
-                                  {apt.status === 'pending' && (
+                                  {apt.status === 'pending_payment' && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" onClick={() => handlePayNow(apt)}>
+                                        Pay Now
+                                      </Button>
+                                      <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {!pendingReschedule && apt.status === 'pending_approval' && (
                                     <div className="flex gap-2">
                                       <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
                                         Reschedule
@@ -2188,8 +3021,42 @@ const PatientPortal = () => {
                                       </Button>
                                     </div>
                                   )}
+                                  {!pendingReschedule && apt.status === 'confirmed' && (
+                                    <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                      Reschedule
+                                    </Button>
+                                  )}
+                                  {!pendingReschedule && apt.status === 'no_show' && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                        Reschedule
+                                      </Button>
+                                      <Button size="sm" variant="outline" onClick={openBooking}>
+                                        Book Another Doctor
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && doctorRequested && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking}>
+                                        Accept New Slot
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-destructive border-destructive/30"
+                                        onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                        disabled={isBooking}
+                                      >
+                                        Decline
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && !doctorRequested && (
+                                    <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                  )}
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}

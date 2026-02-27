@@ -31,9 +31,9 @@ const overlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
 
 const BUSY_STATUSES = new Set([
   'confirmed',
+  'pending_approval',
   'in_progress',
   'completed',
-  'pending',
   'pending_payment',
 ]);
 
@@ -78,7 +78,7 @@ export class AvailabilityService {
 
     const { error: updateError } = await this.supabase
       .from('appointments')
-      .update({ status: 'expired', slot_locked_until: null })
+      .update({ status: 'cancelled', slot_locked_until: null })
       .in('id', pendingPaymentIds);
 
     if (updateError) {
