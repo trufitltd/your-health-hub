@@ -69,6 +69,24 @@ export interface DoctorWallet {
   updated_at: string;
 }
 
+export interface PatientWallet {
+  patient_id: string;
+  available_balance: number;
+  updated_at: string;
+}
+
+export interface PatientWalletTransaction {
+  id: string;
+  patient_id: string;
+  appointment_id: string | null;
+  amount: number;
+  direction: 'credit' | 'debit';
+  transaction_type: 'refund' | 'booking_wallet_use' | 'adjustment';
+  status: 'completed' | 'reversed';
+  narration: string | null;
+  created_at: string;
+}
+
 export interface PriceModifierResult {
   conditionType: PricingConditionType | 'consultation_type_flat_rate';
   conditionValue: string;
@@ -128,6 +146,33 @@ export interface PricePreviewResponse {
   consultationType: 'chat' | 'voice' | 'video';
 }
 
+export type AppointmentStatus =
+  | 'pending_payment'
+  | 'pending_approval'
+  | 'confirmed'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
+export type RescheduleRequestStatus =
+  | 'none'
+  | 'pending'
+  | 'approved'
+  | 'declined'
+  | 'cancelled'
+  | 'expired';
+
+const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
+  pending_payment: 'Pending Payment',
+  pending_approval: 'Pending Approval',
+  confirmed: 'Confirmed',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+  no_show: 'No Show',
+};
+
 export const normalizeAppointmentStatusRaw = (status?: string | null) => {
   const normalized = (status || '')
     .trim()
@@ -136,17 +181,54 @@ export const normalizeAppointmentStatusRaw = (status?: string | null) => {
     .replace(/\s+/g, '_');
 
   if (!normalized) return '';
-  if (normalized === 'requested' || normalized === 'awaiting_approval') return 'pending';
+  if (
+    normalized === 'requested' ||
+    normalized === 'awaiting_approval' ||
+    normalized === 'pending' ||
+    normalized === 'pending_doctor_acceptance' ||
+    normalized === 'pending_approval'
+  ) return 'pending_approval';
   if (normalized === 'canceled') return 'cancelled';
+  if (normalized === 'rejected' || normalized === 'declined' || normalized === 'expired') return 'cancelled';
   if (normalized === 'inprogress') return 'in_progress';
+  if (normalized === 'noshow') return 'no_show';
   return normalized;
 };
 
-export const normalizeAppointmentStatus = (status?: string | null) => {
+export const normalizeAppointmentStatus = (status?: string | null) => normalizeAppointmentStatusRaw(status);
+
+export const normalizeRescheduleRequestStatus = (status?: string | null): RescheduleRequestStatus => {
+  const normalized = (status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/\s+/g, '_');
+
+  if (!normalized) return 'none';
+  if (
+    normalized === 'none' ||
+    normalized === 'pending' ||
+    normalized === 'approved' ||
+    normalized === 'declined' ||
+    normalized === 'cancelled' ||
+    normalized === 'expired'
+  ) {
+    return normalized as RescheduleRequestStatus;
+  }
+  return 'none';
+};
+
+export const formatAppointmentStatusLabel = (status?: string | null) => {
   const normalized = normalizeAppointmentStatusRaw(status);
-  if (normalized === 'pending_payment') return 'pending';
-  if (normalized === 'expired') return 'cancelled';
-  return normalized;
+  if (!normalized) return 'Unknown';
+  if (normalized in APPOINTMENT_STATUS_LABELS) {
+    return APPOINTMENT_STATUS_LABELS[normalized as AppointmentStatus];
+  }
+  return normalized
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 };
 
 export const isPendingPaymentAppointmentStatus = (status?: string | null) =>
@@ -155,11 +237,11 @@ export const isPendingPaymentAppointmentStatus = (status?: string | null) =>
 export const isSlotBlockingAppointmentStatus = (status?: string | null) => {
   const normalized = normalizeAppointmentStatusRaw(status);
   return (
-    normalized === 'pending' ||
+    normalized === 'pending_payment' ||
+    normalized === 'pending_approval' ||
     normalized === 'confirmed' ||
     normalized === 'in_progress' ||
-    normalized === 'completed' ||
-    normalized === 'pending_payment'
+    normalized === 'completed'
   );
 };
 

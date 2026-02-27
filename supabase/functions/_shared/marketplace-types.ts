@@ -89,6 +89,15 @@ export interface PaystackVerifyResult {
   raw: Record<string, unknown>;
 }
 
+export type AppointmentStatus =
+  | 'pending_payment'
+  | 'pending_approval'
+  | 'confirmed'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
 export const normalizeDoctorType = (specialty?: string | null): DoctorType => {
   const value = (specialty || '').toLowerCase().replace(/[_-]/g, ' ').trim();
   if (value === 'general practice' || value === 'general practitioner' || value === 'gp') {
@@ -107,18 +116,21 @@ export const normalizeAppointmentStatusRaw = (status?: string | null) => {
     .replace(/\s+/g, '_');
 
   if (!normalized) return '';
-  if (normalized === 'requested' || normalized === 'awaiting_approval') return 'pending';
+  if (
+    normalized === 'requested' ||
+    normalized === 'awaiting_approval' ||
+    normalized === 'pending' ||
+    normalized === 'pending_doctor_acceptance' ||
+    normalized === 'pending_approval'
+  ) return 'pending_approval';
   if (normalized === 'canceled') return 'cancelled';
+  if (normalized === 'rejected' || normalized === 'declined' || normalized === 'expired') return 'cancelled';
   if (normalized === 'inprogress') return 'in_progress';
+  if (normalized === 'noshow') return 'no_show';
   return normalized;
 };
 
-export const normalizeAppointmentStatus = (status?: string | null) => {
-  const normalized = normalizeAppointmentStatusRaw(status);
-  if (normalized === 'pending_payment') return 'pending';
-  if (normalized === 'expired') return 'cancelled';
-  return normalized;
-};
+export const normalizeAppointmentStatus = (status?: string | null) => normalizeAppointmentStatusRaw(status);
 
 export const isPendingPaymentAppointmentStatus = (status?: string | null) =>
   normalizeAppointmentStatusRaw(status) === 'pending_payment';
