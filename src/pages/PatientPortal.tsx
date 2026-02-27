@@ -55,6 +55,7 @@ import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
@@ -1734,7 +1735,6 @@ const PatientPortal = () => {
   };
 
   const getStatusBadge = (status: string) => {
-    const statusLabel = getAppointmentStatusLabel(status);
     switch (status) {
       case 'pending_payment':
         return <Badge className="bg-warning/10 text-warning border-warning/20">{t('appointmentStatus.pendingPayment', 'Pending Payment')}</Badge>;
