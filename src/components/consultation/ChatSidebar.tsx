@@ -4,6 +4,7 @@ import { MessageSquare, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface Message {
   id: string;
@@ -32,6 +33,7 @@ export function ChatSidebar({
   onSendMessage
 }: ChatSidebarProps) {
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const { formatTime } = useLocaleFormatter();
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -89,7 +91,7 @@ export function ChatSidebar({
                         <p className="text-sm break-words">{message.content}</p>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-1 px-1">
-                        {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatTime(message.timestamp)}
                       </p>
                     </div>
                   </div>

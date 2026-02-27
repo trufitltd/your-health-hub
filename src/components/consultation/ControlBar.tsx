@@ -1,6 +1,8 @@
 import { Mic, MicOff, Video, VideoOff, MessageSquare, Hand, PhoneOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { translateToastText } from '@/lib/toastI18n';
 
 interface ControlBarProps {
   isAudioEnabled: boolean;
@@ -33,6 +35,9 @@ export function ControlBar({
   onEndCallForEveryone,
   canEndCallForEveryone = false
 }: ControlBarProps) {
+  const { language } = useLanguage();
+  const ui = (text: string) => translateToastText(text, language);
+
   return (
     <div className="relative z-30 p-3 sm:p-4 bg-gradient-to-t from-black/60 to-transparent">
       <div className="flex items-center justify-center">
@@ -56,7 +61,7 @@ export function ControlBar({
                       {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{isAudioEnabled ? 'Mute' : 'Unmute'}</TooltipContent>
+                  <TooltipContent>{isAudioEnabled ? ui('Mute') : ui('Unmute')}</TooltipContent>
                 </Tooltip>
 
                 {/* Video control */}
@@ -76,7 +81,7 @@ export function ControlBar({
                         {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>Camera</TooltipContent>
+                    <TooltipContent>{ui('Camera')}</TooltipContent>
                   </Tooltip>
                 )}
 
@@ -114,7 +119,7 @@ export function ControlBar({
                 </button>
               </TooltipTrigger>
               <TooltipContent>
-                {unreadMessageCount > 0 ? `${unreadMessageCount} unread message${unreadMessageCount > 1 ? 's' : ''}` : 'Chat'}
+                {unreadMessageCount > 0 ? `${unreadMessageCount} ${ui('unread message')}${unreadMessageCount > 1 ? 's' : ''}` : ui('Chat')}
               </TooltipContent>
             </Tooltip>
 
@@ -134,7 +139,7 @@ export function ControlBar({
                   <Hand className="w-5 h-5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{handRaised ? 'Lower hand' : 'Raise hand'}</TooltipContent>
+              <TooltipContent>{handRaised ? ui('Lower hand') : ui('Raise hand')}</TooltipContent>
             </Tooltip>
 
             <div className="w-px h-8 bg-white/20 mx-1 hidden sm:block" />
@@ -152,7 +157,7 @@ export function ControlBar({
                     <PhoneOff className="w-5 h-5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>End Call For Everyone</TooltipContent>
+                <TooltipContent>{ui('End Call For Everyone')}</TooltipContent>
               </Tooltip>
             ) : (
               <Tooltip>
@@ -166,7 +171,7 @@ export function ControlBar({
                     <PhoneOff className="w-5 h-5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Leave Call</TooltipContent>
+                <TooltipContent>{ui('Leave Call')}</TooltipContent>
               </Tooltip>
             )}
           </TooltipProvider>

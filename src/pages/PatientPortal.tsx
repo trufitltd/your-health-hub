@@ -54,8 +54,11 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
+import { useLocaleFormatter } from '@/lib/locale';
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -116,6 +119,87 @@ interface PatientPrescription {
   isDownloaded: boolean;
 }
 
+interface PatientInvestigationRequest {
+  id: string;
+  noteId: string;
+  noteIds: string[];
+  doctor: string;
+  doctorId: string | null;
+  sessionId: string | null;
+  date: string;
+  details: string;
+}
+
+const INVESTIGATION_SECTION_HEADERS = [
+  'Investigations',
+  'Gwaje-gwaje',
+  'Nnyocha Lab',
+  'Àwọn Ìdánwò',
+  'Vipimo',
+  'الفحوصات',
+  'Investigaciones',
+  'Exames',
+  'Onderzoeken',
+  '检查项目',
+  'Untersuchungen',
+];
+
+const NEXT_SECTION_HEADERS = [
+  'E-Prescription',
+  'Prescription',
+  'Prescriptions',
+  'E-Magani',
+  'Ntuziaka Ọgwụ',
+  'E-Òògùn',
+  'Dawa (E-Rx)',
+  'الوصفة الإلكترونية',
+  'E-Ordonnance',
+  'E-Receta',
+  'E-Prescrição',
+  'E-Recept',
+  '电子处方',
+  'E-Rezept',
+];
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const extractInvestigationsFromClerkingNote = (note: string | null | undefined): string => {
+  if (!note) return '';
+  const source = note.trim();
+  if (!source) return '';
+
+  for (const header of INVESTIGATION_SECTION_HEADERS) {
+    const escapedNextHeaders = NEXT_SECTION_HEADERS.map(escapeRegExp).join('|');
+    const pattern = new RegExp(
+      `(?:^|\\n)${escapeRegExp(header)}:\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:${escapedNextHeaders})\\s*:|$)`,
+      'i'
+    );
+    const match = source.match(pattern);
+    if (match?.[1]) {
+      // Defensive cleanup in case older notes use inconsistent spacing before next section.
+      // Handles both:
+      // 1) "\nE-Prescription: ..."
+      // 2) "E-Prescription: ..." immediately at start of captured block.
+      const cleanupPattern = new RegExp(`(?:^|\\n)\\s*(?:${escapedNextHeaders})\\s*:[\\s\\S]*$`, 'i');
+      const extracted = match[1].replace(cleanupPattern, '').trim();
+      if (!extracted) continue;
+
+      // Extra guard: ignore blocks that still begin with prescription headers.
+      const startsWithPrescriptionHeader = new RegExp(`^\\s*(?:${escapedNextHeaders})\\s*:`, 'i').test(extracted);
+      if (startsWithPrescriptionHeader) continue;
+
+      return extracted;
+    }
+  }
+
+  return '';
+};
+
+const isMissingColumnError = (error: { code?: string; message?: string } | null | undefined) => {
+  if (!error) return false;
+  return error.code === '42703' || error.code === 'PGRST204';
+};
+
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -128,9 +212,13 @@ const PatientPortal = () => {
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
+  const [selectedInvestigationRequest, setSelectedInvestigationRequest] = useState<PatientInvestigationRequest | null>(null);
+  const [investigationDetailsOpen, setInvestigationDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
+  const { t, language } = useLanguage();
+  const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   
   // Track patient presence
   useTrackUserPresence(user?.id, 'patient');
@@ -433,6 +521,236 @@ const PatientPortal = () => {
     enabled: !!user?.id,
   });
 
+  const { data: fetchedInvestigationRequests = [], isLoading: investigationRequestsLoading } = useQuery({
+    queryKey: ['investigation-requests', user?.id, language],
+    queryFn: async () => {
+      if (!user?.id) return [];
+
+      const notesWithTranslationsQuery = await supabase
+        .from('doctor_consultation_notes')
+        .select(`
+          id,
+          follow_up_notes,
+          follow_up_notes_translations,
+          created_at,
+          consultation_sessions!inner(
+            id,
+            doctor_id,
+            appointments!inner(specialist_name)
+          )
+        `)
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      let notes = notesWithTranslationsQuery.data;
+      if (notesWithTranslationsQuery.error) {
+        if (!isMissingColumnError(notesWithTranslationsQuery.error)) {
+          console.error('Error fetching investigation requests:', notesWithTranslationsQuery.error);
+          return [];
+        }
+
+        const legacyNotesQuery = await supabase
+          .from('doctor_consultation_notes')
+          .select(`
+            id,
+            follow_up_notes,
+            created_at,
+            consultation_sessions!inner(
+              id,
+              doctor_id,
+              appointments!inner(specialist_name)
+            )
+          `)
+          .eq('patient_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (legacyNotesQuery.error) {
+          console.error('Error fetching legacy investigation requests:', legacyNotesQuery.error);
+          return [];
+        }
+
+        notes = (legacyNotesQuery.data || []).map((note: any) => ({
+          ...note,
+          follow_up_notes_translations: null,
+        }));
+      }
+
+      const doctorIds = Array.from(
+        new Set(
+          (notes || [])
+            .map((note: any) => note.consultation_sessions?.doctor_id)
+            .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+        )
+      );
+
+      const doctorNameMap = new Map<string, string>();
+      if (doctorIds.length > 0) {
+        const { data: doctorRows } = await supabase
+          .from('doctors')
+          .select('id, name')
+          .in('id', doctorIds);
+
+        (doctorRows || []).forEach((doctor: any) => {
+          if (doctor.id && doctor.name) doctorNameMap.set(doctor.id, doctor.name);
+        });
+      }
+
+      const grouped = new Map<string, PatientInvestigationRequest>();
+      (notes || []).forEach((note: any) => {
+        const noteTranslations = (note.follow_up_notes_translations as Record<string, string> | null) ?? null;
+        const localizedNote =
+          (language === 'en' ? null : noteTranslations?.[language]) ||
+          noteTranslations?.en ||
+          note.follow_up_notes ||
+          '';
+        const extracted = extractInvestigationsFromClerkingNote(localizedNote);
+        if (!extracted) return;
+
+        const doctorId = note.consultation_sessions?.doctor_id ?? null;
+        const sessionId = note.consultation_sessions?.id ?? null;
+        const resolvedDoctorName =
+          (doctorId ? doctorNameMap.get(doctorId) : null) ||
+          note.consultation_sessions?.appointments?.specialist_name ||
+          'Doctor';
+        const dayKey = new Date(note.created_at).toISOString().slice(0, 10);
+        const groupKey = sessionId
+          ? `session:${sessionId}`
+          : `fallback:${doctorId || 'unknown'}:${dayKey}`;
+
+        const existing = grouped.get(groupKey);
+        if (!existing) {
+          grouped.set(groupKey, {
+            id: groupKey,
+            noteId: note.id,
+            noteIds: [note.id],
+            doctor: resolvedDoctorName,
+            doctorId,
+            sessionId,
+            date: note.created_at,
+            details: extracted,
+          });
+          return;
+        }
+
+        const existingLines = new Set(
+          existing.details
+            .split(/\r?\n/)
+            .map((line) => line.trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const mergedLines = [...existing.details.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)];
+        extracted
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((line) => {
+            const key = line.toLowerCase();
+            if (!existingLines.has(key)) {
+              mergedLines.push(line);
+              existingLines.add(key);
+            }
+          });
+
+        existing.details = mergedLines.join('\n');
+        if (!existing.noteIds.includes(note.id)) existing.noteIds.push(note.id);
+        if (new Date(note.created_at).getTime() > new Date(existing.date).getTime()) {
+          existing.date = note.created_at;
+        }
+        grouped.set(groupKey, existing);
+      });
+
+      return Array.from(grouped.values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+    },
+    enabled: !!user?.id,
+  });
+
+  const { data: requiredInvestigations = '', isLoading: investigationsLoading } = useQuery({
+    queryKey: ['patient-folder-investigations', user?.id, language],
+    queryFn: async () => {
+      if (!user?.id) return '';
+
+      const { data: folderRows, error: folderError } = await supabase
+        .from('patient_folders')
+        .select('investigations, investigations_translations, updated_at')
+        .eq('patient_id', user.id)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (folderError && !isMissingColumnError(folderError)) {
+        console.error('Error fetching required investigations from patient_folders:', folderError);
+      }
+
+      const latestFolder = (folderRows ?? [])[0] as
+        | { investigations?: string | null; investigations_translations?: Record<string, string> | null }
+        | undefined;
+      const translations = (latestFolder?.investigations_translations as Record<string, string> | null) ?? null;
+      const translatedValue = language === 'en' ? null : translations?.[language]?.trim();
+      const folderInvestigations =
+        translatedValue?.trim() ||
+        translations?.en?.trim() ||
+        latestFolder?.investigations?.trim() ||
+        '';
+
+      if (folderInvestigations) return folderInvestigations;
+
+      // Fallback for older DB states where investigations are not persisted in patient_folders:
+      // parse the investigations section from latest clerking note text.
+      const { data: notesWithTranslations, error: notesWithTranslationsError } = await supabase
+        .from('doctor_consultation_notes')
+        .select('follow_up_notes, follow_up_notes_translations, created_at')
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (notesWithTranslationsError && !isMissingColumnError(notesWithTranslationsError)) {
+        console.error('Error fetching clerking notes with translations:', notesWithTranslationsError);
+      }
+
+      const candidateNotes = (notesWithTranslations ?? []) as Array<{
+        follow_up_notes?: string | null;
+        follow_up_notes_translations?: Record<string, string> | null;
+      }>;
+
+      for (const note of candidateNotes) {
+        const noteTranslations = (note.follow_up_notes_translations as Record<string, string> | null) ?? null;
+        const localizedNote =
+          (language === 'en' ? null : noteTranslations?.[language]) ||
+          noteTranslations?.en ||
+          note.follow_up_notes ||
+          '';
+        const extracted = extractInvestigationsFromClerkingNote(localizedNote);
+        if (extracted) return extracted;
+      }
+
+      if (candidateNotes.length > 0) return '';
+
+      // Final fallback: if translation columns do not exist at all, read legacy follow_up_notes only.
+      const { data: legacyNotes, error: legacyNotesError } = await supabase
+        .from('doctor_consultation_notes')
+        .select('follow_up_notes, created_at')
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (legacyNotesError) {
+        console.error('Error fetching legacy clerking notes:', legacyNotesError);
+        return '';
+      }
+
+      for (const note of (legacyNotes ?? []) as Array<{ follow_up_notes?: string | null }>) {
+        const extracted = extractInvestigationsFromClerkingNote(note.follow_up_notes ?? '');
+        if (extracted) return extracted;
+      }
+
+      return '';
+    },
+    enabled: !!user?.id,
+  });
+
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
@@ -465,9 +783,9 @@ const PatientPortal = () => {
     try {
       await uploadRecord.mutateAsync({ file, notes: uploadNotes });
       setUploadNotes('');
-      toast({ title: 'Success', description: 'Health record uploaded successfully!' });
+      toast({ title: 'Success', description: 'Investigation uploaded successfully!' });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to upload health record.' });
+      toast({ title: 'Error', description: 'Failed to upload investigation.' });
     } finally {
       setIsUploadingRecord(false);
     }
@@ -476,9 +794,9 @@ const PatientPortal = () => {
   const handleDeleteRecord = async (recordId: string) => {
     try {
       await deleteRecord.mutateAsync(recordId);
-      toast({ title: 'Success', description: 'Health record deleted successfully!' });
+      toast({ title: 'Success', description: 'Investigation deleted successfully!' });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to delete health record.' });
+      toast({ title: 'Error', description: 'Failed to delete investigation.' });
     }
   };
 
@@ -540,7 +858,7 @@ const PatientPortal = () => {
       const content = [
         `Patient: ${displayName}`,
         `Prescribed by: ${prescription.doctor}`,
-        `Date: ${new Date(prescription.date).toLocaleString()}`,
+        `Date: ${formatDateTime(prescription.date)}`,
         `Verification Code: ${verificationCode || 'Pending/Unavailable'}`,
         '',
         'Items:',
@@ -608,7 +926,7 @@ const PatientPortal = () => {
       const itemsSummary = prescription.items
         .map((item) => `${item.medication} (${item.dosage})`)
         .join('; ');
-      const content = `Prescription refill request: ${itemsSummary}. Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
+      const content = `Prescription refill request: ${itemsSummary}. Original prescription date: ${formatDate(prescription.date)}.`;
       const { error } = await supabase.from('consultation_messages').insert({
         session_id: prescription.sessionId,
         sender_id: user.id,
@@ -638,6 +956,59 @@ const PatientPortal = () => {
       });
     } finally {
       setIsRequestingRefillId(null);
+    }
+  };
+
+  const handleViewInvestigationDetails = (request: PatientInvestigationRequest) => {
+    setSelectedInvestigationRequest(request);
+    setInvestigationDetailsOpen(true);
+  };
+
+  const handleDownloadInvestigationRequest = async (request: PatientInvestigationRequest) => {
+    try {
+      const detailLines = request.details
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      const lines = [
+        `Patient: ${displayName}`,
+        `Requested by: ${request.doctor}`,
+        `Date: ${formatDateTime(request.date)}`,
+        '',
+        'Requested Investigations:',
+        ...(detailLines.length > 0 ? detailLines.map((line, index) => `${index + 1}. ${line}`) : ['None recorded']),
+      ];
+
+      const blob = await createPrescriptionPdfBlob({
+        title: 'MYE-DOCTOR INVESTIGATION REQUEST',
+        lines,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeDoctor = request.doctor
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase();
+      link.href = url;
+      link.download = `investigation-request-${safeDoctor || 'doctor'}-${new Date(request.date).toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Downloaded',
+        description: 'Investigation request downloaded successfully.',
+      });
+    } catch (error) {
+      console.error('Failed to download investigation request:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to download investigation request.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -712,7 +1083,7 @@ const PatientPortal = () => {
     return isSpecialist ? 8000 : 4000;
   };
 
-  const formatPrice = (price: number) => `₦${price.toLocaleString()}`;
+  const formatPrice = (price: number) => formatCurrency(price);
 
   // Handle external booking requests
   useEffect(() => {
@@ -1014,9 +1385,15 @@ const PatientPortal = () => {
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ['patient-registration'] });
-      toast({ title: 'Success', description: 'Profile updated successfully!' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.profileUpdated', 'Profile updated successfully!'),
+      });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to update profile.' });
+      toast({
+        title: t('common.error', 'Error'),
+        description: t('common.profileUpdateFailed', 'Failed to update profile.'),
+      });
     } finally {
       setIsSavingProfile(false);
     }
@@ -1027,15 +1404,23 @@ const PatientPortal = () => {
     const confirmPassword = passwordFormData.confirmPassword.trim();
 
     if (!newPassword || !confirmPassword) {
-      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      toast({
+        title: t('common.missingFields', 'Missing fields'),
+        description: t('common.enterAndConfirmNewPassword', 'Enter and confirm your new password.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword.length < 8) {
-      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({
+        title: t('common.weakPassword', 'Weak password'),
+        description: t('common.passwordMinimumLength', 'Password must be at least 8 characters.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      toast({ title: t('common.passwordsDoNotMatch', 'Passwords do not match'), variant: 'destructive' });
       return;
     }
 
@@ -1045,11 +1430,14 @@ const PatientPortal = () => {
       if (error) throw error;
 
       setPasswordFormData({ newPassword: '', confirmPassword: '' });
-      toast({ title: 'Success', description: 'Password changed successfully.' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.passwordChanged', 'Password changed successfully.'),
+      });
     } catch (error: any) {
       toast({
-        title: 'Error',
-        description: error?.message || 'Failed to change password.',
+        title: t('common.error', 'Error'),
+        description: error?.message || t('common.passwordChangeFailed', 'Failed to change password.'),
         variant: 'destructive',
       });
     } finally {
@@ -1058,19 +1446,39 @@ const PatientPortal = () => {
   };
 
   const getStatusBadge = (status: string) => {
+    const statusLabel = getAppointmentStatusLabel(status);
     switch (status) {
       case 'confirmed':
-        return <Badge className="bg-success/10 text-success border-success/20">Confirmed</Badge>;
+        return <Badge className="bg-success/10 text-success border-success/20">{statusLabel}</Badge>;
       case 'pending':
-        return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
+        return <Badge className="bg-warning/10 text-warning border-warning/20">{statusLabel}</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{statusLabel}</Badge>;
       case 'cancelled':
-        return <Badge variant="destructive">Cancelled</Badge>;
+        return <Badge variant="destructive">{statusLabel}</Badge>;
       case 'rejected':
-        return <Badge variant="destructive">Rejected</Badge>;
+        return <Badge variant="destructive">{statusLabel}</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{statusLabel}</Badge>;
+    }
+  };
+
+  const getAppointmentStatusLabel = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return t('appointmentStatus.pending', 'Pending');
+      case 'confirmed':
+        return t('appointmentStatus.confirmed', 'Confirmed');
+      case 'completed':
+        return t('appointmentStatus.completed', 'Completed');
+      case 'rejected':
+        return t('appointmentStatus.rejected', 'Rejected');
+      case 'upcoming':
+        return t('appointmentStatus.upcoming', 'Upcoming');
+      case 'cancelled':
+        return t('patientPortal.status.cancelled', 'Cancelled');
+      default:
+        return status;
     }
   };
 
@@ -1223,7 +1631,7 @@ const PatientPortal = () => {
   };
 
   const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
-    const dateLabel = arg.date.toLocaleDateString('en-US', {
+    const dateLabel = formatDate(arg.date, {
       weekday: 'long',
       month: 'long',
       day: 'numeric',
@@ -1235,10 +1643,10 @@ const PatientPortal = () => {
 
   const handleCalendarEventMount = (arg: EventMountArg) => {
     const eventTime = arg.event.start
-      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      ? formatTime(arg.event.start, { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
+    const eventStatusLabel = eventStatus ? getAppointmentStatusLabel(eventStatus) : t('common.appointments', 'Appointments');
     arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
     arg.el.style.cursor = 'pointer';
   };
@@ -1257,7 +1665,7 @@ const PatientPortal = () => {
     }
 
     const calendarDialogDateLabel = calendarDialogDate
-      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+      ? formatDate(new Date(`${calendarDialogDate}T00:00:00`), {
         weekday: 'long',
         month: 'long',
         day: 'numeric',
@@ -1274,7 +1682,7 @@ const PatientPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span className="capitalize">{status}</span>
+                  <span>{getAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
@@ -1316,7 +1724,9 @@ const PatientPortal = () => {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>
-                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+                {calendarDialogDateLabel
+                  ? `${t('common.appointments', 'Appointments')} ${calendarDialogDateLabel}`
+                  : t('common.appointments', 'Appointments')}
               </DialogTitle>
               <DialogDescription>
                 Review appointments for the selected day.
@@ -1324,14 +1734,16 @@ const PatientPortal = () => {
             </DialogHeader>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {calendarDialogDayAppointments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('patientPortal.empty.noAppointmentsFound', 'No appointments found')}
+                </p>
               ) : (
                 calendarDialogDayAppointments.map((apt) => (
                   <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{apt.time}</span>
+                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
                         {getStatusBadge(apt.status)}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
@@ -1366,7 +1778,7 @@ const PatientPortal = () => {
         >
           <DialogContent className="max-w-xl">
             <DialogHeader>
-              <DialogTitle>Appointment Details</DialogTitle>
+              <DialogTitle>{t('common.appointments', 'Appointments')}</DialogTitle>
               <DialogDescription>Manage the selected appointment.</DialogDescription>
             </DialogHeader>
             {calendarFocusedAppointment && (
@@ -1376,9 +1788,9 @@ const PatientPortal = () => {
                     {getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>{formatDate(calendarFocusedAppointment.date)}</span>
                     <span>•</span>
-                    <span>{calendarFocusedAppointment.time}</span>
+                    <span>{formatClockTime(calendarFocusedAppointment.time)}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
                   <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
@@ -1403,7 +1815,7 @@ const PatientPortal = () => {
                         setCalendarEventDialogOpen(false);
                       }}
                     >
-                      Leave Review
+                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
                     </Button>
                   )}
                   {calendarFocusedAppointment.status === 'pending' && (
@@ -1416,7 +1828,7 @@ const PatientPortal = () => {
                           setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Reschedule
+                        {t('patientPortal.actions.reschedule', 'Reschedule')}
                       </Button>
                       <Button
                         size="sm"
@@ -1447,21 +1859,26 @@ const PatientPortal = () => {
       <header className="bg-card border-b border-border sticky top-0 z-50">
         <div className="container mx-auto px-2 sm:px-4">
           <div className="flex items-center justify-between h-14 sm:h-16">
-            <Link to="/" className="flex items-center gap-2">
-              <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-              <div className="flex flex-col">
-                <span className="text-xl font-bold leading-tight">
-                  MyE-<span className="text-primary">Doctor</span>
-                </span>
-                <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+            <div className="flex items-center gap-3">
+              <Link to="/" className="flex items-center gap-2">
+                <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
+                <div className="flex flex-col">
+                  <span className="text-xl font-bold leading-tight">
+                    MyE-<span className="text-primary">Doctor</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+                </div>
+              </Link>
+              <div className="hidden lg:block">
+                <LanguageSelector />
               </div>
-            </Link>
+            </div>
 
             <div className="flex items-center gap-2 sm:gap-4">
               <div className="relative hidden sm:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search doctors, appointments..."
+                  placeholder={t('patientPortal.searchPlaceholder', 'Search doctors, appointments...')}
                   className="pl-10 w-48 sm:w-64 bg-muted/50"
                 />
               </div>
@@ -1475,7 +1892,7 @@ const PatientPortal = () => {
                     onClick={handleInstallApp}
                   >
                     <Download className="w-4 h-4 mr-2" />
-                    Install App
+                    {t('common.installApp', 'Install App')}
                   </Button>
 
                   <Button
@@ -1494,7 +1911,7 @@ const PatientPortal = () => {
                 <Bell className="w-5 h-5" />
                 {notifications.filter(n => !n.read).length > 0 && (
                   <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                    {notifications.filter(n => !n.read).length}
+                    {formatNumber(notifications.filter(n => !n.read).length)}
                   </span>
                 )}
               </Button>
@@ -1517,7 +1934,7 @@ const PatientPortal = () => {
                     </Avatar>
                     <div className="hidden sm:block text-left">
                       <p className="text-sm font-medium">{displayName}</p>
-                      <p className="text-xs text-muted-foreground">Patient</p>
+                      <p className="text-xs text-muted-foreground">{t('patientPortal.rolePatient', 'Patient')}</p>
                     </div>
                   </button>
                 </DropdownMenuTrigger>
@@ -1529,11 +1946,11 @@ const PatientPortal = () => {
                     }}
                   >
                     <Settings className="w-4 h-4 mr-2" />
-                    Profile Settings
+                    {t('common.profileSettings', 'Profile Settings')}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleSignOut}>
                     <LogOut className="w-4 h-4 mr-2" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1557,19 +1974,28 @@ const PatientPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold truncate">{displayName}</p>
-                      <p className="text-sm text-muted-foreground">Patient</p>
+                      <p className="text-sm text-muted-foreground">{t('patientPortal.rolePatient', 'Patient')}</p>
                     </div>
                   </div>
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                  <div className="lg:hidden px-3 pb-2">
+                    <LanguageSelector />
+                  </div>
                   {[
-                    { id: 'overview', label: 'Overview', icon: Activity },
-                    { id: 'appointments', label: 'Appointments', icon: Calendar },
-                    { id: 'prescriptions', label: 'Prescriptions', icon: Pill },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'records', label: 'Health Records', icon: FileText },
-                    { id: 'settings', label: 'Settings', icon: Settings },
+                    { id: 'overview', label: t('common.overview', 'Overview'), icon: Activity },
+                    { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar },
+                    { id: 'prescriptions', label: t('common.prescriptions', 'Prescriptions'), icon: Pill },
+                    {
+                      id: 'messages',
+                      label: t('common.messages', 'Messages'),
+                      icon: MessageSquare,
+                      badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
+                    { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
+                    { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -1605,7 +2031,7 @@ const PatientPortal = () => {
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >
                     <LogOut className="w-5 h-5" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </Button>
                 </div>
               </CardContent>
@@ -1623,21 +2049,28 @@ const PatientPortal = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                 <div>
                   <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
-                    Welcome back, {displayName.split(' ')[0]}! 👋
+                    {t('patientPortal.welcomeBackUser', 'Welcome back, {name}! 👋')
+                      .replace('{name}', displayName.split(' ')[0])}
                   </h1>
                   <p className="text-xs sm:text-sm text-primary-foreground/80">
-                    You have {appointments.filter(apt => {
-                      const appointmentDate = new Date(apt.date);
-                      const today = new Date();
-                      today.setHours(0, 0, 0, 0);
-                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
-                    }).length} upcoming appointments.
+                    {t('patientPortal.overview.upcomingAppointmentsCount', 'You have {count} upcoming appointments.')
+                      .replace(
+                        '{count}',
+                        formatNumber(
+                          appointments.filter(apt => {
+                            const appointmentDate = new Date(apt.date);
+                            const today = new Date();
+                            today.setHours(0, 0, 0, 0);
+                            return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                          }).length
+                        )
+                      )}
                   </p>
                 </div>
                 <Button onClick={openBooking} variant="secondary" size="sm" className="gap-1 text-xs sm:text-sm">
                   <Plus className="w-4 sm:w-5 h-4 sm:h-5" />
-                  <span className="hidden sm:inline">Book Appointment</span>
-                  <span className="sm:hidden">Book</span>
+                  <span className="hidden sm:inline">{t('patientPortal.bookAppointment', 'Book Appointment')}</span>
+                  <span className="sm:hidden">{t('patientPortal.bookShort', 'Book')}</span>
                 </Button>
               </div>
             </motion.div>
@@ -1645,12 +2078,12 @@ const PatientPortal = () => {
             <Card className="border-primary/20 bg-primary/5">
               <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-sm">
-                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                  {t('patientPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')} <span className="font-semibold">{t('patientPortal.downloadApp', 'Download App')}</span> {t('patientPortal.installBannerTextSuffix', 'to install on your phone.')}
                 </p>
                 <Link to="/install">
                   <Button size="sm" className="gap-2">
                     <Download className="w-4 h-4" />
-                    Open Install Page
+                    {t('patientPortal.openInstallPage', 'Open Install Page')}
                   </Button>
                 </Link>
               </CardContent>
@@ -1670,33 +2103,33 @@ const PatientPortal = () => {
             <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>{rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Appointment'}</DialogTitle>
-                  <DialogDescription>Review and confirm your appointment details.</DialogDescription>
+                  <DialogTitle>{rescheduleAppointmentId ? t('patientPortal.confirmReschedule', 'Confirm Reschedule') : t('patientPortal.confirmAppointment', 'Confirm Appointment')}</DialogTitle>
+                  <DialogDescription>{t('patientPortal.reviewAppointmentDetails', 'Review and confirm your appointment details.')}</DialogDescription>
                 </DialogHeader>
 
                 <div className="grid gap-4 py-4">
                   <div className="p-3 rounded-lg bg-muted/50">
-                    <p className="text-sm font-medium">Selected Slot</p>
+                    <p className="text-sm font-medium">{t('patientPortal.selectedSlot', 'Selected Slot')}</p>
                     <div className="mt-2 space-y-1 text-sm">
-                      <div><span className="text-muted-foreground">Doctor:</span> {specialistName}</div>
-                      <div><span className="text-muted-foreground">Date:</span> {new Date(bookingDate).toLocaleDateString()}</div>
-                      <div><span className="text-muted-foreground">Time:</span> {bookingTime}</div>
+                      <div><span className="text-muted-foreground">{t('patientPortal.fieldDoctor', 'Doctor')}:</span> {specialistName}</div>
+                      <div><span className="text-muted-foreground">{t('patientPortal.fieldDate', 'Date')}:</span> {formatDate(bookingDate)}</div>
+                      <div><span className="text-muted-foreground">{t('patientPortal.fieldTime', 'Time')}:</span> {formatClockTime(bookingTime)}</div>
                     </div>
                   </div>
                   <div>
-                    <Label>Consultation Fee</Label>
+                    <Label>{t('patientPortal.consultationFee', 'Consultation Fee')}</Label>
                     <div className="p-2 text-sm">
                       {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice'))}
                     </div>
                   </div>
                   <div>
-                    <Label>Additional Notes (Optional)</Label>
+                    <Label>{t('patientPortal.additionalNotesOptional', 'Additional Notes (Optional)')}</Label>
                     <textarea
                       className="w-full p-2 border rounded text-sm"
                       rows={3}
                       value={bookingNotes}
                       onChange={(e) => setBookingNotes(e.target.value)}
-                      placeholder="Any additional information for the doctor..."
+                      placeholder={t('patientPortal.additionalInfoPlaceholder', 'Any additional information for the doctor...')}
                     />
                   </div>
                 </div>
@@ -1706,11 +2139,15 @@ const PatientPortal = () => {
                     setBookingOpen(false);
                     setSlotSelectionOpen(true);
                   }}>
-                    Back
+                    {t('patientPortal.back', 'Back')}
                   </Button>
-                  <Button variant="outline" onClick={() => setBookingOpen(false)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => setBookingOpen(false)}>{t('patientPortal.cancel', 'Cancel')}</Button>
                   <Button onClick={rescheduleAppointmentId ? rescheduleBooking : createBooking} disabled={isBooking}>
-                    {isBooking ? 'Submitting...' : (rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Booking')}
+                    {isBooking
+                      ? t('patientPortal.submitting', 'Submitting...')
+                      : (rescheduleAppointmentId
+                        ? t('patientPortal.confirmReschedule', 'Confirm Reschedule')
+                        : t('patientPortal.confirmBooking', 'Confirm Booking'))}
                   </Button>
                 </DialogFooter>
                 <DialogClose />
@@ -1721,13 +2158,15 @@ const PatientPortal = () => {
             <Dialog open={!!cancelAppointmentId} onOpenChange={(open) => !open && setCancelAppointmentId(null)}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Cancel Appointment</DialogTitle>
-                  <DialogDescription>Are you sure you want to cancel this appointment? This action cannot be undone.</DialogDescription>
+                  <DialogTitle>{t('patientPortal.cancelAppointmentTitle', 'Cancel Appointment')}</DialogTitle>
+                  <DialogDescription>{t('patientPortal.cancelAppointmentDescription', 'Are you sure you want to cancel this appointment? This action cannot be undone.')}</DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>No, Keep It</Button>
+                  <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>{t('patientPortal.noKeepIt', 'No, Keep It')}</Button>
                   <Button variant="destructive" onClick={cancelAppointment} disabled={isBooking}>
-                    {isBooking ? 'Cancelling...' : 'Yes, Cancel Appointment'}
+                    {isBooking
+                      ? t('patientPortal.cancelling', 'Cancelling...')
+                      : t('patientPortal.yesCancelAppointment', 'Yes, Cancel Appointment')}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -1736,9 +2175,9 @@ const PatientPortal = () => {
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="appointments">Appointments</TabsTrigger>
-                <TabsTrigger value="prescriptions">Prescriptions</TabsTrigger>
+                <TabsTrigger value="overview">{t('common.overview', 'Overview')}</TabsTrigger>
+                <TabsTrigger value="appointments">{t('common.appointments', 'Appointments')}</TabsTrigger>
+                <TabsTrigger value="prescriptions">{t('common.prescriptions', 'Prescriptions')}</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
@@ -1747,17 +2186,17 @@ const PatientPortal = () => {
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <div>
-                      <CardTitle>Upcoming Appointments</CardTitle>
-                      <CardDescription>Your scheduled consultations</CardDescription>
+                      <CardTitle>{t('patientPortal.headers.upcomingAppointments', 'Upcoming Appointments')}</CardTitle>
+                      <CardDescription>{t('patientPortal.headers.scheduledConsultations', 'Your scheduled consultations')}</CardDescription>
                     </div>
                     <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                      View All <ChevronRight className="w-4 h-4 ml-1" />
+                      {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                     </Button>
                   </CardHeader>
                   <CardContent>
                     {appointmentsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading appointments...</p>
+                        <p className="text-muted-foreground">{t('patientPortal.loading.appointments', 'Loading appointments...')}</p>
                       </div>
                     ) : appointments.filter(apt => {
                       const appointmentDate = new Date(apt.date);
@@ -1766,10 +2205,10 @@ const PatientPortal = () => {
                       return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
                     }).length === 0 ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">No upcoming appointments</p>
+                        <p className="text-muted-foreground">{t('patientPortal.empty.noUpcomingAppointments', 'No upcoming appointments')}</p>
                         <Button onClick={openBooking} variant="outline" size="sm" className="mt-4 gap-2">
                           <Plus className="w-4 h-4" />
-                          Book Now
+                          {t('common.bookNow', 'Book Now')}
                         </Button>
                       </div>
                     ) : (
@@ -1799,15 +2238,15 @@ const PatientPortal = () => {
                               </div>
                               <div>
                                 <p className="font-medium">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                <p className="text-sm text-muted-foreground">Appointment</p>
+                                <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                               </div>
                             </div>
                             <div className="flex flex-col gap-2">
                               <div className="flex items-center gap-2">
                                 <Calendar className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                <span className="text-sm">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</span>
                                 <Clock className="w-4 h-4 text-muted-foreground ml-2" />
-                                <span className="text-sm">{apt.time}</span>
+                                <span className="text-sm">{formatClockTime(apt.time)}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
@@ -1835,16 +2274,16 @@ const PatientPortal = () => {
                   {/* Past Consultations */}
                   <Card>
                     <CardHeader>
-                      <CardTitle className="text-lg">Recent Consultations</CardTitle>
+                      <CardTitle className="text-lg">{t('patientPortal.headers.recentConsultations', 'Recent Consultations')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {consultationsLoading ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">Loading consultations...</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.loading.consultations', 'Loading consultations...')}</p>
                         </div>
                       ) : recentConsultations.length === 0 ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">No recent consultations</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.empty.noRecentConsultations', 'No recent consultations')}</p>
                         </div>
                       ) : (
                         <div className="space-y-4">
@@ -1854,7 +2293,7 @@ const PatientPortal = () => {
                                 <p className="font-medium text-sm">{consultation.doctor_name}</p>
                                 <p className="text-xs text-muted-foreground">{consultation.diagnosis}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                  {new Date(consultation.date).toLocaleDateString()}
+                                  {formatDate(consultation.date)}
                                 </p>
                               </div>
                               <div className="flex items-center gap-1">
@@ -1869,7 +2308,7 @@ const PatientPortal = () => {
                                     />
                                   ))
                                 ) : (
-                                  <span className="text-xs text-muted-foreground">No rating</span>
+                                  <span className="text-xs text-muted-foreground">{t('patientPortal.empty.noRating', 'No rating')}</span>
                                 )}
                               </div>
                             </div>
@@ -1882,16 +2321,16 @@ const PatientPortal = () => {
                   {/* Notifications */}
                   <Card>
                     <CardHeader>
-                      <CardTitle className="text-lg">Notifications</CardTitle>
+                      <CardTitle className="text-lg">{t('patientPortal.headers.notifications', 'Notifications')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {notificationsLoading ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">Loading notifications...</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.loading.notifications', 'Loading notifications...')}</p>
                         </div>
                       ) : notifications.length === 0 ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">No new notifications</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.empty.noNewNotifications', 'No new notifications')}</p>
                         </div>
                       ) : (
                         <div className="space-y-4">
@@ -1917,8 +2356,8 @@ const PatientPortal = () => {
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <CardTitle>Appointments</CardTitle>
-                        <CardDescription>Manage all your appointments in one place</CardDescription>
+                        <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
+                        <CardDescription>{t('patientPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
                       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                         <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
@@ -1929,7 +2368,7 @@ const PatientPortal = () => {
                             onClick={() => setAppointmentViewMode('list')}
                           >
                             <List className="w-4 h-4" />
-                            List
+                            {t('common.list', 'List')}
                           </Button>
                           <Button
                             size="sm"
@@ -1938,12 +2377,12 @@ const PatientPortal = () => {
                             onClick={() => setAppointmentViewMode('calendar')}
                           >
                             <Calendar className="w-4 h-4" />
-                            Calendar
+                            {t('common.calendar', 'Calendar')}
                           </Button>
                         </div>
                         <Button onClick={openBooking} className="gap-2">
                           <Plus className="w-4 h-4" />
-                          New Appointment
+                          {t('patientPortal.headers.newAppointment', 'New Appointment')}
                         </Button>
                       </div>
                     </div>
@@ -1953,30 +2392,33 @@ const PatientPortal = () => {
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
                       <TabsList className="grid w-full grid-cols-5 mb-6">
                         <TabsTrigger value="pending" className="relative">
-                          Pending
+                          {t('appointmentStatus.pending', 'Pending')}
                           {pendingCount > 0 && (
                             <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
-                              {pendingCount}
+                              {formatNumber(pendingCount)}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="rejected">Rejected</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="confirmed">{t('appointmentStatus.confirmed', 'Confirmed')}</TabsTrigger>
+                        <TabsTrigger value="completed">{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="rejected">{t('appointmentStatus.rejected', 'Rejected')}</TabsTrigger>
+                        <TabsTrigger value="all">{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
                       {/* Pending Tab Content */}
                       <TabsContent value="pending" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No pending appointments', 'Pending appointments await doctor confirmation')
+                          renderAppointmentsCalendar(
+                            t('patientPortal.empty.noPendingAppointments', 'No pending appointments'),
+                            t('patientPortal.empty.pendingAwaitDoctor', 'Pending appointments await doctor confirmation')
+                          )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No pending appointments</p>
-                                <p className="text-sm text-muted-foreground mt-2">Pending appointments await doctor confirmation</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noPendingAppointments', 'No pending appointments')}</p>
+                                <p className="text-sm text-muted-foreground mt-2">{t('patientPortal.empty.pendingAwaitDoctor', 'Pending appointments await doctor confirmation')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
@@ -2000,17 +2442,17 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {new Date(apt.date).toLocaleDateString()} at {apt.time}
+                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
                                       </p>
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
                                     <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                      Reschedule
+                                      {t('patientPortal.actions.reschedule', 'Reschedule')}
                                     </Button>
                                     <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
-                                      Cancel
+                                      {t('patientPortal.actions.cancel', 'Cancel')}
                                     </Button>
                                   </div>
                                 </div>
@@ -2023,21 +2465,21 @@ const PatientPortal = () => {
                       {/* Confirmed Tab Content */}
                       <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No confirmed appointments')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noConfirmedAppointments', 'No confirmed appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No confirmed appointments</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noConfirmedAppointments', 'No confirmed appointments')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -2057,7 +2499,7 @@ const PatientPortal = () => {
                                     </div>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                     </div>
                                   </div>
                                   <JoinConsultationButton
@@ -2078,21 +2520,21 @@ const PatientPortal = () => {
                       {/* Completed Tab Content */}
                       <TabsContent value="completed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No completed consultations')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noCompletedConsultations', 'No completed consultations'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Video className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No completed consultations</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noCompletedConsultations', 'No completed consultations')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2107,7 +2549,7 @@ const PatientPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                       {(apt as any).rating && (
                                         <div className="flex items-center gap-1 mt-1">
                                           {[...Array(5)].map((_, i) => (
@@ -2128,7 +2570,7 @@ const PatientPortal = () => {
                                         setReviewModalOpen(true);
                                       }}
                                     >
-                                      Leave Review
+                                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
                                     </Button>
                                   )}
                                 </div>
@@ -2141,21 +2583,21 @@ const PatientPortal = () => {
                       {/* Rejected Tab Content */}
                       <TabsContent value="rejected" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No rejected appointments')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noRejectedAppointments', 'No rejected appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No rejected appointments</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noRejectedAppointments', 'No rejected appointments')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2170,11 +2612,11 @@ const PatientPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                       <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
-                                  <Badge variant="destructive">Rejected</Badge>
+                                  <Badge variant="destructive">{getAppointmentStatusLabel('rejected')}</Badge>
                                 </div>
                               ))
                             )}
@@ -2185,21 +2627,21 @@ const PatientPortal = () => {
                       {/* All Tab Content */}
                       <TabsContent value="all" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No appointments found')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noAppointmentsFound', 'No appointments found'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No appointments found</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noAppointmentsFound', 'No appointments found')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2214,13 +2656,13 @@ const PatientPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                       <Badge className="mt-1" variant={
                                         apt.status === 'pending' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {apt.status}
+                                        {getAppointmentStatusLabel(apt.status)}
                                       </Badge>
                                     </div>
                                   </div>
@@ -2241,16 +2683,16 @@ const PatientPortal = () => {
                                         setReviewModalOpen(true);
                                       }}
                                     >
-                                      Leave Review
+                                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
                                     </Button>
                                   )}
                                   {apt.status === 'pending' && (
                                     <div className="flex gap-2">
                                       <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                        Reschedule
+                                        {t('patientPortal.actions.reschedule', 'Reschedule')}
                                       </Button>
                                       <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
-                                        Cancel
+                                        {t('patientPortal.actions.cancel', 'Cancel')}
                                       </Button>
                                     </div>
                                   )}
@@ -2268,19 +2710,19 @@ const PatientPortal = () => {
               <TabsContent value="prescriptions" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>My Prescriptions</CardTitle>
-                    <CardDescription>Active and past prescriptions from your consultations</CardDescription>
+                    <CardTitle>{t('patientPortal.headers.myPrescriptions', 'My Prescriptions')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.prescriptionsDescription', 'Active and past prescriptions from your consultations')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {prescriptionsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading prescriptions...</p>
+                        <p className="text-muted-foreground">{t('patientPortal.loading.prescriptions', 'Loading prescriptions...')}</p>
                       </div>
                     ) : fetchedPrescriptions.length === 0 ? (
                       <div className="text-center py-12">
                         <Pill className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground">No prescriptions yet</p>
-                        <p className="text-sm text-muted-foreground mt-2">Prescriptions from your doctor consultations will appear here</p>
+                        <p className="text-muted-foreground">{t('patientPortal.empty.noPrescriptionsYet', 'No prescriptions yet')}</p>
+                        <p className="text-sm text-muted-foreground mt-2">{t('patientPortal.empty.prescriptionsWillAppear', 'Prescriptions from your doctor consultations will appear here')}</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
@@ -2293,10 +2735,13 @@ const PatientPortal = () => {
                                 </div>
                                 <div>
                                   <p className="font-semibold">
-                                    {prescription.items.length} prescription item{prescription.items.length > 1 ? 's' : ''}
+                                    {prescription.items.length}{' '}
+                                    {prescription.items.length > 1
+                                      ? t('patientPortal.labels.prescriptionItems', 'prescription items')
+                                      : t('patientPortal.labels.prescriptionItem', 'prescription item')}
                                   </p>
                                   <p className="text-xs text-muted-foreground mt-1">
-                                    Prescribed by {prescription.doctor} • {new Date(prescription.date).toLocaleDateString()}
+                                    {t('patientPortal.labels.prescribedBy', 'Prescribed by')} {prescription.doctor} • {formatDate(prescription.date)}
                                   </p>
                                   <div className="mt-2 space-y-1">
                                     {prescription.items.map((item, index) => (
@@ -2312,22 +2757,24 @@ const PatientPortal = () => {
                                 {prescription.status === 'active' && (
                                   <p className="text-xs text-muted-foreground mt-2">
                                     {prescription.refillsRemaining}{' '}
-                                    {prescription.refillsRemaining === 1 ? 'refill' : 'refills'} remaining
+                                    {prescription.refillsRemaining === 1
+                                      ? t('patientPortal.labels.refillRemaining', 'refill remaining')
+                                      : t('patientPortal.labels.refillsRemaining', 'refills remaining')}
                                   </p>
                                 )}
                               </div>
                             </div>
                             <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
                               <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
-                                View Details
+                                {t('patientPortal.actions.viewDetails', 'View Details')}
                               </Button>
                               {!prescription.isDownloaded ? (
                                 <Button size="sm" variant="outline" onClick={() => handleDownloadPrescription(prescription)}>
-                                  Download
+                                  {t('common.download', 'Download')}
                                 </Button>
                               ) : (
                                 <Button size="sm" variant="outline" disabled>
-                                  Downloaded
+                                  {t('patientPortal.actions.downloaded', 'Downloaded')}
                                 </Button>
                               )}
                               {prescription.status === 'active' && (
@@ -2336,7 +2783,9 @@ const PatientPortal = () => {
                                   onClick={() => handleRequestPrescriptionRefill(prescription)}
                                   disabled={isRequestingRefillId === prescription.id}
                                 >
-                                  {isRequestingRefillId === prescription.id ? 'Sending...' : 'Request Refill'}
+                                  {isRequestingRefillId === prescription.id
+                                    ? t('patientPortal.actions.sending', 'Sending...')
+                                    : t('patientPortal.actions.requestRefill', 'Request Refill')}
                                 </Button>
                               )}
                             </div>
@@ -2357,19 +2806,61 @@ const PatientPortal = () => {
               <TabsContent value="records" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Health Records</CardTitle>
-                    <CardDescription>Upload and manage your medical documents</CardDescription>
+                    <CardTitle>{t('patientPortal.recordsTab', 'Investigations')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.healthRecordsDescription', 'View required investigations and upload investigation files')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-6">
+                      {/* Required Investigations From Doctor Clerking */}
+                      <div className="rounded-lg border border-border p-4">
+                        <h4 className="text-sm font-semibold mb-2">{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</h4>
+                        {investigationRequestsLoading || investigationsLoading ? (
+                          <p className="text-sm text-muted-foreground">{t('patientPortal.loading.records', 'Loading investigations...')}</p>
+                        ) : fetchedInvestigationRequests.length > 0 ? (
+                          <div className="space-y-3">
+                            {fetchedInvestigationRequests.map((request) => (
+                              <div key={request.id} className="p-3 rounded-lg border border-border bg-muted/20">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">{request.doctor}</p>
+                                    <p className="text-xs text-muted-foreground">{formatDateTime(request.date)}</p>
+                                    <p className="text-sm whitespace-pre-wrap mt-2">{request.details}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleViewInvestigationDetails(request)}
+                                    >
+                                      {t('patientPortal.actions.viewDetails', 'View Details')}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleDownloadInvestigationRequest(request)}
+                                    >
+                                      {t('common.download', 'Download')}
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : requiredInvestigations ? (
+                          <p className="text-sm whitespace-pre-wrap">{requiredInvestigations}</p>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noRequiredInvestigations', 'No investigations requested yet.')}</p>
+                        )}
+                      </div>
+
                       {/* Upload Section */}
                       <div className="border-2 border-dashed border-border rounded-lg p-6">
                         <div className="text-center">
                           <Upload className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-sm text-muted-foreground mb-4">Upload medical records, lab results, prescriptions, etc.</p>
+                          <p className="text-sm text-muted-foreground mb-4">{t('patientPortal.records.uploadHelp', 'Upload investigation reports and related documents.')}</p>
                           <div className="space-y-3">
                             <Input
-                              placeholder="Add notes (optional)"
+                              placeholder={t('patientPortal.records.addNotesOptional', 'Add notes (optional)')}
                               value={uploadNotes}
                               onChange={(e) => setUploadNotes(e.target.value)}
                               className="max-w-md mx-auto"
@@ -2388,60 +2879,65 @@ const PatientPortal = () => {
                               onClick={() => document.getElementById('record-upload')?.click()}
                               disabled={isUploadingRecord}
                             >
-                              {isUploadingRecord ? 'Uploading...' : 'Upload Records'}
+                              {isUploadingRecord
+                                ? t('patientPortal.actions.uploading', 'Uploading...')
+                                : t('patientPortal.actions.uploadRecords', 'Upload Investigations')}
                             </Button>
                           </div>
                         </div>
                       </div>
 
-                      {/* Records List */}
+                      {/* Uploaded Investigations */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-3">{t('patientPortal.records.uploadedInvestigations', 'Uploaded Investigations')}</h4>
                       {recordsLoading ? (
-                        <div className="text-center py-8">
-                          <p className="text-muted-foreground">Loading records...</p>
-                        </div>
-                      ) : healthRecords.length === 0 ? (
-                        <div className="text-center py-8">
-                          <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-muted-foreground">No records uploaded yet</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {healthRecords.map((record) => (
-                            <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <FileText className="w-8 h-8 text-primary flex-shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-medium truncate">{record.file_name}</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {new Date(record.uploaded_at).toLocaleDateString()}
-                                    {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
-                                  </p>
-                                  {record.notes && (
-                                    <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
-                                  )}
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">{t('patientPortal.loading.records', 'Loading investigations...')}</p>
+                          </div>
+                        ) : healthRecords.length === 0 ? (
+                          <div className="text-center py-8">
+                            <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                            <p className="text-muted-foreground">{t('patientPortal.empty.noRecordsUploadedYet', 'No investigations uploaded yet')}</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {healthRecords.map((record) => (
+                              <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <FileText className="w-8 h-8 text-primary flex-shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium truncate">{record.file_name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDate(record.uploaded_at)}
+                                      {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
+                                    </p>
+                                    {record.notes && (
+                                      <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => window.open(record.file_url, '_blank')}
+                                  >
+                                    <Download className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-destructive hover:text-destructive"
+                                    onClick={() => handleDeleteRecord(record.id)}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => window.open(record.file_url, '_blank')}
-                                >
-                                  <Download className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="text-destructive hover:text-destructive"
-                                  onClick={() => handleDeleteRecord(record.id)}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
+                        )}
                         </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2451,8 +2947,8 @@ const PatientPortal = () => {
               <TabsContent value="settings" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Profile Settings</CardTitle>
-                    <CardDescription>Manage your account settings</CardDescription>
+                    <CardTitle>{t('common.profileSettings', 'Profile Settings')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.manageAccountSettings', 'Manage your account settings')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-6">
@@ -2481,7 +2977,9 @@ const PatientPortal = () => {
                               disabled={isUploadingPhoto}
                               onClick={() => document.getElementById('photo-upload')?.click()}
                             >
-                              {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                              {isUploadingPhoto
+                                ? t('patientPortal.actions.uploading', 'Uploading...')
+                                : t('patientPortal.actions.changePhoto', 'Change Photo')}
                             </Button>
                           </div>
                         </div>
@@ -2489,7 +2987,7 @@ const PatientPortal = () => {
 
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
-                          <label className="text-sm font-medium">Full Name</label>
+                          <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                           <Input 
                             value={profileFormData.fullName || patientRegistration?.full_name || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
@@ -2497,7 +2995,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Email</label>
+                          <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                           <Input 
                             value={profileFormData.email || patientRegistration?.email || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
@@ -2505,7 +3003,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Phone</label>
+                          <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                           <Input 
                             value={profileFormData.phone || patientRegistration?.phone_number || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
@@ -2513,7 +3011,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Age</label>
+                          <label className="text-sm font-medium">{t('common.age', 'Age')}</label>
                           <Input 
                             type="number"
                             value={profileFormData.age || patientRegistration?.age?.toString() || ''}
@@ -2522,18 +3020,20 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Blood Type</label>
+                          <label className="text-sm font-medium">{t('common.bloodType', 'Blood Type')}</label>
                           <Input 
                             value={profileFormData.bloodType || patientRegistration?.blood_type || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, bloodType: e.target.value})}
-                            placeholder="e.g., A+, O-, B+"
+                            placeholder={t('common.bloodTypeExample', 'e.g., A+, O-, B+')}
                             className="mt-1" 
                           />
                         </div>
                       </div>
 
                       <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
-                        {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                        {isSavingProfile
+                          ? t('patientPortal.actions.saving', 'Saving...')
+                          : t('patientPortal.actions.saveChanges', 'Save Changes')}
                       </Button>
                     </div>
                   </CardContent>
@@ -2541,33 +3041,35 @@ const PatientPortal = () => {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Change Password</CardTitle>
-                    <CardDescription>Update your account password</CardDescription>
+                    <CardTitle>{t('common.changePassword', 'Change Password')}</CardTitle>
+                    <CardDescription>{t('common.updateAccountPassword', 'Update your account password')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4 max-w-md">
                       <div>
-                        <label className="text-sm font-medium">New Password</label>
+                        <label className="text-sm font-medium">{t('common.newPassword', 'New Password')}</label>
                         <Input
                           type="password"
                           value={passwordFormData.newPassword}
                           onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
                           className="mt-1"
-                          placeholder="At least 8 characters"
+                          placeholder={t('common.passwordMinHint', 'At least 8 characters')}
                         />
                       </div>
                       <div>
-                        <label className="text-sm font-medium">Confirm New Password</label>
+                        <label className="text-sm font-medium">{t('common.confirmNewPassword', 'Confirm New Password')}</label>
                         <Input
                           type="password"
                           value={passwordFormData.confirmPassword}
                           onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
                           className="mt-1"
-                          placeholder="Re-enter new password"
+                          placeholder={t('common.passwordReenterHint', 'Re-enter new password')}
                         />
                       </div>
                       <Button onClick={handleChangePassword} disabled={isChangingPassword}>
-                        {isChangingPassword ? 'Updating...' : 'Update Password'}
+                        {isChangingPassword
+                          ? t('patientPortal.actions.updating', 'Updating...')
+                          : t('patientPortal.actions.updatePassword', 'Update Password')}
                       </Button>
                     </div>
                   </CardContent>
@@ -2603,7 +3105,7 @@ const PatientPortal = () => {
                     <span className="font-medium">Doctor:</span> {selectedPrescription.doctor}
                   </div>
                   <div>
-                    <span className="font-medium">Date:</span> {new Date(selectedPrescription.date).toLocaleDateString()}
+                    <span className="font-medium">Date:</span> {formatDate(selectedPrescription.date)}
                   </div>
                   <div>
                     <span className="font-medium">Status:</span> {selectedPrescription.status}
@@ -2647,17 +3149,68 @@ const PatientPortal = () => {
                   disabled={selectedPrescription.isDownloaded}
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  {selectedPrescription.isDownloaded ? 'Downloaded' : 'Download'}
+                  {selectedPrescription.isDownloaded
+                    ? t('patientPortal.actions.downloaded', 'Downloaded')
+                    : t('common.download', 'Download')}
                 </Button>
                 <Button
                   onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
                   disabled={isRequestingRefillId === selectedPrescription.id}
                 >
-                  {isRequestingRefillId === selectedPrescription.id ? 'Sending...' : 'Request Refill'}
+                  {isRequestingRefillId === selectedPrescription.id
+                    ? t('patientPortal.actions.sending', 'Sending...')
+                    : t('patientPortal.actions.requestRefill', 'Request Refill')}
                 </Button>
               </>
             )}
             <Button variant="ghost" onClick={() => setPrescriptionDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Investigation Details Dialog */}
+      <Dialog open={investigationDetailsOpen} onOpenChange={setInvestigationDetailsOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</DialogTitle>
+            <DialogDescription>
+              {t('patientPortal.actions.viewDetails', 'View Details')}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedInvestigationRequest && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/40 border border-border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="font-medium">Doctor:</span> {selectedInvestigationRequest.doctor}
+                  </div>
+                  <div>
+                    <span className="font-medium">Date:</span> {formatDate(selectedInvestigationRequest.date)}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[96px]">
+                  <p className="text-sm whitespace-pre-wrap">{selectedInvestigationRequest.details}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {selectedInvestigationRequest && (
+              <Button
+                variant="outline"
+                onClick={() => handleDownloadInvestigationRequest(selectedInvestigationRequest)}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                {t('common.download', 'Download')}
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => setInvestigationDetailsOpen(false)}>
               Close
             </Button>
           </DialogFooter>
@@ -2684,10 +3237,10 @@ const PatientPortal = () => {
                     <span className="font-medium">Specialty:</span> {selectedConsultation.specialty}
                   </div>
                   <div>
-                    <span className="font-medium">Date:</span> {new Date(selectedConsultation.date).toLocaleDateString()}
+                    <span className="font-medium">Date:</span> {formatDate(selectedConsultation.date)}
                   </div>
                   <div>
-                    <span className="font-medium">Status:</span> Completed
+                    <span className="font-medium">{t('common.status', 'Status')}:</span> {t('appointmentStatus.completed', 'Completed')}
                   </div>
                 </div>
               </div>
