@@ -14,6 +14,7 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -39,6 +40,7 @@ export function SlotSelectionModal({
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const { formatDate, formatClockTime, formatCurrency } = useLocaleFormatter();
 
   // Fetch booked appointments for selected doctor and date
   const { data: bookedSlots = [] } = useQuery({
@@ -62,7 +64,7 @@ export function SlotSelectionModal({
   // Pricing logic
   const getPricing = (specialty: string) => {
     const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
-    return isSpecialist ? '₦8,000' : '₦4,000';
+    return isSpecialist ? formatCurrency(8000) : formatCurrency(4000);
   };
 
   useEffect(() => {
@@ -225,7 +227,7 @@ export function SlotSelectionModal({
                 <div className="grid grid-cols-3 gap-2">
                   {availableDates.map((date) => {
                     const dateObj = new Date(date);
-                    const dayName = dateObj.toLocaleDateString('en-US', {
+                    const dayName = formatDate(dateObj, {
                       weekday: 'short',
                     });
                     const dayNum = dateObj.getDate();
@@ -285,7 +287,7 @@ export function SlotSelectionModal({
                             : 'border-border hover:border-primary/50'
                         }`}
                       >
-                        {time}
+                        {formatClockTime(time)}
                         {isBooked && <span className="block text-[9px] mt-0.5">Booked</span>}
                         {isPast && !isBooked && <span className="block text-[9px] mt-0.5">Past</span>}
                       </button>
@@ -311,7 +313,7 @@ export function SlotSelectionModal({
                 </div>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-3 h-3" />
-                  {new Date(selectedDate).toLocaleDateString('en-US', {
+                  {formatDate(selectedDate, {
                     weekday: 'long',
                     year: 'numeric',
                     month: 'long',
@@ -320,7 +322,7 @@ export function SlotSelectionModal({
                 </div>
                 <div className="flex items-center gap-2">
                   <Clock className="w-3 h-3" />
-                  {selectedTime}
+                  {formatClockTime(selectedTime)}
                 </div>
               </div>
             </div>

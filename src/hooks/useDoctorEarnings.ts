@@ -1,11 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { useLocaleFormatter } from '@/lib/locale';
 
 const CONSULTATION_FEE = 5000; // ₦5,000 per consultation
 
 export const useDoctorEarnings = (doctorId: string | undefined) => {
+  const { locale } = useLocaleFormatter();
+
   return useQuery({
-    queryKey: ['doctor-earnings', doctorId],
+    queryKey: ['doctor-earnings', doctorId, locale],
     queryFn: async () => {
       if (!doctorId) return null;
 
@@ -53,7 +56,9 @@ export const useDoctorEarnings = (doctorId: string | undefined) => {
           return aptDate.getMonth() === adjustedMonth && aptDate.getFullYear() === targetYear;
         }) || [];
 
-        const monthName = new Date(targetYear, adjustedMonth, 1).toLocaleDateString('en-US', { month: 'short' });
+        const monthName = new Intl.DateTimeFormat(locale, { month: 'short' }).format(
+          new Date(targetYear, adjustedMonth, 1)
+        );
         monthlyData.push({
           month: monthName,
           earnings: monthAppointments.length * CONSULTATION_FEE,
