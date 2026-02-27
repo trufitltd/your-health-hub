@@ -34,6 +34,8 @@ import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { ChatSidebar } from './ChatSidebar';
 import { ControlBar } from './ControlBar';
 import { DoctorNotesPanel } from './DoctorNotesPanel';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { translateToastText } from '@/lib/toastI18n';
 
 interface Message {
   id: string;
@@ -60,6 +62,8 @@ export function ConsultationRoom({
   // Consultations are uniform; default to video+audio enabled internally
   const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const ui = (text: string) => translateToastText(text, language);
   
   // Track user presence during consultation
   useTrackUserPresence(user?.id, participantRole);
@@ -271,8 +275,8 @@ export function ConsultationRoom({
       }
       
       toast({
-        title: 'Media Error',
-        description: 'Unable to access camera/microphone. Please check permissions.',
+        title: ui('Media Error'),
+        description: ui('Unable to access camera/microphone. Please check permissions.'),
         variant: 'destructive'
       });
       return null;
@@ -621,8 +625,8 @@ export function ConsultationRoom({
     }
 
     toast({
-      title: 'Clerking Required',
-      description: 'Please add clerking before leaving or ending this call.'
+      title: ui('Clerking Required'),
+      description: ui('Please add clerking before leaving or ending this call.')
     });
     setNotesPanelView('clerking');
     setIsChatOpen(false);
@@ -747,8 +751,8 @@ export function ConsultationRoom({
           if (connectionStatus !== 'connected') {
             setConnectionStatus('disconnected');
             toast({
-              title: 'Connection Error',
-              description: 'Failed to establish WebRTC connection',
+              title: ui('Connection Error'),
+              description: ui('Failed to establish WebRTC connection'),
               variant: 'destructive'
             });
           }
@@ -759,8 +763,8 @@ export function ConsultationRoom({
           setIsPatientWaiting(true);
           setWaitingForPatient(false); // Exit waiting screen to show admit overlay
           toast({
-            title: 'Patient Waiting',
-            description: 'A patient has joined the waiting room.',
+            title: ui('Patient Waiting'),
+            description: ui('A patient has joined the waiting room.'),
             duration: 5000,
           });
         });
@@ -776,8 +780,8 @@ export function ConsultationRoom({
           setRemoteAudioPublished(false);
           setRemoteVideoPublished(false);
           toast({
-            title: 'Participant left',
-            description: `${participantName} left the call.`
+            title: ui('Participant left'),
+            description: `${participantName} ${ui('left the call.')}`
           });
         });
 
@@ -785,8 +789,8 @@ export function ConsultationRoom({
           if (hasHandledRemoteEndRef.current) return;
           hasHandledRemoteEndRef.current = true;
           toast({
-            title: 'Call ended',
-            description: `${participantName} ended the call for everyone.`
+            title: ui('Call ended'),
+            description: `${participantName} ${ui('ended the call for everyone.')}`
           });
           cleanupAndExit().catch((err) => {
             console.error('Failed to cleanup after session_ended signal:', err);
@@ -810,10 +814,10 @@ export function ConsultationRoom({
             webrtc.initializePeer(finalStream);
           }
           toast({
-            title: 'Admitted to Call',
+            title: ui('Admitted to Call'),
             description: consultationType === 'chat' 
-              ? 'The doctor has admitted you to the consultation.' 
-              : 'The doctor has admitted you to the consultation.',
+              ? ui('The doctor has admitted you to the consultation.') 
+              : ui('The doctor has admitted you to the consultation.'),
             duration: 3000,
           });
         });
@@ -854,8 +858,8 @@ export function ConsultationRoom({
       } catch (err) {
         console.error('[WebRTC] Initialization error:', err);
         toast({
-          title: 'Connection Error',
-          description: 'Failed to initialize WebRTC connection',
+          title: ui('Connection Error'),
+          description: ui('Failed to initialize WebRTC connection'),
           variant: 'destructive'
         });
       }
@@ -1010,8 +1014,8 @@ export function ConsultationRoom({
         if (status === 'ended' && !hasHandledRemoteEndRef.current) {
           hasHandledRemoteEndRef.current = true;
           toast({
-            title: 'Call ended',
-            description: 'The doctor ended the call for everyone. Please leave a review.'
+            title: ui('Call ended'),
+            description: ui('The doctor ended the call for everyone. Please leave a review.')
           });
           cleanupAndExit().catch((err) => {
             console.error('Failed to cleanup after consultation_sessions ended update:', err);
@@ -1072,8 +1076,8 @@ export function ConsultationRoom({
     } catch (err) {
       console.error('[Media] Failed to re-acquire video track:', err);
       toast({
-        title: 'Camera Error',
-        description: 'Unable to turn camera back on. Please check permissions.',
+        title: ui('Camera Error'),
+        description: ui('Unable to turn camera back on. Please check permissions.'),
         variant: 'destructive'
       });
       return false;
@@ -1168,8 +1172,8 @@ export function ConsultationRoom({
     } catch (err) {
       console.error('Error sending message:', err);
       toast({
-        title: 'Error',
-        description: 'Failed to send message',
+        title: ui('Error'),
+        description: ui('Failed to send message'),
         variant: 'destructive'
       });
     }
@@ -1193,18 +1197,18 @@ export function ConsultationRoom({
       setHasConsultationOccurred(true);
       
       toast({
-        title: 'Patient Admitted',
+        title: ui('Patient Admitted'),
         description: consultationType === 'chat' 
-          ? 'Patient is being connected to the chat.' 
-          : 'Patient is being connected to the call.',
+          ? ui('Patient is being connected to the chat.') 
+          : ui('Patient is being connected to the call.'),
         duration: 3000,
       });
       
     } catch (err) {
       console.error('Error admitting patient:', err);
       toast({
-        title: 'Error',
-        description: 'Failed to admit patient',
+        title: ui('Error'),
+        description: ui('Failed to admit patient'),
         variant: 'destructive'
       });
     }
@@ -1273,18 +1277,18 @@ export function ConsultationRoom({
           )}
 
           <div className="space-y-4">
-            <div className="flex items-center justify-center gap-3">
-              <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
-              <h2 className="text-2xl font-semibold text-white">Waiting for Patient</h2>
-            </div>
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
+              <h2 className="text-2xl font-semibold text-white">{ui('Waiting for Patient')}</h2>
+              </div>
             
             <p className="text-slate-400">
-              You've joined the consultation. Please wait for the patient to join the waiting room.
+              {ui("You've joined the consultation. Please wait for the patient to join the waiting room.")}
             </p>
             
             <div className="flex items-center justify-center gap-2 text-slate-500 text-sm">
               <Clock className="w-4 h-4" />
-              <span>Ready to admit {participantName}</span>
+              <span>{ui('Ready to admit')} {participantName}</span>
             </div>
             <div className="flex justify-center">
               {renderAvatar(
@@ -1303,11 +1307,11 @@ export function ConsultationRoom({
               className="border-slate-600 text-slate-300 hover:bg-slate-800 w-full"
             >
               <X className="w-4 h-4 mr-2" />
-              Leave Consultation
+              {ui('Leave Consultation')}
             </Button>
             
             <div className="text-xs text-slate-500">
-              You'll be notified when the patient joins
+              {ui("You'll be notified when the patient joins")}
             </div>
           </div>
         </motion.div>
@@ -1370,14 +1374,14 @@ export function ConsultationRoom({
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3">
               <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
-              <h2 className="text-2xl font-semibold text-white">Waiting Room</h2>
+              <h2 className="text-2xl font-semibold text-white">{ui('Waiting Room')}</h2>
             </div>
             <p className="text-slate-400 max-w-sm">
-              You're in the waiting room. The doctor will admit you shortly.
+              {ui("You're in the waiting room. The doctor will admit you shortly.")}
             </p>
             <div className="flex items-center justify-center gap-2 text-slate-500 text-sm">
               <Clock className="w-4 h-4" />
-              <span>Waiting for {participantName}</span>
+              <span>{ui('Waiting for')} {participantName}</span>
             </div>
             <div className="flex justify-center">
               {renderAvatar(
@@ -1395,7 +1399,7 @@ export function ConsultationRoom({
             className="border-slate-600 text-slate-300 hover:bg-slate-800"
           >
             <X className="w-4 h-4 mr-2" />
-            Leave Waiting Room
+            {ui('Leave Waiting Room')}
           </Button>
         </motion.div>
       </div>
@@ -1409,10 +1413,10 @@ export function ConsultationRoom({
           <CardContent className="pt-6">
             <div className="flex items-center gap-3 text-destructive mb-4">
               <AlertCircle className="w-6 h-6" />
-              <h3 className="font-semibold">Error</h3>
+              <h3 className="font-semibold">{ui('Error')}</h3>
             </div>
             <p className="text-sm text-slate-300 mb-4">{error}</p>
-            <Button onClick={onEndCall} className="w-full">Go Back</Button>
+            <Button onClick={onEndCall} className="w-full">{ui('Go Back')}</Button>
           </CardContent>
         </Card>
       </div>
@@ -1425,7 +1429,7 @@ export function ConsultationRoom({
       <div className="flex items-center justify-center h-screen bg-[#1a1a2e]">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Setting up your consultation...</p>
+          <p className="text-slate-400">{ui('Setting up your consultation...')}</p>
         </div>
       </div>
     );
@@ -1450,7 +1454,7 @@ export function ConsultationRoom({
                 className={`gap-2 ${connectionStatus === 'connected' ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'}`}
               >
                 <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : 'bg-amber-500 animate-pulse'}`} />
-                {connectionStatus === 'connecting' ? 'Connecting...' : 'Connected'}
+                {connectionStatus === 'connecting' ? ui('Connecting...') : ui('Connected')}
               </Badge>
               {connectionStatus === 'connected' && (
                 <Badge variant="secondary" className="font-mono bg-white/10 text-white">
@@ -1471,7 +1475,7 @@ export function ConsultationRoom({
                     onClick={() => toggleDoctorNotesView('clerking')}
                   >
                     <Stethoscope className="w-4 h-4 mr-2" />
-                    {isNotesOpen && notesPanelView === 'clerking' ? 'Close Clerking' : 'Add Clerking'}
+                    {isNotesOpen && notesPanelView === 'clerking' ? ui('Close Clerking') : ui('Add Clerking')}
                     {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
                   </Button>
                   <Button
@@ -1485,7 +1489,7 @@ export function ConsultationRoom({
                     onClick={() => toggleDoctorNotesView('folder')}
                   >
                     <FolderOpen className="w-4 h-4 mr-2" />
-                    {isNotesOpen && notesPanelView === 'folder' ? 'Close Patient Folder' : 'View Patient Folder'}
+                    {isNotesOpen && notesPanelView === 'folder' ? ui('Close Patient Folder') : ui('View Patient Folder')}
                     {isNotesOpen && notesPanelView === 'folder' && <X className="w-4 h-4 ml-2" />}
                   </Button>
                 </div>
@@ -1504,7 +1508,7 @@ export function ConsultationRoom({
                       {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Fullscreen</TooltipContent>
+                  <TooltipContent>{ui('Fullscreen')}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
@@ -1523,7 +1527,7 @@ export function ConsultationRoom({
                 onClick={() => toggleDoctorNotesView('clerking')}
               >
                 <Stethoscope className="w-4 h-4 mr-2" />
-                {isNotesOpen && notesPanelView === 'clerking' ? 'Close' : 'Add Clerking'}
+                {isNotesOpen && notesPanelView === 'clerking' ? ui('Close') : ui('Add Clerking')}
                 {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
               </Button>
               <Button
@@ -1537,7 +1541,7 @@ export function ConsultationRoom({
                 onClick={() => toggleDoctorNotesView('folder')}
               >
                 <FolderOpen className="w-4 h-4 mr-2" />
-                {isNotesOpen && notesPanelView === 'folder' ? 'Close' : 'View Folder'}
+                {isNotesOpen && notesPanelView === 'folder' ? ui('Close') : ui('View Folder')}
                 {isNotesOpen && notesPanelView === 'folder' && <X className="w-4 h-4 ml-2" />}
               </Button>
             </div>
@@ -1558,8 +1562,8 @@ export function ConsultationRoom({
                   'bg-primary text-primary-foreground text-2xl'
                 )}
                 <div>
-                  <h3 className="text-xl font-semibold text-white mb-2">Patient Waiting</h3>
-                  <p className="text-slate-400 text-sm">{participantName} is in the waiting room</p>
+                  <h3 className="text-xl font-semibold text-white mb-2">{ui('Patient Waiting')}</h3>
+                  <p className="text-slate-400 text-sm">{participantName} {ui('is in the waiting room')}</p>
                 </div>
                 <div className="space-y-3">
                   <Button
@@ -1567,14 +1571,14 @@ export function ConsultationRoom({
                     className="w-full bg-green-600 hover:bg-green-700 text-white gap-2"
                   >
                     <User className="w-4 h-4" />
-                    {consultationType === 'chat' ? 'Admit to Chat' : 'Admit to Call'}
+                    {consultationType === 'chat' ? ui('Admit to Chat') : ui('Admit to Call')}
                   </Button>
                   <Button
                     onClick={() => setIsPatientWaiting(false)}
                     variant="outline"
                     className="w-full border-slate-600 text-slate-300 hover:bg-slate-800"
                   >
-                    Not Now
+                    {ui('Not Now')}
                   </Button>
                 </div>
               </motion.div>
@@ -1691,7 +1695,7 @@ export function ConsultationRoom({
                             'bg-slate-700 text-slate-300 text-3xl sm:text-4xl'
                           )}
                           <p className="text-white text-lg">{participantName}</p>
-                          <p className="text-slate-400 text-sm">Camera is off</p>
+                          <p className="text-slate-400 text-sm">{ui('Camera is off')}</p>
                         </div>
                       ) : connectionStatus === 'connecting' ? (
                         // Connecting - show local video or avatar
@@ -1749,7 +1753,7 @@ export function ConsultationRoom({
                               )}
                               <p className="text-white text-lg">{participantName}</p>
                               <p className="text-slate-400 text-sm">
-                                {connectionStatus === 'connected' ? 'Connected' : 'Connecting...'}
+                                {connectionStatus === 'connected' ? ui('Connected') : ui('Connecting...')}
                               </p>
                             </div>
                           )}
@@ -1763,7 +1767,7 @@ export function ConsultationRoom({
                       participantRole === 'doctor' ? 'top-24 sm:top-4' : 'top-4'
                     }`}>
                       <MicOff className="w-3 h-3" />
-                      <span>Mic off</span>
+                      <span>{ui('Mic off')}</span>
                     </div>
                   )}
                   {connectionStatus === 'connected' && !remoteVideoPublished && (
@@ -1771,7 +1775,7 @@ export function ConsultationRoom({
                       participantRole === 'doctor' ? 'top-32 sm:top-12' : 'top-12'
                     }`}>
                       <VideoOff className="w-3 h-3" />
-                      <span>Camera off</span>
+                      <span>{ui('Camera off')}</span>
                     </div>
                   )}
                 </div>
@@ -1836,17 +1840,17 @@ export function ConsultationRoom({
                   )}
                 </motion.div>
                 <h3 className="text-2xl font-semibold text-white mb-2">
-                  {hasRemoteStream && connectionStatus === 'connected' ? participantName : 'Waiting to connect'}
+                  {hasRemoteStream && connectionStatus === 'connected' ? participantName : ui('Waiting to connect')}
                 </h3>
                 <p className="text-slate-400">
-                  {connectionStatus === 'connecting' ? 'Connecting...' : 'Audio Call'}
+                  {connectionStatus === 'connecting' ? ui('Connecting...') : ui('Audio Call')}
                 </p>
               </div>
             ) : (
               // Chat-only view
               <div className="flex flex-col items-center justify-center">
                 <MessageSquare className="w-16 h-16 text-slate-600 mb-4" />
-                <p className="text-slate-400">Chat with {participantName}</p>
+                <p className="text-slate-400">{ui('Chat with')} {participantName}</p>
               </div>
             )}
           </div>
@@ -1917,10 +1921,11 @@ export function ConsultationRoom({
       <AlertDialog open={isEndForEveryoneDialogOpen} onOpenChange={setIsEndForEveryoneDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>End Call For Everyone?</AlertDialogTitle>
+            <AlertDialogTitle>{ui('End Call For Everyone?')}</AlertDialogTitle>
             <AlertDialogDescription>
-              Ending call for everyone means that the patient does not need follow up and will not be able to join this appointment again.
-              If the patient needs follow up, use Leave call instead.
+              {ui('Ending call for everyone means that the patient does not need follow up and will not be able to join this appointment again.')}
+              {' '}
+              {ui('If the patient needs follow up, click on Needs Follow Up.')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1933,7 +1938,7 @@ export function ConsultationRoom({
                 });
               }}
             >
-              Needs Follow Up
+              {ui('Needs Follow Up')}
             </AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -1944,7 +1949,7 @@ export function ConsultationRoom({
                 });
               }}
             >
-              End For Everyone
+              {ui('End For Everyone')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

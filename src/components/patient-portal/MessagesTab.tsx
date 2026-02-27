@@ -21,6 +21,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { consultationService, type ConsultationMessage } from '@/services/consultationService';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface FollowUpThread {
   id: string;
@@ -42,6 +43,7 @@ interface MessagesTabProps {
 
 export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
   const { user } = useAuth();
+  const { formatDate, formatTime } = useLocaleFormatter();
   const [threads, setThreads] = useState<FollowUpThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -372,19 +374,14 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
     }
   };
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const formatDate = (dateString: string | null | undefined) => {
+  const formatMessageTime = (dateString: string) => formatTime(dateString);
+  const formatMessageDate = (dateString: string | null | undefined) => {
     if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
+    return formatDate(dateString);
   };
 
   return (
-    <div className="grid lg:grid-cols-[320px_1fr] gap-0 h-[calc(100vh-15rem)] min-h-[520px] max-h-[820px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
+    <div className="grid lg:grid-cols-[320px_1fr] gap-0 h-[calc(100vh-15rem)] min-h-[520px] max-h-[820px] bg-card rounded-xl border border-border overflow-hidden shadow-sm [&>*]:min-h-0">
       {/* Sidebar */}
       <div className={`flex flex-col border-r border-border bg-muted/10 ${selectedSessionId ? 'hidden lg:flex' : 'flex'}`}>
         <div className="p-4 border-b border-border">
@@ -436,7 +433,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-medium truncate">{formatDoctorDisplayName(thread.doctorName)}</span>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {formatDate(thread.appointmentDate)}
+                        {formatMessageDate(thread.appointmentDate)}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground truncate mb-1">
@@ -455,7 +452,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
 
       {/* Chat Area */}
       {selectedThread ? (
-        <div className="flex flex-col h-full min-h-0 bg-background">
+        <div className="flex flex-col h-full min-h-0 overflow-hidden bg-background">
           {/* Chat Header */}
           <div className="p-3 sm:p-4 border-b border-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
@@ -483,7 +480,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                   <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
                   <span>•</span>
                   <span>
-                    {formatDate(selectedThread.appointmentDate)}
+                      {formatMessageDate(selectedThread.appointmentDate)}
                     {selectedThread.appointmentTime ? ` • ${selectedThread.appointmentTime}` : ''}
                   </span>
                 </div>
@@ -503,7 +500,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
           </div>
 
           {/* Messages List */}
-          <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 pb-24" ref={messagesViewportRef}>
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4 pb-24" ref={messagesViewportRef}>
             {isLoadingMessages ? (
               <div className="text-sm text-muted-foreground">Loading messages...</div>
             ) : messages.length === 0 ? (
@@ -563,7 +560,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                         </div>
                         <div className="flex items-center gap-1 mt-1 px-1">
                           <span className="text-[10px] text-muted-foreground">
-                            {formatTime(message.created_at)}
+                          {formatMessageTime(message.created_at)}
                           </span>
                           {isUser && <Check className="w-3 h-3 text-muted-foreground" />}
                         </div>

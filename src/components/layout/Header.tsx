@@ -1,37 +1,45 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Stethoscope, Calendar, Phone, User, LogOut, LayoutDashboard } from 'lucide-react';
+import { Menu, X, User, LogOut, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
-
-const navLinks = [
-  { href: '/', label: 'Home' },
-  { href: '/services', label: 'Services' },
-  { href: '/specialists', label: 'Specialists' },
-  { href: '/booking', label: 'Book Now' },
-  { href: '/contact', label: 'Contact' },
-];
+import { LanguageSelector } from '@/components/LanguageSelector';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const { user, role, signOut, isLoading } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
+  const navLinks = [
+    { href: '/', label: t('common.home', 'Home') },
+    { href: '/services', label: t('common.services', 'Services') },
+    { href: '/specialists', label: t('common.specialists', 'Specialists') },
+    { href: '/booking', label: t('common.bookNow', 'Book Now') },
+    { href: '/contact', label: t('common.contact', 'Contact') },
+  ];
 
   const handleSignOut = async () => {
     try {
       await signOut();
-      toast({ title: 'Signed out', description: 'You have been signed out.' });
+      toast({
+        title: t('header.toast.signedOut.title', 'Signed out'),
+        description: t('header.toast.signedOut.description', 'You have been signed out.'),
+      });
       navigate('/');
     } catch (error: unknown) {
-      const message = error && typeof error === 'object' && 'message' in error ? (error as { message?: string }).message : 'Failed to sign out';
-      toast({ title: 'Error', description: message });
+      const message =
+        error && typeof error === 'object' && 'message' in error
+          ? (error as { message?: string }).message
+          : t('header.toast.signOutError.description', 'Failed to sign out');
+      toast({ title: t('header.toast.signOutError.title', 'Error'), description: message });
     }
   };
 
@@ -60,12 +68,14 @@ export function Header() {
         <nav className="flex items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 group">
-            <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
+            <img src={logoImage} alt={t('header.logoAlt', 'MyE-Doctor Logo')} className="h-10 w-auto" />
             <div className="flex flex-col">
               <span className="text-xl font-bold text-foreground leading-tight">
                 MyE-<span className="text-primary">Doctor</span>
               </span>
-              <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+              <span className="text-[10px] text-muted-foreground leading-tight">
+                {t('header.poweredBy', 'Powered by HealthLink')}
+              </span>
             </div>
           </Link>
 
@@ -91,10 +101,11 @@ export function Header() {
           <div className="hidden md:flex items-center gap-3">
             {!isLoading && user ? (
               <div className="flex items-center gap-2">
+                <LanguageSelector />
                 <Link to={dashboardLink}>
                   <Button variant="default" size="sm" className="gap-2">
                     <LayoutDashboard className="w-4 h-4" />
-                    Dashboard
+                    {t('common.dashboard', 'Dashboard')}
                   </Button>
                 </Link>
                 <Button
@@ -104,20 +115,21 @@ export function Header() {
                   className="flex items-center gap-1"
                 >
                   <LogOut className="w-4 h-4" />
-                  Sign Out
+                  {t('common.signOut', 'Sign Out')}
                 </Button>
               </div>
             ) : (
               <>
+                <LanguageSelector />
                 <Link to="/auth">
                   <Button variant="ghost" size="sm">
                     <User className="w-4 h-4 mr-1" />
-                    Login
+                    {t('common.login', 'Login')}
                   </Button>
                 </Link>
                 <Link to="/auth?mode=register">
                   <Button variant="gradient" size="sm">
-                    Get Started
+                    {t('common.getStarted', 'Get Started')}
                   </Button>
                 </Link>
               </>
@@ -128,7 +140,7 @@ export function Header() {
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="md:hidden p-2 rounded-lg hover:bg-muted transition-colors"
-            aria-label="Toggle menu"
+            aria-label={t('header.toggleMenuAria', 'Toggle menu')}
           >
             {mobileMenuOpen ? (
               <X className="w-6 h-6" />
@@ -164,6 +176,7 @@ export function Header() {
                 </Link>
               ))}
               <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-border">
+                <LanguageSelector />
                 {!isLoading && user ? (
                   <>
                     <div className="px-4 py-2 rounded-lg bg-muted">
@@ -174,7 +187,7 @@ export function Header() {
                     <Link to={dashboardLink}>
                       <Button variant="default" className="w-full justify-start gap-2">
                         <LayoutDashboard className="w-4 h-4" />
-                        Dashboard
+                        {t('common.dashboard', 'Dashboard')}
                       </Button>
                     </Link>
                     <Button
@@ -183,19 +196,19 @@ export function Header() {
                       onClick={handleSignOut}
                     >
                       <LogOut className="w-4 h-4 mr-2" />
-                      Sign Out
+                      {t('common.signOut', 'Sign Out')}
                     </Button>
                   </>
                 ) : (
                   <>
                     <Link to="/auth">
                       <Button variant="outline" className="w-full">
-                        Login
+                        {t('common.login', 'Login')}
                       </Button>
                     </Link>
                     <Link to="/auth?mode=register">
                       <Button variant="gradient" className="w-full">
-                        Get Started
+                        {t('common.getStarted', 'Get Started')}
                       </Button>
                     </Link>
                   </>
