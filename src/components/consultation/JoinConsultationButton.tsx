@@ -30,7 +30,6 @@ export function JoinConsultationButton({
   const isJoinable =
     !status ||
     normalizedStatus === 'confirmed' ||
-    normalizedStatus === 'pending' ||
     normalizedStatus === 'in_progress';
 
   const handleJoin = () => {
