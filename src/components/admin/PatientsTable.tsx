@@ -95,7 +95,7 @@ export function PatientsTable() {
           const total = appointments?.length || 0;
           const completed = normalizedAppointments.filter((a) => a.status === 'completed').length;
           const pending = normalizedAppointments.filter((a) =>
-            a.status === 'pending' || a.status === 'confirmed' || a.status === 'in_progress'
+            a.status === 'pending_payment' || a.status === 'pending_approval' || a.status === 'confirmed' || a.status === 'in_progress'
           ).length;
           const ratings = appointments?.filter(a => a.rating && a.rating > 0).map(a => a.rating!) || [];
           const avgRating = ratings.length > 0 
