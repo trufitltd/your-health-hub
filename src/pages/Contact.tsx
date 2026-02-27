@@ -8,54 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-
-const contactInfo = [
-  {
-    icon: Phone,
-    title: 'Phone',
-    value: '+1 (234) 567-890',
-    desc: 'Mon-Fri from 8am to 6pm',
-  },
-  {
-    icon: Mail,
-    title: 'Email',
-    value: 'support@myedoctor.com',
-    desc: 'We reply within 24 hours',
-  },
-  {
-    icon: MapPin,
-    title: 'Address',
-    value: '123 Healthcare Street',
-    desc: 'Medical City, MC 12345',
-  },
-  {
-    icon: Clock,
-    title: 'Hours',
-    value: '24/7 Available',
-    desc: 'For emergency consultations',
-  },
-];
-
-const faqs = [
-  {
-    q: 'How do I book a consultation?',
-    a: 'Simply create an account, browse our specialists, select your preferred doctor, choose a time slot, and confirm your booking.',
-  },
-  {
-    q: 'Are the consultations secure?',
-    a: 'Yes, all consultations are end-to-end encrypted and comply with healthcare privacy standards.',
-  },
-  {
-    q: 'Can I get prescriptions online?',
-    a: 'Yes, our doctors can provide digital prescriptions after your consultation when medically appropriate.',
-  },
-  {
-    q: 'What payment methods do you accept?',
-    a: 'We accept all major credit cards, debit cards, and digital payment methods.',
-  },
-];
+import { useLanguage } from '@/contexts/LanguageContext';
 
 export default function ContactPage() {
+  const { t } = useLanguage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
@@ -65,6 +21,64 @@ export default function ContactPage() {
     subject: '',
     message: '',
   });
+
+  const contactInfo = [
+    {
+      icon: Phone,
+      title: t('contact.info.phone.title', 'Phone'),
+      value: '+1 (234) 567-890',
+      desc: t('contact.info.phone.desc', 'Mon-Fri from 8am to 6pm'),
+    },
+    {
+      icon: Mail,
+      title: t('contact.info.email.title', 'Email'),
+      value: 'support@myedoctor.com',
+      desc: t('contact.info.email.desc', 'We reply within 24 hours'),
+    },
+    {
+      icon: MapPin,
+      title: t('contact.info.address.title', 'Address'),
+      value: t('contact.info.address.value', '123 Healthcare Street'),
+      desc: t('contact.info.address.desc', 'Medical City, MC 12345'),
+    },
+    {
+      icon: Clock,
+      title: t('contact.info.hours.title', 'Hours'),
+      value: t('contact.info.hours.value', '24/7 Available'),
+      desc: t('contact.info.hours.desc', 'For emergency consultations'),
+    },
+  ];
+
+  const faqs = [
+    {
+      q: t('contact.faq.1.q', 'How do I book a consultation?'),
+      a: t(
+        'contact.faq.1.a',
+        'Simply create an account, browse our specialists, select your preferred doctor, choose a time slot, and confirm your booking.',
+      ),
+    },
+    {
+      q: t('contact.faq.2.q', 'Are the consultations secure?'),
+      a: t(
+        'contact.faq.2.a',
+        'Yes, all consultations are end-to-end encrypted and comply with healthcare privacy standards.',
+      ),
+    },
+    {
+      q: t('contact.faq.3.q', 'Can I get prescriptions online?'),
+      a: t(
+        'contact.faq.3.a',
+        'Yes, our doctors can provide digital prescriptions after your consultation when medically appropriate.',
+      ),
+    },
+    {
+      q: t('contact.faq.4.q', 'What payment methods do you accept?'),
+      a: t(
+        'contact.faq.4.a',
+        'We accept all major credit cards, debit cards, and digital payment methods.',
+      ),
+    },
+  ];
 
   // Scroll to top when page mounts
   useEffect(() => {
@@ -98,9 +112,9 @@ export default function ContactPage() {
         subject: '',
         message: '',
       });
-      toast.success('Message sent successfully! We\'ll get back to you soon.');
+      toast.success(t('contact.toast.success', "Message sent successfully! We'll get back to you soon."));
     } catch (error) {
-      toast.error('Failed to send message. Please try again.');
+      toast.error(t('contact.toast.error', 'Failed to send message. Please try again.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -116,12 +130,17 @@ export default function ContactPage() {
             animate={{ opacity: 1, y: 0 }}
             className="text-center max-w-3xl mx-auto"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">Contact Us</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">
+              {t('contact.hero.badge', 'Contact Us')}
+            </span>
             <h1 className="text-4xl md:text-5xl font-bold mt-3 mb-6">
-              Get in Touch
+              {t('contact.hero.title', 'Get in Touch')}
             </h1>
             <p className="text-lg text-muted-foreground">
-              Have questions? We're here to help. Reach out to us through any of the channels below.
+              {t(
+                'contact.hero.description',
+                "Have questions? We're here to help. Reach out to us through any of the channels below.",
+              )}
             </p>
           </motion.div>
         </div>
@@ -166,16 +185,16 @@ export default function ContactPage() {
                 <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center">
                   <MessageSquare className="w-5 h-5 text-primary-foreground" />
                 </div>
-                <h2 className="text-xl font-semibold">Send us a Message</h2>
+                <h2 className="text-xl font-semibold">{t('contact.form.title', 'Send us a Message')}</h2>
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="firstName">First Name</Label>
+                    <Label htmlFor="firstName">{t('contact.form.firstName.label', 'First Name')}</Label>
                     <Input
                       id="firstName"
-                      placeholder="John"
+                      placeholder={t('contact.form.firstName.placeholder', 'John')}
                       className="mt-1.5"
                       value={formData.firstName}
                       onChange={(event) => setFormData((prev) => ({ ...prev, firstName: event.target.value }))}
@@ -183,10 +202,10 @@ export default function ContactPage() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="lastName">Last Name</Label>
+                    <Label htmlFor="lastName">{t('contact.form.lastName.label', 'Last Name')}</Label>
                     <Input
                       id="lastName"
-                      placeholder="Doe"
+                      placeholder={t('contact.form.lastName.placeholder', 'Doe')}
                       className="mt-1.5"
                       value={formData.lastName}
                       onChange={(event) => setFormData((prev) => ({ ...prev, lastName: event.target.value }))}
@@ -196,11 +215,11 @@ export default function ContactPage() {
                 </div>
 
                 <div>
-                  <Label htmlFor="email">Email Address</Label>
+                  <Label htmlFor="email">{t('contact.form.email.label', 'Email Address')}</Label>
                   <Input
                     id="email"
                     type="email"
-                    placeholder="john@example.com"
+                    placeholder={t('contact.form.email.placeholder', 'john@example.com')}
                     className="mt-1.5"
                     value={formData.email}
                     onChange={(event) => setFormData((prev) => ({ ...prev, email: event.target.value }))}
@@ -209,11 +228,11 @@ export default function ContactPage() {
                 </div>
 
                 <div>
-                  <Label htmlFor="phone">Phone Number (Optional)</Label>
+                  <Label htmlFor="phone">{t('contact.form.phone.label', 'Phone Number (Optional)')}</Label>
                   <Input
                     id="phone"
                     type="tel"
-                    placeholder="+1 (234) 567-890"
+                    placeholder={t('contact.form.phone.placeholder', '+1 (234) 567-890')}
                     className="mt-1.5"
                     value={formData.phone}
                     onChange={(event) => setFormData((prev) => ({ ...prev, phone: event.target.value }))}
@@ -221,10 +240,10 @@ export default function ContactPage() {
                 </div>
 
                 <div>
-                  <Label htmlFor="subject">Subject</Label>
+                  <Label htmlFor="subject">{t('contact.form.subject.label', 'Subject')}</Label>
                   <Input
                     id="subject"
-                    placeholder="How can we help?"
+                    placeholder={t('contact.form.subject.placeholder', 'How can we help?')}
                     className="mt-1.5"
                     value={formData.subject}
                     onChange={(event) => setFormData((prev) => ({ ...prev, subject: event.target.value }))}
@@ -233,10 +252,10 @@ export default function ContactPage() {
                 </div>
 
                 <div>
-                  <Label htmlFor="message">Message</Label>
+                  <Label htmlFor="message">{t('contact.form.message.label', 'Message')}</Label>
                   <Textarea
                     id="message"
-                    placeholder="Tell us more about your inquiry..."
+                    placeholder={t('contact.form.message.placeholder', 'Tell us more about your inquiry...')}
                     className="mt-1.5 min-h-[120px]"
                     value={formData.message}
                     onChange={(event) => setFormData((prev) => ({ ...prev, message: event.target.value }))}
@@ -248,11 +267,11 @@ export default function ContactPage() {
                   {isSubmitting ? (
                     <span className="flex items-center gap-2">
                       <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                      Sending...
+                      {t('contact.form.sending', 'Sending...')}
                     </span>
                   ) : (
                     <>
-                      Send Message
+                      {t('contact.form.submit', 'Send Message')}
                       <Send className="w-4 h-4" />
                     </>
                   )}
@@ -270,7 +289,7 @@ export default function ContactPage() {
                 <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
                   <HelpCircle className="w-5 h-5 text-accent-foreground" />
                 </div>
-                <h2 className="text-xl font-semibold">Frequently Asked Questions</h2>
+                <h2 className="text-xl font-semibold">{t('contact.faq.title', 'Frequently Asked Questions')}</h2>
               </div>
 
               <div className="space-y-4">
@@ -287,10 +306,10 @@ export default function ContactPage() {
 
               <div className="mt-8 p-6 rounded-2xl bg-muted/50 text-center">
                 <p className="text-muted-foreground mb-4">
-                  Didn't find what you're looking for?
+                  {t('contact.faq.notFound', "Didn't find what you're looking for?")}
                 </p>
                 <Button variant="outline">
-                  View All FAQs
+                  {t('contact.faq.viewAll', 'View All FAQs')}
                 </Button>
               </div>
             </motion.div>

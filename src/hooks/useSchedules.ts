@@ -12,12 +12,15 @@ import {
 } from '@/services/scheduleService';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { AppLanguage, useLanguage } from '@/contexts/LanguageContext';
+import { localeForLanguage } from '@/lib/locale';
 
 /**
  * Hook to fetch and manage doctor schedules
  */
 export const useSchedules = (doctorId: string | undefined) => {
   const queryClient = useQueryClient();
+  const { t, language } = useLanguage();
 
   // Real-time subscription for schedule changes
   useEffect(() => {
@@ -71,15 +74,15 @@ export const useSchedules = (doctorId: string | undefined) => {
       // Also invalidate available-slots for patients to see updated availability
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
-        title: 'Success',
-        description: `Schedule updated for ${getDayName(data.day_of_week)}`,
+        title: t('common.success', 'Success'),
+        description: t('scheduleEditor.toast.updatedForDay', 'Schedule updated for {day}').replace('{day}', getDayName(data.day_of_week, language)),
       });
     },
     onError: (error) => {
       console.error('Error updating schedule:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to update schedule',
+        title: t('common.error', 'Error'),
+        description: t('scheduleEditor.toast.failedUpdate', 'Failed to update schedule'),
         variant: 'destructive',
       });
     },
@@ -95,15 +98,15 @@ export const useSchedules = (doctorId: string | undefined) => {
       // Also invalidate available-slots for patients to see updated availability
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
-        title: 'Success',
-        description: `Schedule removed`,
+        title: t('common.success', 'Success'),
+        description: t('scheduleEditor.toast.removed', 'Schedule removed'),
       });
     },
     onError: (error) => {
       console.error('Error deleting schedule:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to delete schedule',
+        title: t('common.error', 'Error'),
+        description: t('scheduleEditor.toast.failedRemove', 'Failed to delete schedule'),
         variant: 'destructive',
       });
     },
@@ -123,16 +126,18 @@ export const useSchedules = (doctorId: string | undefined) => {
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       
       toast({
-        title: 'Success',
-        description: `${getDayName(dayOfWeek)} marked as ${isAvailable ? 'available' : 'unavailable'}`,
+        title: t('common.success', 'Success'),
+        description: t('scheduleEditor.toast.availabilityMarked', '{day} marked as {status}')
+          .replace('{day}', getDayName(dayOfWeek, language))
+          .replace('{status}', isAvailable ? t('scheduleEditor.toast.available', 'available') : t('scheduleEditor.toast.unavailable', 'unavailable')),
       });
     },
     onError: (error) => {
       console.error('Error toggling availability:', error);
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       toast({
-        title: 'Error',
-        description: `Failed to update availability: ${errorMsg}`,
+        title: t('common.error', 'Error'),
+        description: `${t('scheduleEditor.toast.failedAvailabilityPrefix', 'Failed to update availability')}: ${errorMsg}`,
         variant: 'destructive',
       });
     },
@@ -147,15 +152,15 @@ export const useSchedules = (doctorId: string | undefined) => {
       // Also invalidate available-slots for patients to see updated availability
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
-        title: 'Success',
-        description: 'Default schedule created (Mon-Fri, 9 AM - 5 PM)',
+        title: t('common.success', 'Success'),
+        description: t('scheduleEditor.toast.defaultCreated', 'Default schedule created (Mon-Fri, 9 AM - 5 PM)'),
       });
     },
     onError: (error) => {
       console.error('Error creating default schedule:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to create default schedule',
+        title: t('common.error', 'Error'),
+        description: t('scheduleEditor.toast.failedDefaultCreate', 'Failed to create default schedule'),
         variant: 'destructive',
       });
     },
@@ -183,7 +188,8 @@ export const useSchedules = (doctorId: string | undefined) => {
 };
 
 // Helper function to get day name
-const getDayName = (dayOfWeek: number): string => {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return days[dayOfWeek] || 'Unknown';
+const getDayName = (dayOfWeek: number, language: AppLanguage): string => {
+  const safeDay = Number.isInteger(dayOfWeek) ? Math.min(Math.max(dayOfWeek, 0), 6) : 0;
+  const utcDate = new Date(Date.UTC(2023, 0, 1 + safeDay));
+  return new Intl.DateTimeFormat(localeForLanguage(language), { weekday: 'long' }).format(utcDate);
 };

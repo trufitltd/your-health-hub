@@ -3,49 +3,59 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Calendar, Video, Shield, Clock, Star, Users, Heart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useLocaleFormatter } from '@/lib/locale';
 import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
 import heroDoctor3 from '@/assets/myedoctor_hero2.png';
 
-
-const features = [
-  {
-    icon: Video,
-    title: 'Video Consultations',
-    description: 'Face-to-face consultations with certified doctors from anywhere',
-  },
-  {
-    icon: Calendar,
-    title: 'Easy Booking',
-    description: 'Book appointments with specialists in just a few clicks',
-  },
-  {
-    icon: Shield,
-    title: 'Secure & Private',
-    description: 'Your health data is protected with enterprise-grade security',
-  },
-  {
-    icon: Clock,
-    title: '24/7 Availability',
-    description: 'Access healthcare services anytime, anywhere you need',
-  },
-];
-
-const stats = [
-  { value: '50+', label: 'Certified Doctors' },
-  { value: '1000+', label: 'Happy Patients' },
-  { value: '15+', label: 'Specialties' },
-  { value: '99%', label: 'Satisfaction Rate' },
-];
-
-const specialties = [
-  { name: 'General Medicine', icon: Heart, color: 'bg-primary' },
-  { name: 'Cardiology', icon: Heart, color: 'bg-accent' },
-  { name: 'Dermatology', icon: Users, color: 'bg-success' },
-  { name: 'Pediatrics', icon: Users, color: 'bg-warning' },
-];
-
 const Index = () => {
+  const { t } = useLanguage();
+  const { formatNumber } = useLocaleFormatter();
+  const features = [
+    {
+      icon: Video,
+      title: t('landing.features.video.title', 'Video Consultations'),
+      description: t('landing.features.video.description', 'Face-to-face consultations with certified doctors from anywhere'),
+    },
+    {
+      icon: Calendar,
+      title: t('landing.features.booking.title', 'Easy Booking'),
+      description: t('landing.features.booking.description', 'Book appointments with specialists in just a few clicks'),
+    },
+    {
+      icon: Shield,
+      title: t('landing.features.secure.title', 'Secure & Private'),
+      description: t('landing.features.secure.description', 'Your health data is protected with enterprise-grade security'),
+    },
+    {
+      icon: Clock,
+      title: t('landing.features.availability.title', '24/7 Availability'),
+      description: t('landing.features.availability.description', 'Access healthcare services anytime, anywhere you need'),
+    },
+  ];
+
+  const stats = [
+    { value: `${formatNumber(50)}+`, label: t('landing.stats.certifiedDoctors', 'Certified Doctors') },
+    { value: `${formatNumber(1000)}+`, label: t('landing.stats.happyPatients', 'Happy Patients') },
+    { value: `${formatNumber(15)}+`, label: t('landing.stats.specialties', 'Specialties') },
+    { value: `${formatNumber(99)}%`, label: t('landing.stats.satisfactionRate', 'Satisfaction Rate') },
+  ];
+
+  const specialties = [
+    { key: 'General Medicine', name: t('landing.specialties.generalMedicine', 'General Medicine'), icon: Heart, color: 'bg-primary' },
+    { key: 'Cardiology', name: t('landing.specialties.cardiology', 'Cardiology'), icon: Heart, color: 'bg-accent' },
+    { key: 'Dermatology', name: t('landing.specialties.dermatology', 'Dermatology'), icon: Users, color: 'bg-success' },
+    { key: 'Pediatrics', name: t('landing.specialties.pediatrics', 'Pediatrics'), icon: Users, color: 'bg-warning' },
+  ];
+  const trustedBadgeText = (() => {
+    const template = t('landing.badgeTrusted', 'Trusted by 1000+ patients');
+    if (template.includes('{count}')) {
+      return template.replace('{count}', formatNumber(1000));
+    }
+    return template.replace(/1,?000/g, formatNumber(1000));
+  })();
+
   return (
     <Layout>
       {/* Hero Section */}
@@ -66,25 +76,28 @@ const Index = () => {
             >
               <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-light text-primary text-sm font-medium mb-6">
                 <Star className="w-4 h-4 fill-primary" />
-                Trusted by 1000+ patients
+                {trustedBadgeText}
               </span>
               <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6">
-                -Your Doctor,{' '}
-                <span className="text-gradient">Anytime, Anywhere</span>
+                {t('landing.heroTitlePrefix', 'Your Doctor,')}{' '}
+                <span className="text-gradient">{t('landing.heroTitleHighlight', 'Anytime, Anywhere')}</span>
               </h1>
               <p className="text-lg text-muted-foreground mb-8 max-w-xl mx-auto lg:mx-0">
-                Connect with certified doctors and specialists instantly. Get expert medical consultations through secure video calls, chat, and more — all from the comfort of your home.
+                {t(
+                  'landing.heroDescription',
+                  'Connect with certified doctors and specialists instantly. Get expert medical consultations through secure video calls, chat, and more — all from the comfort of your home.',
+                )}
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
                 <Link to="/booking">
                   <Button variant="hero" size="xl" className="w-full sm:w-auto">
-                    Book Consultation
+                    {t('landing.ctaBookConsultation', 'Book Consultation')}
                     <ArrowRight className="w-5 h-5" />
                   </Button>
                 </Link>
                 <Link to="/services">
                   <Button variant="outline" size="xl" className="w-full sm:w-auto">
-                    Explore Services
+                    {t('landing.ctaExploreServices', 'Explore Services')}
                   </Button>
                 </Link>
               </div>
@@ -100,7 +113,7 @@ const Index = () => {
               <div className="relative rounded-3xl overflow-hidden shadow-2xl">
                 <img
                   src={heroDoctor3}
-                  alt="Doctor using tablet for telemedicine consultation"
+                  alt={t('landing.heroImageAlt', 'Doctor using tablet for telemedicine consultation')}
                   className="w-full h-auto object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-foreground/20 to-transparent" />
@@ -118,8 +131,8 @@ const Index = () => {
                     <Video className="w-6 h-6 text-primary-foreground" />
                   </div>
                   <div>
-                    <p className="font-semibold text-sm">Video Call</p>
-                    <p className="text-xs text-muted-foreground">HD Quality</p>
+                    <p className="font-semibold text-sm">{t('landing.floatCard.video.title', 'Video Call')}</p>
+                    <p className="text-xs text-muted-foreground">{t('landing.floatCard.video.subtitle', 'HD Quality')}</p>
                   </div>
                 </div>
               </motion.div>
@@ -135,8 +148,8 @@ const Index = () => {
                     <Shield className="w-6 h-6 text-success-foreground" />
                   </div>
                   <div>
-                    <p className="font-semibold text-sm">100% Secure</p>
-                    <p className="text-xs text-muted-foreground">End-to-end encrypted</p>
+                    <p className="font-semibold text-sm">{t('landing.floatCard.secure.title', '100% Secure')}</p>
+                    <p className="text-xs text-muted-foreground">{t('landing.floatCard.secure.subtitle', 'End-to-end encrypted')}</p>
                   </div>
                 </div>
               </motion.div>
@@ -175,12 +188,15 @@ const Index = () => {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">Why Choose Us</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">{t('landing.whyChooseUs', 'Why Choose Us')}</span>
             <h2 className="text-3xl md:text-4xl font-bold mt-3 mb-4">
-              Healthcare Made Simple
+              {t('landing.healthcareMadeSimple', 'Healthcare Made Simple')}
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Experience modern healthcare with our comprehensive telemedicine platform designed for your convenience.
+              {t(
+                'landing.healthcareMadeSimpleDescription',
+                'Experience modern healthcare with our comprehensive telemedicine platform designed for your convenience.',
+              )}
             </p>
           </motion.div>
 
@@ -214,33 +230,36 @@ const Index = () => {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">Specialties</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">{t('landing.specialties.title', 'Specialties')}</span>
             <h2 className="text-3xl md:text-4xl font-bold mt-3 mb-4">
-              Find Your Specialist
+              {t('landing.findYourSpecialist', 'Find Your Specialist')}
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Browse our wide range of medical specialties and book with experts in their field.
+              {t(
+                'landing.findYourSpecialistDescription',
+                'Browse our wide range of medical specialties and book with experts in their field.',
+              )}
             </p>
           </motion.div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {specialties.map((specialty, index) => (
               <motion.div
-                key={specialty.name}
+                key={specialty.key}
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.5, delay: index * 0.1 }}
               >
                 <Link
-                  to={`/specialists?specialty=${specialty.name}`}
+                  to={`/specialists?specialty=${specialty.key}`}
                   className="block p-6 rounded-2xl bg-card border border-border hover:shadow-lg hover:border-primary/20 transition-all duration-300 group"
                 >
                   <div className={`w-12 h-12 rounded-xl ${specialty.color} flex items-center justify-center mb-4`}>
                     <specialty.icon className="w-6 h-6 text-primary-foreground" />
                   </div>
                   <h3 className="font-semibold mb-1 group-hover:text-primary transition-colors">{specialty.name}</h3>
-                  <p className="text-sm text-muted-foreground">View specialists →</p>
+                  <p className="text-sm text-muted-foreground">{t('landing.viewSpecialists', 'View specialists')} →</p>
                 </Link>
               </motion.div>
             ))}
@@ -249,7 +268,7 @@ const Index = () => {
           <div className="text-center mt-12">
             <Link to="/specialists">
               <Button variant="outline" size="lg">
-                View All Specialties
+                {t('landing.viewAllSpecialties', 'View All Specialties')}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </Link>
@@ -272,20 +291,23 @@ const Index = () => {
             </div>
             <div className="relative z-10">
               <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-primary-foreground mb-6">
-                Ready to Start Your Health Journey?
+                {t('landing.readyTitle', 'Ready to Start Your Health Journey?')}
               </h2>
               <p className="text-primary-foreground/80 text-lg mb-8 max-w-2xl mx-auto">
-                Join thousands of patients who trust MyEdoctor for their healthcare needs. Book your first consultation today.
+                {t(
+                  'landing.readyDescription',
+                  'Join thousands of patients who trust MyEdoctor for their healthcare needs. Book your first consultation today.',
+                )}
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link to="/auth?mode=register">
                   <Button variant="secondary" size="xl" className="w-full sm:w-auto">
-                    Create Free Account
+                    {t('landing.createFreeAccount', 'Create Free Account')}
                   </Button>
                 </Link>
                 <Link to="/contact">
                   <Button variant="glass" size="xl" className="w-full sm:w-auto border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10">
-                    Contact Us
+                    {t('landing.contactUs', 'Contact Us')}
                   </Button>
                 </Link>
               </div>

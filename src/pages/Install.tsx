@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
-import { Check, Download, Globe, Laptop, Share2, Smartphone, Tablet } from "lucide-react";
+import { Check, Download, Globe, Laptop, Smartphone, Tablet } from "lucide-react";
 import { usePwaInstall } from "@/hooks/usePwaInstall";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function InstallPage() {
   const { isInstalled, canInstall, promptInstall } = usePwaInstall();
+  const { t } = useLanguage();
   const [installFeedback, setInstallFeedback] = useState("");
 
   const ua = navigator.userAgent;
@@ -19,21 +21,27 @@ export default function InstallPage() {
 
   useEffect(() => {
     if (isInstalled) {
-      setInstallFeedback("MyEdoctor is already installed on this device.");
+      setInstallFeedback(t("install.feedback.alreadyInstalled", "MyEdoctor is already installed on this device."));
     }
-  }, [isInstalled]);
+  }, [isInstalled, t]);
 
   const handleInstall = async () => {
     if (isIOS && !canInstall) {
       setInstallFeedback(
-        "On iPhone/iPad, direct install popups are not supported by Apple. Use Safari Share -> Add to Home Screen."
+        t(
+          "install.feedback.iosNoPrompt",
+          "On iPhone/iPad, direct install popups are not supported by Apple. Use Safari Share -> Add to Home Screen."
+        )
       );
       return;
     }
 
     if (isInAppBrowser) {
       setInstallFeedback(
-        "This in-app browser blocks app installation. Open this page in Safari or Chrome, then install."
+        t(
+          "install.feedback.inAppBrowser",
+          "This in-app browser blocks app installation. Open this page in Safari or Chrome, then install."
+        )
       );
       return;
     }
@@ -42,72 +50,78 @@ export default function InstallPage() {
     if (result === "unavailable") {
       if (isAndroid) {
         setInstallFeedback(
-          "Direct install is not available in this browser session. Open browser menu -> Install app / Add to Home screen."
+          t(
+            "install.feedback.androidUnavailable",
+            "Direct install is not available in this browser session. Open browser menu -> Install app / Add to Home screen."
+          )
         );
         return;
       }
       setInstallFeedback(
-        "Install prompt is not available yet. Use your browser menu and choose Install App / Add to Home Screen."
+        t(
+          "install.feedback.unavailable",
+          "Install prompt is not available yet. Use your browser menu and choose Install App / Add to Home Screen."
+        )
       );
       return;
     }
     if (result === "accepted") {
-      setInstallFeedback("Install accepted. MyEdoctor will appear on your home screen.");
+      setInstallFeedback(t("install.feedback.accepted", "Install accepted. MyEdoctor will appear on your home screen."));
       return;
     }
     if (result === "dismissed") {
-      setInstallFeedback("Install was dismissed. You can install later from this page.");
+      setInstallFeedback(t("install.feedback.dismissed", "Install was dismissed. You can install later from this page."));
       return;
     }
-    setInstallFeedback("MyEdoctor is already installed on this device.");
+    setInstallFeedback(t("install.feedback.alreadyInstalled", "MyEdoctor is already installed on this device."));
   };
 
   const installHelpTitle = useMemo(() => {
-    if (isIOS) return "Install on iPhone or iPad";
-    if (isAndroid) return "Install on Android";
-    if (isDesktop) return "Install on Desktop";
-    return "Install Instructions";
-  }, [isAndroid, isDesktop, isIOS]);
+    if (isIOS) return t("install.help.title.ios", "Install on iPhone or iPad");
+    if (isAndroid) return t("install.help.title.android", "Install on Android");
+    if (isDesktop) return t("install.help.title.desktop", "Install on Desktop");
+    return t("install.help.title.generic", "Install Instructions");
+  }, [isAndroid, isDesktop, isIOS, t]);
 
   const installSteps = useMemo(() => {
     if (isIOS) {
       return [
-        "Open this page in Safari.",
-        "Tap the Share icon.",
-        "Select Add to Home Screen, then tap Add.",
+        t("install.help.ios.step1", "Open this page in Safari."),
+        t("install.help.ios.step2", "Tap the Share icon."),
+        t("install.help.ios.step3", "Select Add to Home Screen, then tap Add."),
       ];
     }
 
     if (isAndroid) {
       if (canInstall) {
         return [
-          "Tap Install App Now below.",
-          "Accept the browser prompt.",
-          "Open MyEdoctor from your home screen.",
+          t("install.help.androidPrompt.step1", "Tap Install App Now below."),
+          t("install.help.androidPrompt.step2", "Accept the browser prompt."),
+          t("install.help.androidPrompt.step3", "Open MyEdoctor from your home screen."),
         ];
       }
 
       return [
-        "Open browser menu (three dots).",
-        "Tap Install app or Add to Home screen.",
-        "Confirm install and open from your home screen.",
+        t("install.help.androidManual.step1", "Open browser menu (three dots)."),
+        t("install.help.androidManual.step2", "Tap Install app or Add to Home screen."),
+        t("install.help.androidManual.step3", "Confirm install and open from your home screen."),
       ];
     }
 
     return [
-      "Use Chrome or Edge for best PWA support.",
-      "Click the install icon in the address bar or browser menu.",
-      "Launch MyEdoctor as a desktop app from your apps list.",
+      t("install.help.desktop.step1", "Use Chrome or Edge for best PWA support."),
+      t("install.help.desktop.step2", "Click the install icon in the address bar or browser menu."),
+      t("install.help.desktop.step3", "Launch MyEdoctor as a desktop app from your apps list."),
     ];
-  }, [canInstall, isAndroid, isIOS]);
+  }, [canInstall, isAndroid, isIOS, t]);
 
   const features = [
-    "Instant access from your home screen",
-    "Works offline with cached data",
-    "Push notifications for appointments",
-    "Faster loading times",
-    "Native app-like experience",
-    "No app store download required",
+    t("install.features.items.1", "Instant access from your home screen"),
+    t("install.features.items.2", "Works offline with cached data"),
+    t("install.features.items.3", "Push notifications for appointments"),
+    t("install.features.items.4", "Faster loading times"),
+    t("install.features.items.5", "Native app-like experience"),
+    t("install.features.items.6", "No app store download required"),
   ];
 
   return (
@@ -122,9 +136,9 @@ export default function InstallPage() {
             <div className="w-20 h-20 rounded-3xl gradient-primary flex items-center justify-center mx-auto mb-6 shadow-glow">
               <Smartphone className="w-10 h-10 text-primary-foreground" />
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold mb-4">Install MyEdoctor</h1>
+            <h1 className="text-3xl md:text-4xl font-bold mb-4">{t("install.title", "Install MyEdoctor")}</h1>
             <p className="text-muted-foreground">
-              Download our mobile app experience by installing this PWA. No app store required.
+              {t("install.subtitle", "Download our mobile app experience by installing this PWA. No app store required.")}
             </p>
           </motion.div>
 
@@ -132,14 +146,14 @@ export default function InstallPage() {
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="bg-success-light rounded-2xl p-8 text-center mb-8"
-            >
-              <Check className="w-16 h-16 text-success mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-success mb-2">Already Installed!</h2>
-              <p className="text-muted-foreground">
-                MyEdoctor is installed on your device. You can access it from your home screen.
-              </p>
-            </motion.div>
+            className="bg-success-light rounded-2xl p-8 text-center mb-8"
+          >
+            <Check className="w-16 h-16 text-success mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-success mb-2">{t("install.status.installedTitle", "Already Installed!")}</h2>
+            <p className="text-muted-foreground">
+              {t("install.status.installedBody", "MyEdoctor is installed on your device. You can access it from your home screen.")}
+            </p>
+          </motion.div>
           ) : (
             <>
               <motion.div
@@ -154,7 +168,9 @@ export default function InstallPage() {
                   className="w-full sm:w-auto"
                 >
                   <Download className="w-5 h-5" />
-                  {isIOS && !canInstall ? "Show iPhone Install Steps" : "Install App Now"}
+                  {isIOS && !canInstall
+                    ? t("install.cta.showIosSteps", "Show iPhone Install Steps")
+                    : t("install.cta.installNow", "Install App Now")}
                 </Button>
               </motion.div>
 
@@ -170,22 +186,17 @@ export default function InstallPage() {
                       <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0">
                         {index + 1}
                       </span>
-                      <span>
-                        {index === 1 && isIOS ? (
-                          <>
-                            Tap the <Share2 className="w-4 h-4 inline mx-1" /> Share icon.
-                          </>
-                        ) : (
-                          step
-                        )}
-                      </span>
+                      <span>{step}</span>
                     </li>
                   ))}
                 </ol>
 
                 {!canInstall && isChromeLike && !isIOS && (
                   <p className="text-xs text-muted-foreground">
-                    If install is not shown, refresh once and keep browsing this site for a few seconds.
+                    {t(
+                      "install.help.chromeHint",
+                      "If install is not shown, refresh once and keep browsing this site for a few seconds."
+                    )}
                   </p>
                 )}
               </motion.div>
@@ -210,15 +221,15 @@ export default function InstallPage() {
           >
             <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
               <Smartphone className="w-5 h-5 text-primary" />
-              Mobile install ready
+              {t("install.platform.mobile", "Mobile install ready")}
             </div>
             <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
               <Tablet className="w-5 h-5 text-primary" />
-              Tablet optimized
+              {t("install.platform.tablet", "Tablet optimized")}
             </div>
             <div className="border border-border rounded-xl p-4 bg-card flex items-center gap-3 text-sm">
               <Laptop className="w-5 h-5 text-primary" />
-              Desktop app mode
+              {t("install.platform.desktop", "Desktop app mode")}
             </div>
           </motion.div>
 
@@ -229,7 +240,7 @@ export default function InstallPage() {
             transition={{ delay: 0.2 }}
             className="bg-card rounded-2xl border border-border p-8"
           >
-            <h3 className="font-semibold mb-6">Why Install the App?</h3>
+            <h3 className="font-semibold mb-6">{t("install.features.title", "Why Install the App?")}</h3>
             <ul className="grid sm:grid-cols-2 gap-4">
               {features.map((feature) => (
                 <li key={feature} className="flex items-center gap-3 text-sm">
@@ -240,7 +251,7 @@ export default function InstallPage() {
             </ul>
             <div className="mt-6 text-xs text-muted-foreground flex items-center gap-2">
               <Globe className="w-4 h-4" />
-              App URL: {window.location.origin}/install
+              {t("install.appUrlLabel", "App URL:")} {window.location.origin}/install
             </div>
           </motion.div>
         </div>
