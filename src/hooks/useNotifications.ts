@@ -10,6 +10,30 @@ interface Notification {
   type: 'appointment' | 'message' | 'prescription';
 }
 
+type UpcomingAppointmentRow = {
+  id: string;
+  date: string;
+  time: string;
+  status: string;
+  doctor_id: string | null;
+};
+
+type DoctorNameRow = {
+  user_id: string;
+  full_name: string | null;
+};
+
+type RecentMessageRow = {
+  id: string;
+  content: string | null;
+  created_at: string;
+  sender_name: string | null;
+};
+
+type ConsultationSessionRow = {
+  id: string;
+};
+
 export function useNotifications() {
   const { user } = useAuth();
 
@@ -21,31 +45,65 @@ export function useNotifications() {
       const notifications: Notification[] = [];
 
       // Get upcoming appointments for reminders
-      const { data: upcomingAppointments } = await supabase
+      const { data: upcomingAppointments, error: upcomingError } = await supabase
         .from('appointments')
         .select(`
           id,
           date,
           time,
           status,
-          doctor_id,
-          doctor_registrations!inner(full_name)
+          doctor_id
         `)
         .eq('patient_id', user.id)
-        .in('status', ['confirmed', 'pending'])
+        .in('status', ['confirmed', 'pending_approval'])
         .gte('date', new Date().toISOString().split('T')[0])
         .order('date', { ascending: true })
         .limit(3);
 
-      if (upcomingAppointments) {
-        upcomingAppointments.forEach((apt: any) => {
+      if (upcomingError) {
+        console.warn('[useNotifications] Failed to load upcoming appointments:', upcomingError.message);
+      }
+
+      let doctorNameMap = new Map<string, string>();
+      const typedUpcomingAppointments = (upcomingAppointments || []) as UpcomingAppointmentRow[];
+      if (typedUpcomingAppointments.length > 0) {
+        const doctorIds = Array.from(
+          new Set(
+            typedUpcomingAppointments
+              .map((apt) => String(apt.doctor_id || '').trim())
+              .filter((id) => id.length > 0),
+          ),
+        );
+
+        if (doctorIds.length > 0) {
+          const { data: doctorRows, error: doctorError } = await supabase
+            .from('doctor_registrations')
+            .select('user_id, full_name')
+            .in('user_id', doctorIds);
+
+          if (doctorError) {
+            console.warn('[useNotifications] Failed to load doctor names:', doctorError.message);
+          } else {
+            doctorNameMap = new Map(
+              ((doctorRows || []) as DoctorNameRow[]).map((row) => [
+                String(row.user_id || '').trim(),
+                String(row.full_name || '').trim(),
+              ]),
+            );
+          }
+        }
+      }
+
+      if (typedUpcomingAppointments.length > 0) {
+        typedUpcomingAppointments.forEach((apt) => {
           const appointmentDate = new Date(`${apt.date}T${apt.time}`);
           const now = new Date();
           const timeDiff = appointmentDate.getTime() - now.getTime();
           const hoursDiff = timeDiff / (1000 * 60 * 60);
 
           if (hoursDiff <= 24 && hoursDiff > 0) {
-            const doctorName = apt.doctor_registrations?.full_name || 'Your Doctor';
+            const doctorId = String(apt.doctor_id || '').trim();
+            const doctorName = doctorNameMap.get(doctorId) || 'Your Doctor';
             let timeText = '';
             if (hoursDiff < 1) {
               timeText = 'Less than 1 hour';
@@ -67,25 +125,38 @@ export function useNotifications() {
       }
 
       // Get recent messages from doctors
-      const { data: recentMessages } = await supabase
-        .from('consultation_messages')
-        .select(`
-          id,
-          content,
-          created_at,
-          sender_name,
-          consultation_sessions!inner(
-            patient_id,
-            appointments(specialist_name, doctors(name))
-          )
-        `)
-        .eq('consultation_sessions.patient_id', user.id)
-        .eq('sender_role', 'doctor')
-        .order('created_at', { ascending: false })
-        .limit(3);
+      const { data: consultationSessions, error: sessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('patient_id', user.id);
+
+      if (sessionError) {
+        console.warn('[useNotifications] Failed to load consultation sessions:', sessionError.message);
+      }
+
+      const sessionIds = ((consultationSessions || []) as ConsultationSessionRow[])
+        .map((session) => String(session.id || '').trim())
+        .filter((id) => id.length > 0);
+
+      let recentMessages: RecentMessageRow[] = [];
+      if (sessionIds.length > 0) {
+        const { data: recentMessageRows, error: recentMessageError } = await supabase
+          .from('consultation_messages')
+          .select('id, content, created_at, sender_name')
+          .in('session_id', sessionIds)
+          .eq('sender_role', 'doctor')
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        if (recentMessageError) {
+          console.warn('[useNotifications] Failed to load recent messages:', recentMessageError.message);
+        } else {
+          recentMessages = (recentMessageRows || []) as RecentMessageRow[];
+        }
+      }
 
       if (recentMessages) {
-        recentMessages.forEach((msg: any) => {
+        recentMessages.forEach((msg) => {
           const createdAt = new Date(msg.created_at);
           const now = new Date();
           const timeDiff = now.getTime() - createdAt.getTime();

@@ -801,6 +801,11 @@ export function ConsultationRoom({
           console.log('[Lobby] 🎉 Doctor is admitting patient to call');
           setIsAdmitted(true);
           setIsCallStarted(true);
+          try {
+            await consultationService.markAppointmentInProgress(appointmentId);
+          } catch (statusError) {
+            console.warn('[ConsultationRoom] Failed to mark appointment in progress on admit:', statusError);
+          }
           // For patient, add local stream tracks if peer connection exists
           if (participantRole === 'patient') {
             console.log('[Patient Admission] Adding patient stream to peer connection');
@@ -1188,6 +1193,7 @@ export function ConsultationRoom({
       }
 
       await webrtcService.sendAdmitPatient();
+      await consultationService.markAppointmentInProgress(appointmentId);
       
       console.log('[Admission] Admit signal sent successfully');
       
