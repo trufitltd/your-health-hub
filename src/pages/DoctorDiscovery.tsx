@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import {
@@ -40,6 +41,12 @@ interface Doctor {
   is_active?: boolean;
   online_status?: 'online' | 'away' | 'offline';
 }
+
+type SlotStatusRow = {
+  id: string;
+  status: string | null;
+  slot_locked_until: string | null;
+};
 
 export default function DoctorDiscovery() {
   const { user } = useAuth();
@@ -106,7 +113,7 @@ export default function DoctorDiscovery() {
   const { data: availableDoctorIds = [] } = useQuery({
     queryKey: ['available-doctors', availabilityMode, availabilityFilters],
     queryFn: async () => {
-      let checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
+      const checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
 
       if (availabilityMode === 'now') {
         const { date, time } = getNowDatetime();
@@ -125,7 +132,7 @@ export default function DoctorDiscovery() {
         const endD = availabilityFilters.endDate || availabilityFilters.startDate;
         const endT = availabilityFilters.endTime || '23:59';
         
-        let current = new Date(availabilityFilters.startDate);
+        const current = new Date(availabilityFilters.startDate);
         const end = new Date(endD);
         
         while (current <= end) {
@@ -152,6 +159,7 @@ export default function DoctorDiscovery() {
 
       const activeDoctorIds = activeDoctors.map(d => d.id);
       const doctorSet = new Set<string>();
+      const nowMs = Date.now();
 
       // Check each doctor
       for (const doctorId of activeDoctorIds) {
@@ -178,14 +186,20 @@ export default function DoctorDiscovery() {
               // Check if this specific time slot exists in the schedule
               const { data: booking } = await supabase
                 .from('appointments')
-                .select('id')
+                .select('id, status, slot_locked_until')
                 .eq('doctor_id', doctorId)
                 .eq('date', date)
                 .eq('time', time)
-                .in('status', ['pending', 'confirmed'])
                 .limit(1);
 
-              if (!booking || booking.length === 0) {
+              const hasBlockingBooking = ((booking || []) as SlotStatusRow[]).some((row) => {
+                if (!isSlotBlockingAppointmentStatus(row.status)) return false;
+                if (!isPendingPaymentAppointmentStatus(row.status)) return true;
+                if (!row.slot_locked_until) return false;
+                return new Date(row.slot_locked_until).getTime() > nowMs;
+              });
+
+              if (!hasBlockingBooking) {
                 hasAvailableSlot = true;
                 break;
               }
