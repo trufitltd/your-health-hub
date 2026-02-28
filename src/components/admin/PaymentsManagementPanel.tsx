@@ -87,6 +87,12 @@ type DateFilterBounds = {
 };
 
 type WithdrawalActionStatus = 'processing' | 'completed' | 'rejected' | 'cancelled';
+type QuerySource = 'rpc' | 'fallback';
+type AdminQueryResult<T> = {
+  rows: T[];
+  source: QuerySource;
+  rpcError: string | null;
+};
 
 const isSuccessfulPaymentStatus = (status: string | null | undefined) => {
   const normalized = String(status || '').trim().toLowerCase();
@@ -132,6 +138,12 @@ const isWithinDateBounds = (value: string | null | undefined, bounds: DateFilter
   if (bounds.fromMs !== null && time < bounds.fromMs) return false;
   if (bounds.toMs !== null && time > bounds.toMs) return false;
   return true;
+};
+
+const getPaymentActivityTimestamp = (payment: PaymentRow) => {
+  // Successful payments can be initialized earlier and verified later.
+  // Use verified_at when present so date filters track the actual settlement time.
+  return payment.verified_at || payment.created_at;
 };
 
 const PaymentStatusBadge = ({ status }: { status: string | null | undefined }) => {
@@ -182,18 +194,27 @@ export const PaymentsManagementPanel = () => {
   const [withdrawalPayoutReference, setWithdrawalPayoutReference] = useState('');
   const [isUpdatingWithdrawal, setIsUpdatingWithdrawal] = useState(false);
 
-  const { data: payments = [], isLoading: paymentsLoading, refetch: refetchPayments } = useQuery({
+  const defaultQueryResult = useMemo<AdminQueryResult<never>>(
+    () => ({ rows: [], source: 'rpc', rpcError: null }),
+    [],
+  );
+
+  const { data: paymentsResult = defaultQueryResult as AdminQueryResult<PaymentRow>, isLoading: paymentsLoading, refetch: refetchPayments } = useQuery({
     queryKey: ['admin-payments-table'],
-    queryFn: async () => {
+    queryFn: async (): Promise<AdminQueryResult<PaymentRow>> => {
       const rpcResult = await supabase.rpc('admin_list_payments', {
         p_status: null,
         p_provider: null,
-        p_limit: 400,
+        p_limit: 1000,
         p_offset: 0,
       });
 
       if (!rpcResult.error) {
-        return (rpcResult.data || []) as PaymentRow[];
+        return {
+          rows: (rpcResult.data || []) as PaymentRow[],
+          source: 'rpc',
+          rpcError: null,
+        };
       }
 
       // Fallback for environments where admin RPC migration is not yet applied.
@@ -201,27 +222,35 @@ export const PaymentsManagementPanel = () => {
         .from('payments')
         .select('id, appointment_id, patient_id, amount, status, provider, payment_method, payment_reference, provider_reference, created_at, verified_at, metadata')
         .order('created_at', { ascending: false })
-        .limit(400);
+        .limit(1000);
 
       if (fallbackError) {
         throw fallbackError;
       }
 
-      return (fallbackData || []) as PaymentRow[];
+      return {
+        rows: (fallbackData || []) as PaymentRow[],
+        source: 'fallback',
+        rpcError: rpcResult.error.message || 'admin_list_payments RPC failed',
+      };
     },
     refetchInterval: 30000,
   });
 
-  const { data: walletTransactions = [], isLoading: walletLoading, refetch: refetchWallet } = useQuery({
+  const { data: walletResult = defaultQueryResult as AdminQueryResult<WalletTransactionRow>, isLoading: walletLoading, refetch: refetchWallet } = useQuery({
     queryKey: ['admin-patient-wallet-transactions'],
-    queryFn: async () => {
+    queryFn: async (): Promise<AdminQueryResult<WalletTransactionRow>> => {
       const rpcResult = await supabase.rpc('admin_list_patient_wallet_transactions', {
-        p_limit: 400,
+        p_limit: 1000,
         p_offset: 0,
       });
 
       if (!rpcResult.error) {
-        return (rpcResult.data || []) as WalletTransactionRow[];
+        return {
+          rows: (rpcResult.data || []) as WalletTransactionRow[],
+          source: 'rpc',
+          rpcError: null,
+        };
       }
 
       // Fallback for environments where admin RPC migration is not yet applied.
@@ -229,28 +258,36 @@ export const PaymentsManagementPanel = () => {
         .from('patient_wallet_transactions')
         .select('id, patient_id, appointment_id, amount, direction, transaction_type, status, narration, created_at')
         .order('created_at', { ascending: false })
-        .limit(400);
+        .limit(1000);
 
       if (fallbackError) {
         throw fallbackError;
       }
 
-      return (fallbackData || []) as WalletTransactionRow[];
+      return {
+        rows: (fallbackData || []) as WalletTransactionRow[],
+        source: 'fallback',
+        rpcError: rpcResult.error.message || 'admin_list_patient_wallet_transactions RPC failed',
+      };
     },
     refetchInterval: 30000,
   });
 
-  const { data: withdrawalRequests = [], isLoading: withdrawalsLoading, refetch: refetchWithdrawals } = useQuery({
+  const { data: withdrawalsResult = defaultQueryResult as AdminQueryResult<WithdrawalRequestRow>, isLoading: withdrawalsLoading, refetch: refetchWithdrawals } = useQuery({
     queryKey: ['admin-patient-wallet-withdrawal-requests'],
-    queryFn: async () => {
+    queryFn: async (): Promise<AdminQueryResult<WithdrawalRequestRow>> => {
       const rpcResult = await supabase.rpc('admin_list_patient_wallet_withdrawal_requests', {
         p_status: null,
-        p_limit: 400,
+        p_limit: 1000,
         p_offset: 0,
       });
 
       if (!rpcResult.error) {
-        return (rpcResult.data || []) as WithdrawalRequestRow[];
+        return {
+          rows: (rpcResult.data || []) as WithdrawalRequestRow[],
+          source: 'rpc',
+          rpcError: null,
+        };
       }
 
       // Fallback for environments where admin RPC migration is not yet applied.
@@ -258,28 +295,50 @@ export const PaymentsManagementPanel = () => {
         .from('patient_wallet_withdrawal_requests')
         .select('id, patient_id, amount, status, narration, created_at, updated_at')
         .order('created_at', { ascending: false })
-        .limit(400);
+        .limit(1000);
 
       if (fallbackError) {
         throw fallbackError;
       }
 
-      return ((fallbackData || []).map((row: any) => ({
-        ...row,
-        patient_name: null,
-        patient_email: null,
-        patient_phone: null,
-        sla_due_at: row.created_at ? new Date(new Date(row.created_at).getTime() + (48 * 60 * 60 * 1000)).toISOString() : new Date().toISOString(),
-        processed_by: null,
-        processed_at: null,
-        completed_at: null,
-        admin_note: null,
-        payout_reference: null,
-        wallet_reversed_at: null,
-      })) as WithdrawalRequestRow[]);
+      return {
+        rows: ((fallbackData || []).map((row: any) => ({
+          ...row,
+          patient_name: null,
+          patient_email: null,
+          patient_phone: null,
+          sla_due_at: row.created_at ? new Date(new Date(row.created_at).getTime() + (48 * 60 * 60 * 1000)).toISOString() : new Date().toISOString(),
+          processed_by: null,
+          processed_at: null,
+          completed_at: null,
+          admin_note: null,
+          payout_reference: null,
+          wallet_reversed_at: null,
+        })) as WithdrawalRequestRow[]),
+        source: 'fallback',
+        rpcError: rpcResult.error.message || 'admin_list_patient_wallet_withdrawal_requests RPC failed',
+      };
     },
     refetchInterval: 30000,
   });
+
+  const payments = paymentsResult.rows;
+  const walletTransactions = walletResult.rows;
+  const withdrawalRequests = withdrawalsResult.rows;
+
+  const fallbackWarnings = useMemo(() => {
+    const warnings: string[] = [];
+    if (paymentsResult.source === 'fallback') {
+      warnings.push(`Transactions fallback mode: ${paymentsResult.rpcError || 'admin_list_payments RPC unavailable'}`);
+    }
+    if (walletResult.source === 'fallback') {
+      warnings.push(`Wallet fallback mode: ${walletResult.rpcError || 'admin_list_patient_wallet_transactions RPC unavailable'}`);
+    }
+    if (withdrawalsResult.source === 'fallback') {
+      warnings.push(`Withdrawals fallback mode: ${withdrawalsResult.rpcError || 'admin_list_patient_wallet_withdrawal_requests RPC unavailable'}`);
+    }
+    return warnings;
+  }, [paymentsResult, walletResult, withdrawalsResult]);
 
   const activeDateBounds = useMemo<DateFilterBounds>(() => {
     if (dateFilterMode === 'all') {
@@ -321,7 +380,7 @@ export const PaymentsManagementPanel = () => {
   }, [dateFilterMode, dateRangeFrom, dateRangeTo, asAtDate]);
 
   const dateFilteredPayments = useMemo(
-    () => payments.filter((row) => isWithinDateBounds(row.created_at, activeDateBounds)),
+    () => payments.filter((row) => isWithinDateBounds(getPaymentActivityTimestamp(row), activeDateBounds)),
     [payments, activeDateBounds],
   );
 
@@ -826,6 +885,25 @@ export const PaymentsManagementPanel = () => {
         </CardContent>
       </Card>
 
+      {fallbackWarnings.length > 0 ? (
+        <Card className="border-warning/30 bg-warning/5">
+          <CardContent className="pt-4">
+            <div className="flex items-start gap-2 text-sm text-warning">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium">Admin RPC fallback detected</p>
+                {fallbackWarnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+                <p className="text-muted-foreground">
+                  Fallback queries are RLS-limited and can show incomplete rows. Apply the latest admin payments migrations, including 20260229013000_force_recreate_admin_payment_listing_rpcs.sql.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Financial KPIs</CardTitle>
@@ -926,11 +1004,25 @@ export const PaymentsManagementPanel = () => {
               ) : filteredPayments.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No transactions match the selected filters.</p>
               ) : (
-                <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Showing {filteredPayments.length} transaction{filteredPayments.length === 1 ? '' : 's'}.
+                  </p>
+                </div>
+              )}
+
+              {!paymentsLoading && filteredPayments.length > 0 ? (
+                <div className="space-y-3 pr-1">
                   {filteredPayments.map((payment) => {
                     const patient = payment.patient_id ? patientLookup.get(payment.patient_id) : null;
                     const metadataType = String(payment.metadata?.type || '').trim();
                     const provider = String(payment.provider || payment.payment_method || 'unknown').toLowerCase();
+                    const paymentMode = String(payment.metadata?.payment_mode || '').trim().toLowerCase();
+                    const totalUpgradeRaw = Number(payment.metadata?.total_upgrade_amount || 0);
+                    const walletAppliedRaw = Number(payment.metadata?.wallet_applied_amount || 0);
+                    const totalUpgradeAmount = Number.isFinite(totalUpgradeRaw) && totalUpgradeRaw > 0 ? totalUpgradeRaw : null;
+                    const walletAppliedAmount = Number.isFinite(walletAppliedRaw) && walletAppliedRaw > 0 ? walletAppliedRaw : 0;
+                    const paystackLegAmount = Number(payment.amount || 0);
                     return (
                       <div key={payment.id} className="rounded-lg border p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -938,9 +1030,18 @@ export const PaymentsManagementPanel = () => {
                             <PaymentStatusBadge status={payment.status} />
                             <Badge variant="outline">{provider}</Badge>
                             {metadataType ? <Badge variant="secondary">{metadataType}</Badge> : null}
+                            {paymentMode === 'hybrid' ? <Badge className="bg-primary/10 text-primary border-primary/20">hybrid</Badge> : null}
                           </div>
                           <p className="text-sm font-semibold">₦{Number(payment.amount || 0).toLocaleString()}</p>
                         </div>
+
+                        {paymentMode === 'hybrid' && provider === 'paystack' ? (
+                          <div className="mt-2 rounded-md border border-primary/20 bg-primary/5 p-2 text-xs text-primary">
+                            <span className="font-medium">Hybrid split:</span>{' '}
+                            Wallet ₦{walletAppliedAmount.toLocaleString()} + Paystack ₦{paystackLegAmount.toLocaleString()}
+                            {totalUpgradeAmount !== null ? ` = Total ₦${totalUpgradeAmount.toLocaleString()}` : ''}
+                          </div>
+                        ) : null}
 
                         <div className="mt-2 grid md:grid-cols-2 gap-2 text-xs text-muted-foreground">
                           <p>
@@ -966,12 +1067,16 @@ export const PaymentsManagementPanel = () => {
                           <p>
                             <span className="font-medium text-foreground">Verified:</span> {formatDateTime(payment.verified_at)}
                           </p>
+                          <p>
+                            <span className="font-medium text-foreground">Activity date:</span>{' '}
+                            {formatDateTime(getPaymentActivityTimestamp(payment))}
+                          </p>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
@@ -993,6 +1098,12 @@ export const PaymentsManagementPanel = () => {
               ) : filteredWalletTransactions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No wallet transactions found.</p>
               ) : (
+                <p className="text-xs text-muted-foreground">
+                  Showing {filteredWalletTransactions.length} wallet transaction{filteredWalletTransactions.length === 1 ? '' : 's'}.
+                </p>
+              )}
+
+              {!walletLoading && filteredWalletTransactions.length > 0 ? (
                 <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
                   {filteredWalletTransactions.map((tx) => {
                     const patient = patientLookup.get(tx.patient_id);
@@ -1042,7 +1153,7 @@ export const PaymentsManagementPanel = () => {
                     );
                   })}
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1076,6 +1187,12 @@ export const PaymentsManagementPanel = () => {
               ) : filteredWithdrawals.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No withdrawal requests match the selected status.</p>
               ) : (
+                <p className="text-xs text-muted-foreground">
+                  Showing {filteredWithdrawals.length} withdrawal request{filteredWithdrawals.length === 1 ? '' : 's'}.
+                </p>
+              )}
+
+              {!withdrawalsLoading && filteredWithdrawals.length > 0 ? (
                 <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
                   {filteredWithdrawals.map((request) => {
                     const dueTime = new Date(request.sla_due_at).getTime();
@@ -1169,7 +1286,7 @@ export const PaymentsManagementPanel = () => {
                     );
                   })}
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
