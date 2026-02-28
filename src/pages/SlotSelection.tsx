@@ -49,7 +49,7 @@ export default function SlotSelection() {
   const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -282,6 +282,12 @@ export default function SlotSelection() {
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const walletInsufficient = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
+  const walletAppliedForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.min(patientWalletBalance, displayedPrice)
+    : 0;
+  const paystackDueForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.max(displayedPrice - walletAppliedForHybrid, 0)
+    : 0;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
   const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
   const minCalendarDate = useMemo(() => {
@@ -313,7 +319,10 @@ export default function SlotSelection() {
       return;
     }
 
-    if (paymentMethod === 'paystack' && !paystackPublicKey) {
+    const paystackRequiredForSelection = paymentMethod === 'paystack'
+      || (paymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
+
+    if (paystackRequiredForSelection && !paystackPublicKey) {
       toast({
         title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
         description: t('slotSelection.toast.paymentGatewayNotConfigured', 'Payment gateway not configured. Please contact support.'),
@@ -344,15 +353,22 @@ export default function SlotSelection() {
       });
 
       setFinalPrice(booking.finalPrice);
+      const walletChargedAmount = Number(booking.walletChargedAmount || 0);
+      const paystackAmountDue = Number(
+        booking.paystackAmountDue
+        ?? (booking.paymentInitialization ? Number(booking.paymentInitialization.amountInKobo || 0) / 100 : 0),
+      );
 
-      if (booking.paidWithWallet || booking.paymentMethod === 'wallet') {
+      if (booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
         setIsConfirming(false);
         toast({
           title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
-          description: t(
-            'slotSelection.toast.walletBookingSuccessDescription',
-            'Your booking has been paid from wallet and is now pending doctor approval.',
-          ),
+          description: walletChargedAmount > 0
+            ? `Wallet charged ${formatCurrency(walletChargedAmount)}. Your booking is now pending doctor approval.`
+            : t(
+              'slotSelection.toast.walletBookingSuccessDescription',
+              'Your booking has been paid from wallet and is now pending doctor approval.',
+            ),
         });
         setTimeout(() => {
           navigate('/patient-portal?tab=appointments');
@@ -375,10 +391,12 @@ export default function SlotSelection() {
           setIsConfirming(false);
           toast({
             title: t('booking.paymentSuccessTitle', 'Payment successful'),
-            description: t(
-              'slotSelection.toast.appointmentPendingApproval',
-              'Payment successful. Your appointment is pending doctor approval.',
-            ),
+            description: walletChargedAmount > 0
+              ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
+              : t(
+                'slotSelection.toast.appointmentPendingApproval',
+                'Payment successful. Your appointment is pending doctor approval.',
+              ),
           });
 
           setTimeout(() => {
@@ -767,6 +785,17 @@ export default function SlotSelection() {
                               onChange={() => setPaymentMethod('wallet')}
                             />
                           </label>
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>
+                              {t('slotSelection.summary.hybrid', 'Wallet + Paystack (hybrid)')}
+                            </span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'hybrid'}
+                              onChange={() => setPaymentMethod('hybrid')}
+                            />
+                          </label>
                         </div>
                         {walletInsufficient && (
                           <p className="mt-2 text-xs text-destructive">
@@ -775,6 +804,16 @@ export default function SlotSelection() {
                               'Wallet balance is below this booking fee.',
                             )}
                           </p>
+                        )}
+                        {paymentMethod === 'hybrid' && displayedPrice !== null && (
+                          <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
+                            <p>
+                              <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid)}
+                            </p>
+                            <p>
+                              <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid)}
+                            </p>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -803,6 +842,10 @@ export default function SlotSelection() {
                   ? t('slotSelection.processing', 'Processing...')
                   : paymentMethod === 'wallet'
                   ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  : paymentMethod === 'hybrid'
+                  ? paystackDueForHybrid > 0
+                    ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
+                    : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
                   : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
                 <ChevronRight className="w-4 h-4" />
               </Button>
