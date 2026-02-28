@@ -319,6 +319,10 @@ const PatientPortal = () => {
   const { initializePayment } = usePaystackPayment();
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawNarration, setWithdrawNarration] = useState('');
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -1103,6 +1107,11 @@ const PatientPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
+  const withdrawalAmountValue = Number(withdrawAmount.replace(/,/g, '').trim());
+  const canSubmitWithdrawal = Number.isFinite(withdrawalAmountValue) &&
+    withdrawalAmountValue > 0 &&
+    withdrawalAmountValue <= patientWalletBalance &&
+    !isSubmittingWithdrawal;
 
   // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {
@@ -1611,6 +1620,51 @@ const PatientPortal = () => {
       toast({ title: 'Cancellation failed', description: message });
     } finally {
       setIsBooking(false);
+    }
+  };
+
+  const submitWalletWithdrawalRequest = async () => {
+    if (!user?.id) return;
+    const amount = Number(withdrawAmount.replace(/,/g, '').trim());
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter a withdrawal amount greater than zero.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (amount > patientWalletBalance) {
+      toast({
+        title: 'Insufficient wallet balance',
+        description: `Available wallet balance is ₦${patientWalletBalance.toLocaleString()}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmittingWithdrawal(true);
+    try {
+      const response = await PatientWalletService.requestWalletWithdrawal(amount, withdrawNarration || undefined);
+      toast({
+        title: 'Withdrawal request submitted',
+        description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet.`,
+      });
+      setWithdrawDialogOpen(false);
+      setWithdrawAmount('');
+      setWithdrawNarration('');
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user.id] });
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({
+        title: 'Withdrawal request failed',
+        description: message || 'Unable to submit wallet withdrawal request.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmittingWithdrawal(false);
     }
   };
 
@@ -2685,7 +2739,17 @@ const PatientPortal = () => {
                   <p className="text-sm font-medium">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
                   <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}</p>
                 </div>
-                <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setWithdrawDialogOpen(true)}
+                    disabled={patientWalletBalance <= 0}
+                  >
+                    {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
@@ -2890,6 +2954,72 @@ const PatientPortal = () => {
                     {isBooking
                       ? t('patientPortal.cancelling', 'Cancelling...')
                       : t('patientPortal.yesCancelAppointment', 'Yes, Cancel Appointment')}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={withdrawDialogOpen}
+              onOpenChange={(open) => {
+                setWithdrawDialogOpen(open);
+                if (!open) {
+                  setWithdrawAmount('');
+                  setWithdrawNarration('');
+                }
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}</DialogTitle>
+                  <DialogDescription>
+                    {t('patientPortal.wallet.withdrawalDescription', 'Submit a withdrawal request from your available wallet balance.')}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2">
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    {t('patientPortal.wallet.availableBalance', 'Available Balance')}: <span className="font-semibold">₦{patientWalletBalance.toLocaleString()}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.amountLabel', 'Amount (₦)')}</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.noteOptional', 'Note (optional)')}</label>
+                    <textarea
+                      className="w-full rounded-md border border-input bg-background p-2 text-sm"
+                      rows={3}
+                      value={withdrawNarration}
+                      onChange={(e) => setWithdrawNarration(e.target.value)}
+                      placeholder={t('patientPortal.wallet.notePlaceholder', 'Add payout account details or note for this request')}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t('patientPortal.wallet.withdrawalProcessingHint', 'Withdrawal requests are processed manually and may take some time.')}
+                  </p>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setWithdrawDialogOpen(false);
+                      setWithdrawAmount('');
+                      setWithdrawNarration('');
+                    }}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                  <Button onClick={submitWalletWithdrawalRequest} disabled={!canSubmitWithdrawal}>
+                    {isSubmittingWithdrawal
+                      ? t('common.submitting', 'Submitting...')
+                      : t('patientPortal.wallet.submitWithdrawalRequest', 'Submit Request')}
                   </Button>
                 </DialogFooter>
               </DialogContent>
