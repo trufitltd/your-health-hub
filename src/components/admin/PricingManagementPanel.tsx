@@ -522,140 +522,6 @@ export function PricingManagementPanel() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Pricing Rules</CardTitle>
-          <CardDescription>Base and modifier rules for doctor type, duration, tier, and consultation mode.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!currentProfileId && (
-            <p className="text-sm text-muted-foreground">Create and select a pricing profile to add rules.</p>
-          )}
-
-          <div className="grid md:grid-cols-6 gap-2">
-            <select
-              value={ruleForm.rule_type}
-              onChange={(event) => setRuleForm((prev) => ({ ...prev, rule_type: event.target.value as PricingRuleType }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="base">base</option>
-              <option value="modifier">modifier</option>
-            </select>
-
-            <select
-              value={ruleForm.condition_type}
-              onChange={(event) => setRuleForm((prev) => ({ ...prev, condition_type: event.target.value as PricingConditionType }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="doctor_type">doctor_type</option>
-              <option value="duration">duration</option>
-              <option value="tier">tier</option>
-              <option value="consultation_type">consultation_type</option>
-            </select>
-
-            <Input
-              value={ruleForm.condition_value}
-              onChange={(event) => setRuleForm((prev) => ({ ...prev, condition_value: event.target.value }))}
-              placeholder="Condition value"
-            />
-
-            <select
-              value={ruleForm.price_action}
-              onChange={(event) => setRuleForm((prev) => ({ ...prev, price_action: event.target.value as PricingAction }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="set">set</option>
-              <option value="add">add</option>
-              <option value="multiply">multiply</option>
-            </select>
-
-            <Input
-              type="number"
-              value={ruleForm.amount}
-              onChange={(event) => setRuleForm((prev) => ({ ...prev, amount: event.target.value }))}
-              placeholder="Amount"
-            />
-
-            <div className="flex gap-2">
-              <Input
-                type="number"
-                value={ruleForm.priority}
-                onChange={(event) => setRuleForm((prev) => ({ ...prev, priority: event.target.value }))}
-                placeholder="Priority"
-              />
-              <Button
-                onClick={() => upsertRuleMutation.mutate()}
-                disabled={upsertRuleMutation.isPending || !currentProfileId || !ruleForm.condition_value.trim()}
-              >
-                {editingRuleId ? 'Update' : 'Add'}
-              </Button>
-              {editingRuleId && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditingRuleId(null);
-                    setRuleForm(DEFAULT_RULE_FORM);
-                  }}
-                >
-                  Cancel
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {rules.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No pricing rules for this profile yet.</p>
-            ) : (
-              rules.map((rule: PricingRule) => (
-                <div key={rule.id} className="rounded-lg border p-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm">
-                    <span className="font-medium">[{rule.priority}]</span>{' '}
-                    <span>{rule.rule_type}</span>{' '}
-                    <span>{rule.condition_type}:{rule.condition_value}</span>{' '}
-                    <span>{rule.price_action} {rule.amount}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={rule.active ? 'default' : 'secondary'}>{rule.active ? 'Active' : 'Disabled'}</Badge>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setEditingRuleId(rule.id);
-                        setRuleForm({
-                          rule_type: rule.rule_type,
-                          condition_type: rule.condition_type,
-                          condition_value: rule.condition_value,
-                          price_action: rule.price_action,
-                          amount: String(rule.amount),
-                          priority: String(rule.priority),
-                        });
-                      }}
-                    >
-                      Edit
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => toggleRuleMutation.mutate(rule)}>
-                      {rule.active ? 'Disable' : 'Enable'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => {
-                        if (!window.confirm('Delete this pricing rule?')) return;
-                        deleteRuleMutation.mutate(rule.id);
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="grid lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
@@ -830,6 +696,140 @@ export function PricingManagementPanel() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Pricing Rules</CardTitle>
+          <CardDescription>Base and modifier rules for doctor type, duration, tier, and consultation mode.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!currentProfileId && (
+            <p className="text-sm text-muted-foreground">Create and select a pricing profile to add rules.</p>
+          )}
+
+          <div className="grid md:grid-cols-6 gap-2">
+            <select
+              value={ruleForm.rule_type}
+              onChange={(event) => setRuleForm((prev) => ({ ...prev, rule_type: event.target.value as PricingRuleType }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="base">base</option>
+              <option value="modifier">modifier</option>
+            </select>
+
+            <select
+              value={ruleForm.condition_type}
+              onChange={(event) => setRuleForm((prev) => ({ ...prev, condition_type: event.target.value as PricingConditionType }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="doctor_type">doctor_type</option>
+              <option value="duration">duration</option>
+              <option value="tier">tier</option>
+              <option value="consultation_type">consultation_type</option>
+            </select>
+
+            <Input
+              value={ruleForm.condition_value}
+              onChange={(event) => setRuleForm((prev) => ({ ...prev, condition_value: event.target.value }))}
+              placeholder="Condition value"
+            />
+
+            <select
+              value={ruleForm.price_action}
+              onChange={(event) => setRuleForm((prev) => ({ ...prev, price_action: event.target.value as PricingAction }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="set">set</option>
+              <option value="add">add</option>
+              <option value="multiply">multiply</option>
+            </select>
+
+            <Input
+              type="number"
+              value={ruleForm.amount}
+              onChange={(event) => setRuleForm((prev) => ({ ...prev, amount: event.target.value }))}
+              placeholder="Amount"
+            />
+
+            <div className="flex gap-2">
+              <Input
+                type="number"
+                value={ruleForm.priority}
+                onChange={(event) => setRuleForm((prev) => ({ ...prev, priority: event.target.value }))}
+                placeholder="Priority"
+              />
+              <Button
+                onClick={() => upsertRuleMutation.mutate()}
+                disabled={upsertRuleMutation.isPending || !currentProfileId || !ruleForm.condition_value.trim()}
+              >
+                {editingRuleId ? 'Update' : 'Add'}
+              </Button>
+              {editingRuleId && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditingRuleId(null);
+                    setRuleForm(DEFAULT_RULE_FORM);
+                  }}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {rules.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No pricing rules for this profile yet.</p>
+            ) : (
+              rules.map((rule: PricingRule) => (
+                <div key={rule.id} className="rounded-lg border p-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm">
+                    <span className="font-medium">[{rule.priority}]</span>{' '}
+                    <span>{rule.rule_type}</span>{' '}
+                    <span>{rule.condition_type}:{rule.condition_value}</span>{' '}
+                    <span>{rule.price_action} {rule.amount}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={rule.active ? 'default' : 'secondary'}>{rule.active ? 'Active' : 'Disabled'}</Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingRuleId(rule.id);
+                        setRuleForm({
+                          rule_type: rule.rule_type,
+                          condition_type: rule.condition_type,
+                          condition_value: rule.condition_value,
+                          price_action: rule.price_action,
+                          amount: String(rule.amount),
+                          priority: String(rule.priority),
+                        });
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => toggleRuleMutation.mutate(rule)}>
+                      {rule.active ? 'Disable' : 'Enable'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        if (!window.confirm('Delete this pricing rule?')) return;
+                        deleteRuleMutation.mutate(rule.id);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

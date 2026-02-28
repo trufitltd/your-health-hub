@@ -1105,7 +1105,7 @@ const PatientPortal = () => {
   const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
-  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
@@ -1262,6 +1262,7 @@ const PatientPortal = () => {
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
     setRescheduleDoctorId(null);
+    setReschedulePaymentMethod('paystack');
     setBookingOpen(false);
     setSlotSelectionOpen(false);
   };
@@ -1336,6 +1337,18 @@ const PatientPortal = () => {
       return Math.max(0, proposedRescheduleFinalPrice - alreadyPaid);
     },
     [proposedRescheduleFinalPrice, reschedulePaidAmount],
+  );
+  const rescheduleHybridWalletApplied = useMemo(
+    () => (rescheduleUpgradeAmount > 0 ? Math.min(patientWalletBalance, rescheduleUpgradeAmount) : 0),
+    [patientWalletBalance, rescheduleUpgradeAmount],
+  );
+  const rescheduleHybridPaystackDue = useMemo(
+    () => Math.max(rescheduleUpgradeAmount - rescheduleHybridWalletApplied, 0),
+    [rescheduleUpgradeAmount, rescheduleHybridWalletApplied],
+  );
+  const effectiveReschedulePaymentMethod = useMemo<'paystack' | 'wallet' | 'hybrid'>(
+    () => (reschedulePaymentMethod === 'hybrid' && rescheduleHybridPaystackDue <= 0 ? 'wallet' : reschedulePaymentMethod),
+    [reschedulePaymentMethod, rescheduleHybridPaystackDue],
   );
 
   const openBooking = () => {
@@ -1428,6 +1441,7 @@ const PatientPortal = () => {
     setCurrentRescheduleConsultationType(currentConsultType);
     setRescheduleConsultationType(currentConsultType);
     setRescheduleRequestNote('');
+    setReschedulePaymentMethod('paystack');
     setBookingOpen(false);
     setSlotSelectionOpen(true);
   };
@@ -1476,7 +1490,7 @@ const PatientPortal = () => {
     }
 
     if (rescheduleUpgradeAmount > 0) {
-      if (reschedulePaymentMethod === 'paystack') {
+      if (effectiveReschedulePaymentMethod === 'paystack' || effectiveReschedulePaymentMethod === 'hybrid') {
         if (!paystackPublicKey) {
           toast({
             title: 'Payment not configured',
@@ -1496,11 +1510,21 @@ const PatientPortal = () => {
               proposedTime: proposedTimeForPayment,
               proposedDuration: rescheduleDurationMinutes,
               proposedConsultationType: rescheduleConsultationType,
+              paymentMethod: effectiveReschedulePaymentMethod,
             },
           });
           if (error) throw error;
           const paymentInit = data as any;
+          const walletChargedAmount = Number(paymentInit?.walletChargedAmount || 0);
+          const paystackAmountDue = Number(
+            paymentInit?.paystackAmountDue
+            ?? (paymentInit?.amountInKobo ? Number(paymentInit.amountInKobo) / 100 : 0),
+          );
+
           if (!paymentInit?.reference) throw new Error('Payment initialization failed');
+          if (!Number.isFinite(paystackAmountDue) || paystackAmountDue <= 0) {
+            throw new Error('Invalid Paystack amount for reschedule payment');
+          }
 
           setIsBooking(true);
           // Close the confirmation dialog before opening Paystack.
@@ -1519,26 +1543,48 @@ const PatientPortal = () => {
               const paidReference = String(response?.reference || paymentInit.reference || '').trim();
 
               try {
-                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
-                  body: { reference: paidReference },
-                });
+                let confirmResult: { error?: string; alreadyFinalized?: boolean } | null = null;
+                let lastConfirmError: any = null;
 
-                if (confirmError) throw confirmError;
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                  try {
+                    const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
+                      body: { reference: paidReference },
+                    });
+                    if (confirmError) throw confirmError;
 
-                const confirmResult = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
-                if (confirmResult.error) throw new Error(confirmResult.error);
+                    const parsed = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
+                    if (parsed.error) throw new Error(parsed.error);
+                    confirmResult = parsed;
+                    lastConfirmError = null;
+                    break;
+                  } catch (attemptError: any) {
+                    lastConfirmError = attemptError;
+                    if (attempt < 2) {
+                      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                    }
+                  }
+                }
+
+                if (!confirmResult) {
+                  throw lastConfirmError || new Error('Reschedule payment confirmation failed');
+                }
 
                 toast({
                   title: 'Payment successful',
                   description: confirmResult.alreadyFinalized
                     ? 'Your paid reschedule request is already pending doctor approval.'
+                    : walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your reschedule request is pending doctor approval.`
                     : 'Your reschedule request has been submitted and is pending doctor approval.',
                 });
               } catch (confirmErr: any) {
                 console.warn('[reschedule] client confirmation fallback failed:', confirmErr);
                 toast({
                   title: 'Payment successful',
-                  description: 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
+                  description: walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your request will appear under Pending Approval once webhook processing completes.`
+                    : 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
                 });
               } finally {
                 setIsBooking(false);
@@ -1566,7 +1612,7 @@ const PatientPortal = () => {
         return;
       }
       // if user chose wallet but has insufficient funds, block
-      if (reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
+      if (effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
         toast({
           title: 'Insufficient wallet balance',
           description: `You need ₦${rescheduleUpgradeAmount.toLocaleString()} in wallet for this upgrade.`,
@@ -2519,18 +2565,64 @@ const PatientPortal = () => {
       if (paymentInitError) throw paymentInitError;
       const paymentInit = paymentInitData as any;
 
+      let paymentCompleted = false;
       initializePayment({
         email: paymentInit?.email || user.email || '',
         amount: paymentInit?.amountInKobo,
         reference: paymentInit?.reference,
         publicKey: paystackPublicKey,
         metadata: paymentInit?.metadata,
-        onSuccess: () => {
-          toast({ title: 'Payment successful', description: 'Your appointment has been confirmed.' });
-          invalidateAppointments();
-          setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit?.reference || '').trim();
+
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: 'Payment successful',
+              description: confirmResult.alreadyProcessed
+                ? 'This payment was already processed and your appointment remains pending approval.'
+                : 'Your appointment has been confirmed.',
+            });
+          } catch (confirmErr: any) {
+            console.warn('[patient-portal] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: 'Payment successful',
+              description: 'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+            });
+          } finally {
+            invalidateAppointments();
+            setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+          }
         },
         onClose: () => {
+          if (paymentCompleted) return;
           toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
         },
       });
@@ -2954,12 +3046,29 @@ const PatientPortal = () => {
                                 />
                                 <span>{t('patientPortal.reschedule.useWallet', 'Use Wallet')} {patientWalletBalance < rescheduleUpgradeAmount ? t('patientPortal.reschedule.insufficientSuffix', '(insufficient)') : ''}</span>
                               </label>
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="hybrid"
+                                  checked={reschedulePaymentMethod === 'hybrid'}
+                                  onChange={() => setReschedulePaymentMethod('hybrid')}
+                                />
+                                <span>{t('patientPortal.reschedule.hybridSplit', 'Wallet + Paystack (split)')}</span>
+                              </label>
                             </div>
                           </div>
 
                           {patientWalletBalance < rescheduleUpgradeAmount && reschedulePaymentMethod === 'wallet' && (
                             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
                               {t('patientPortal.reschedule.walletInsufficientHint', 'Wallet balance insufficient. Please use Paystack or add funds to your wallet.')}
+                            </div>
+                          )}
+                          {reschedulePaymentMethod === 'hybrid' && (
+                            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary">
+                              {rescheduleHybridPaystackDue > 0
+                                ? `Wallet applies ₦${rescheduleHybridWalletApplied.toLocaleString()} and Paystack covers ₦${rescheduleHybridPaystackDue.toLocaleString()}.`
+                                : `Wallet covers the full upgrade amount of ₦${rescheduleUpgradeAmount.toLocaleString()}.`}
                             </div>
                           )}
                         </>
@@ -2998,12 +3107,14 @@ const PatientPortal = () => {
                   </Button>
                   <Button
                     onClick={rescheduleBooking}
-                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
+                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
                   >
                     {isBooking
                       ? t('common.submitting', 'Submitting...')
                       : rescheduleUpgradeAmount > 0
-                      ? t('patientPortal.reschedule.proceedToPayment', 'Proceed to Payment')
+                      ? (effectiveReschedulePaymentMethod === 'wallet'
+                        ? t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')
+                        : t('patientPortal.reschedule.proceedToPayment', 'Proceed to Payment'))
                       : t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')}
                   </Button>
                 </DialogFooter>

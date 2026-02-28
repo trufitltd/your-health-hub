@@ -164,6 +164,46 @@ export class BookingService {
     };
   }
 
+  private async moveAppointmentToApprovalReady(appointmentId: string, paymentReference?: string | null) {
+    const updatePayload: Record<string, unknown> = {
+      status: 'pending_approval',
+      slot_locked_until: null,
+    };
+    if (paymentReference) {
+      updatePayload.payment_reference = paymentReference;
+    }
+
+    const { error: confirmError } = await this.supabase
+      .from('appointments')
+      .update(updatePayload)
+      .eq('id', appointmentId);
+
+    if (!confirmError) return;
+
+    const message = String(confirmError.message || '');
+    const statusConstraintError =
+      message.includes('appointments_status_marketplace_check')
+      || message.toLowerCase().includes('violates check constraint');
+
+    if (!statusConstraintError) {
+      throw new Error(confirmError.message);
+    }
+
+    const legacyUpdatePayload: Record<string, unknown> = {
+      ...updatePayload,
+      status: 'pending',
+    };
+
+    const { error: legacyConfirmError } = await this.supabase
+      .from('appointments')
+      .update(legacyUpdatePayload)
+      .eq('id', appointmentId);
+
+    if (legacyConfirmError) {
+      throw new Error(legacyConfirmError.message);
+    }
+  }
+
   async initiateBooking(input: BookingInitiateInput): Promise<BookingInitiateResult> {
     if (!input.patientId) throw new Error('Missing patientId');
     if (!input.doctorId) throw new Error('Missing doctorId');
@@ -347,17 +387,10 @@ export class BookingService {
           throw new Error(`Failed to mark wallet payment success: ${walletPaymentSuccessError.message}`);
         }
 
-        const { error: confirmError } = await this.supabase
-          .from('appointments')
-          .update({
-            status: 'pending_approval',
-            slot_locked_until: null,
-            payment_reference: walletReference,
-          })
-          .eq('id', appointment.id);
-
-        if (confirmError) {
-          throw new Error(`Failed to confirm wallet booking: ${confirmError.message}`);
+        try {
+          await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+        } catch (confirmError: any) {
+          throw new Error(`Failed to confirm wallet booking: ${confirmError?.message || confirmError}`);
         }
 
         await this.walletService.addPendingEarning({
@@ -532,17 +565,10 @@ export class BookingService {
             throw new Error(`Failed to finalize hybrid wallet payment: ${walletFinalizeError.message}`);
           }
 
-          const { error: confirmError } = await this.supabase
-            .from('appointments')
-            .update({
-              status: 'pending_approval',
-              slot_locked_until: null,
-              payment_reference: walletReference,
-            })
-            .eq('id', appointment.id);
-
-          if (confirmError) {
-            throw new Error(`Failed to confirm wallet-only hybrid booking: ${confirmError.message}`);
+          try {
+            await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+          } catch (confirmError: any) {
+            throw new Error(`Failed to confirm wallet-only hybrid booking: ${confirmError?.message || confirmError}`);
           }
 
           await this.walletService.addPendingEarning({
@@ -712,15 +738,11 @@ export class BookingService {
       }
     }
 
-    const { error: confirmError } = await this.supabase
-      .from('appointments')
-      .update({
-        status: 'pending_approval',
-        slot_locked_until: null,
-      })
-      .eq('id', appointment.id);
-
-    if (confirmError) throw new Error(`Failed to confirm appointment after payment: ${confirmError.message}`);
+    try {
+      await this.moveAppointmentToApprovalReady(appointment.id);
+    } catch (confirmError: any) {
+      throw new Error(`Failed to confirm appointment after payment: ${confirmError?.message || confirmError}`);
+    }
 
     await this.walletService.addPendingEarning({
       id: appointment.id,
