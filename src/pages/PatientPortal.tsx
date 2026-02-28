@@ -311,6 +311,12 @@ const PatientPortal = () => {
     enabled: !!user?.id,
     refetchInterval: 30000,
   });
+  const { data: walletWithdrawalRequests = [] } = useQuery({
+    queryKey: ['patient-wallet-withdrawals', user?.id],
+    queryFn: () => PatientWalletService.getWalletWithdrawalRequests(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
@@ -319,6 +325,13 @@ const PatientPortal = () => {
   const { initializePayment } = usePaystackPayment();
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const pendingWalletWithdrawalsCount = useMemo(
+    () => walletWithdrawalRequests.filter((row) => {
+      const status = String(row.status || '').trim().toLowerCase();
+      return status === 'pending' || status === 'processing';
+    }).length,
+    [walletWithdrawalRequests],
+  );
   const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawNarration, setWithdrawNarration] = useState('');
@@ -1113,6 +1126,29 @@ const PatientPortal = () => {
     withdrawalAmountValue <= patientWalletBalance &&
     !isSubmittingWithdrawal;
 
+  const getWithdrawalStatusLabel = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') return 'Completed';
+    if (normalized === 'processing') return 'Processing';
+    if (normalized === 'rejected') return 'Rejected';
+    if (normalized === 'cancelled') return 'Cancelled';
+    return 'Pending';
+  };
+
+  const getWithdrawalStatusBadgeClass = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') {
+      return 'bg-success/10 text-success border-success/20';
+    }
+    if (normalized === 'processing') {
+      return 'bg-primary/10 text-primary border-primary/20';
+    }
+    if (normalized === 'rejected' || normalized === 'cancelled') {
+      return 'bg-destructive/10 text-destructive border-destructive/20';
+    }
+    return 'bg-warning/10 text-warning border-warning/20';
+  };
+
   // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {
     if (searchParams.get('action') === 'book') {
@@ -1650,12 +1686,13 @@ const PatientPortal = () => {
       const response = await PatientWalletService.requestWalletWithdrawal(amount, withdrawNarration || undefined);
       toast({
         title: 'Withdrawal request submitted',
-        description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet.`,
+        description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet. Admin processing target is within 48 hours.`,
       });
       setWithdrawDialogOpen(false);
       setWithdrawAmount('');
       setWithdrawNarration('');
       await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user.id] });
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet-withdrawals', user.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
       toast({
@@ -2737,9 +2774,17 @@ const PatientPortal = () => {
               <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
-                  <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}
+                    {' '}Withdrawal requests are processed within 48 hours.
+                  </p>
                 </div>
                 <div className="flex items-center gap-3">
+                  {pendingWalletWithdrawalsCount > 0 ? (
+                    <Badge className="bg-warning/10 text-warning border-warning/20">
+                      {pendingWalletWithdrawalsCount} pending withdrawal{pendingWalletWithdrawalsCount > 1 ? 's' : ''}
+                    </Badge>
+                  ) : null}
                   <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
                   <Button
                     size="sm"
@@ -2752,6 +2797,33 @@ const PatientPortal = () => {
                 </div>
               </CardContent>
             </Card>
+
+            {walletWithdrawalRequests.length > 0 ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{t('patientPortal.wallet.requestWithdrawal', 'Withdrawal Requests')}</CardTitle>
+                  <CardDescription>Track your latest payout requests and status updates.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {walletWithdrawalRequests.slice(0, 3).map((request) => (
+                    <div key={request.id} className="rounded-lg border border-border p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Badge className={getWithdrawalStatusBadgeClass(request.status)}>
+                          {getWithdrawalStatusLabel(request.status)}
+                        </Badge>
+                        <span className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                        <p>Requested: {new Date(request.created_at).toLocaleString()}</p>
+                        {request.sla_due_at ? <p>Expected by: {new Date(request.sla_due_at).toLocaleString()}</p> : null}
+                        {request.completed_at ? <p>Completed: {new Date(request.completed_at).toLocaleString()}</p> : null}
+                        {request.payout_reference ? <p>Transfer ref: {request.payout_reference}</p> : null}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
 
             {/* Slot Selection Modal */}
             <SlotSelectionModal
@@ -2973,7 +3045,7 @@ const PatientPortal = () => {
                 <DialogHeader>
                   <DialogTitle>{t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}</DialogTitle>
                   <DialogDescription>
-                    {t('patientPortal.wallet.withdrawalDescription', 'Submit a withdrawal request from your available wallet balance.')}
+                    {t('patientPortal.wallet.withdrawalDescription', 'Submit a withdrawal request from your available wallet balance. Include your bank details in the note if needed.')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-2">
@@ -3002,7 +3074,7 @@ const PatientPortal = () => {
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {t('patientPortal.wallet.withdrawalProcessingHint', 'Withdrawal requests are processed manually and may take some time.')}
+                    {t('patientPortal.wallet.withdrawalProcessingHint', 'Withdrawal requests are processed manually within 48 hours and marked completed after transfer.')}
                   </p>
                 </div>
                 <DialogFooter>

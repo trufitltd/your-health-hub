@@ -851,13 +851,16 @@ const DoctorPortal = () => {
 
     try {
       if (pendingReschedule) {
-        await AppointmentRescheduleService.respondToReschedule({
+        const response = await AppointmentRescheduleService.respondToReschedule({
           appointmentId,
           action: 'decline',
         });
+        const refunded = Number(response.refunded_upgrade_amount || 0);
         toast({
           title: 'Reschedule declined',
-          description: 'The current appointment remains unchanged.',
+          description: refunded > 0
+            ? `The current appointment remains unchanged. Refunded ₦${refunded.toLocaleString()} to patient wallet.`
+            : 'The current appointment remains unchanged.',
         });
         refetch();
         return;
