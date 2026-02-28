@@ -39,6 +39,7 @@ import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
+import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
@@ -758,6 +759,7 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
+                    { id: 'payments', label: 'Payments', icon: BadgeIcon },
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
@@ -881,6 +883,7 @@ const CentralAdmin = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="payments">Payments</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
@@ -1423,6 +1426,11 @@ const CentralAdmin = () => {
               {/* Pricing Tab */}
               <TabsContent value="pricing" className="space-y-6">
                 <PricingManagementPanel />
+              </TabsContent>
+
+              {/* Payments Tab */}
+              <TabsContent value="payments" className="space-y-6">
+                <PaymentsManagementPanel />
               </TabsContent>
 
               {/* Quality Assurance Tab */}

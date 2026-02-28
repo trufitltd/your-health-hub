@@ -136,9 +136,26 @@ export interface BookingInitiateResponse {
 export interface PatientWalletWithdrawalRequest {
   request_id: string;
   patient_id: string;
-  status: 'pending' | 'approved' | 'rejected' | 'paid' | 'cancelled';
+  status: 'pending' | 'processing' | 'completed' | 'rejected' | 'cancelled' | 'approved' | 'paid';
   amount: number;
   balance_after: number;
+  sla_due_at?: string | null;
+}
+
+export interface PatientWalletWithdrawalRequestRow {
+  id: string;
+  patient_id: string;
+  amount: number;
+  status: 'pending' | 'processing' | 'completed' | 'rejected' | 'cancelled' | 'approved' | 'paid';
+  narration: string | null;
+  created_at: string;
+  updated_at: string;
+  sla_due_at?: string | null;
+  processed_by?: string | null;
+  processed_at?: string | null;
+  completed_at?: string | null;
+  admin_note?: string | null;
+  payout_reference?: string | null;
 }
 
 export interface PricePreviewRequest {
