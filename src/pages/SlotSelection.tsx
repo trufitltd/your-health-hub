@@ -12,12 +12,13 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { generateTimeSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
-import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { BookingService } from '@/services/BookingService';
+import { PatientWalletService } from '@/services/PatientWalletService';
 import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface LocationState {
@@ -48,6 +49,7 @@ export default function SlotSelection() {
   const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -88,6 +90,12 @@ export default function SlotSelection() {
   const { data: consultationTypes = [] } = useQuery({
     queryKey: ['active-consultation-types-slot-selection'],
     queryFn: () => AvailabilityService.getActiveConsultationTypes(),
+  });
+
+  const { data: patientWallet } = useQuery({
+    queryKey: ['patient-wallet', user?.id],
+    queryFn: () => PatientWalletService.getPatientWallet(user!.id),
+    enabled: !!user?.id,
   });
 
   useEffect(() => {
@@ -272,6 +280,14 @@ export default function SlotSelection() {
 
   const displayedPrice = finalPrice ?? previewPrice ?? null;
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
+  const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const walletInsufficient = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
+  const walletAppliedForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.min(patientWalletBalance, displayedPrice)
+    : 0;
+  const paystackDueForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.max(displayedPrice - walletAppliedForHybrid, 0)
+    : 0;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
   const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
   const minCalendarDate = useMemo(() => {
@@ -303,10 +319,22 @@ export default function SlotSelection() {
       return;
     }
 
-    if (!paystackPublicKey) {
+    const paystackRequiredForSelection = paymentMethod === 'paystack'
+      || (paymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
+
+    if (paystackRequiredForSelection && !paystackPublicKey) {
       toast({
         title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
         description: t('slotSelection.toast.paymentGatewayNotConfigured', 'Payment gateway not configured. Please contact support.'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice) {
+      toast({
+        title: t('slotSelection.toast.walletBalanceLowTitle', 'Insufficient wallet balance'),
+        description: t('slotSelection.toast.walletBalanceLowDescription', 'Your wallet balance is not enough for this booking.'),
         variant: 'destructive',
       });
       return;
@@ -321,28 +349,111 @@ export default function SlotSelection() {
         preferredTime: durationPricingEnabled ? (selectedTime || undefined) : undefined,
         duration: selectedDuration,
         consultationType: selectedConsultationType,
+        paymentMethod,
       });
 
       setFinalPrice(booking.finalPrice);
+      const walletChargedAmount = Number(booking.walletChargedAmount || 0);
+      const paystackAmountDue = Number(
+        booking.paystackAmountDue
+        ?? (booking.paymentInitialization ? Number(booking.paymentInitialization.amountInKobo || 0) / 100 : 0),
+      );
 
+      if (booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
+        setIsConfirming(false);
+        toast({
+          title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
+          description: walletChargedAmount > 0
+            ? `Wallet charged ${formatCurrency(walletChargedAmount)}. Your booking is now pending doctor approval.`
+            : t(
+              'slotSelection.toast.walletBookingSuccessDescription',
+              'Your booking has been paid from wallet and is now pending doctor approval.',
+            ),
+        });
+        setTimeout(() => {
+          navigate('/patient-portal?tab=appointments');
+        }, 800);
+        return;
+      }
+
+      const paymentInit = booking.paymentInitialization;
+      if (!paymentInit) {
+        throw new Error('Missing payment initialization response');
+      }
+
+      let paymentCompleted = false;
       initializePayment({
-        email: booking.paymentInitialization.email || user.email || '',
-        amount: booking.paymentInitialization.amountInKobo,
-        reference: booking.paymentInitialization.reference,
+        email: paymentInit.email || user.email || '',
+        amount: paymentInit.amountInKobo,
+        reference: paymentInit.reference,
         publicKey: paystackPublicKey,
-        metadata: booking.paymentInitialization.metadata,
-        onSuccess: () => {
-          setIsConfirming(false);
-          toast({
-            title: t('booking.paymentSuccessTitle', 'Payment successful'),
-            description: t('slotSelection.toast.appointmentConfirmed', 'Your appointment has been confirmed.'),
-          });
+        metadata: paymentInit.metadata,
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit.reference || '').trim();
 
-          setTimeout(() => {
-            navigate('/patient-portal?tab=appointments');
-          }, 800);
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
+                : confirmResult.alreadyProcessed
+                ? t(
+                  'slotSelection.toast.appointmentAlreadyProcessed',
+                  'This payment was already processed and your appointment remains pending doctor approval.',
+                )
+                : t(
+                  'slotSelection.toast.appointmentPendingApproval',
+                  'Payment successful. Your appointment is pending doctor approval.',
+                ),
+            });
+          } catch (confirmErr: any) {
+            console.warn('[slot-selection] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment will appear after payment confirmation processing completes.`
+                : t(
+                  'slotSelection.toast.paymentSuccessPendingWebhook',
+                  'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+                ),
+            });
+          } finally {
+            setIsConfirming(false);
+            setTimeout(() => {
+              navigate('/patient-portal?tab=appointments');
+            }, 800);
+          }
         },
         onClose: () => {
+          if (paymentCompleted) return;
           setIsConfirming(false);
           toast({
             title: t('booking.paymentCancelledTitle', 'Payment cancelled'),
@@ -699,6 +810,62 @@ export default function SlotSelection() {
                             : t('slotSelection.summary.unableToPreview', 'Unable to preview right now')}
                         </span>
                       </div>
+                      <div className="rounded-lg border p-3 bg-background/50">
+                        <p className="text-sm font-medium mb-2">
+                          {t('slotSelection.summary.paymentMethod', 'Payment Method')}
+                        </p>
+                        <div className="space-y-2 text-sm">
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>{t('slotSelection.summary.paystack', 'Paystack')}</span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'paystack'}
+                              onChange={() => setPaymentMethod('paystack')}
+                            />
+                          </label>
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>
+                              {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance)})
+                            </span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'wallet'}
+                              onChange={() => setPaymentMethod('wallet')}
+                            />
+                          </label>
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>
+                              {t('slotSelection.summary.hybrid', 'Wallet + Paystack (hybrid)')}
+                            </span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'hybrid'}
+                              onChange={() => setPaymentMethod('hybrid')}
+                            />
+                          </label>
+                        </div>
+                        {walletInsufficient && (
+                          <p className="mt-2 text-xs text-destructive">
+                            {t(
+                              'slotSelection.summary.walletInsufficient',
+                              'Wallet balance is below this booking fee.',
+                            )}
+                          </p>
+                        )}
+                        {paymentMethod === 'hybrid' && displayedPrice !== null && (
+                          <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
+                            <p>
+                              <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid)}
+                            </p>
+                            <p>
+                              <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -717,11 +884,19 @@ export default function SlotSelection() {
               </Button>
               <Button
                 onClick={handleConfirm}
-                disabled={!summaryReady || isConfirming}
+                disabled={!summaryReady || isConfirming || walletInsufficient}
                 className="gap-2"
               >
-                <CreditCard className="w-4 h-4" />
-                {isConfirming ? t('slotSelection.processing', 'Processing...') : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
+                {paymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
+                {isConfirming
+                  ? t('slotSelection.processing', 'Processing...')
+                  : paymentMethod === 'wallet'
+                  ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  : paymentMethod === 'hybrid'
+                  ? paystackDueForHybrid > 0
+                    ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
+                    : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </motion.div>

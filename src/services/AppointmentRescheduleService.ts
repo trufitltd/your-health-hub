@@ -67,6 +67,7 @@ export const AppointmentRescheduleService = {
       reschedule_request_status: 'approved' | 'declined';
       status: string;
       charged_upgrade_amount: number;
+      refunded_upgrade_amount?: number;
     };
   },
 };

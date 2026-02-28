@@ -311,6 +311,12 @@ const PatientPortal = () => {
     enabled: !!user?.id,
     refetchInterval: 30000,
   });
+  const { data: walletWithdrawalRequests = [] } = useQuery({
+    queryKey: ['patient-wallet-withdrawals', user?.id],
+    queryFn: () => PatientWalletService.getWalletWithdrawalRequests(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
@@ -319,6 +325,17 @@ const PatientPortal = () => {
   const { initializePayment } = usePaystackPayment();
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const pendingWalletWithdrawalsCount = useMemo(
+    () => walletWithdrawalRequests.filter((row) => {
+      const status = String(row.status || '').trim().toLowerCase();
+      return status === 'pending' || status === 'processing';
+    }).length,
+    [walletWithdrawalRequests],
+  );
+  const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawNarration, setWithdrawNarration] = useState('');
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -1088,7 +1105,7 @@ const PatientPortal = () => {
   const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
-  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
@@ -1103,6 +1120,34 @@ const PatientPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
+  const withdrawalAmountValue = Number(withdrawAmount.replace(/,/g, '').trim());
+  const canSubmitWithdrawal = Number.isFinite(withdrawalAmountValue) &&
+    withdrawalAmountValue > 0 &&
+    withdrawalAmountValue <= patientWalletBalance &&
+    !isSubmittingWithdrawal;
+
+  const getWithdrawalStatusLabel = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') return 'Completed';
+    if (normalized === 'processing') return 'Processing';
+    if (normalized === 'rejected') return 'Rejected';
+    if (normalized === 'cancelled') return 'Cancelled';
+    return 'Pending';
+  };
+
+  const getWithdrawalStatusBadgeClass = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') {
+      return 'bg-success/10 text-success border-success/20';
+    }
+    if (normalized === 'processing') {
+      return 'bg-primary/10 text-primary border-primary/20';
+    }
+    if (normalized === 'rejected' || normalized === 'cancelled') {
+      return 'bg-destructive/10 text-destructive border-destructive/20';
+    }
+    return 'bg-warning/10 text-warning border-warning/20';
+  };
 
   // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {
@@ -1217,6 +1262,7 @@ const PatientPortal = () => {
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
     setRescheduleDoctorId(null);
+    setReschedulePaymentMethod('paystack');
     setBookingOpen(false);
     setSlotSelectionOpen(false);
   };
@@ -1291,6 +1337,18 @@ const PatientPortal = () => {
       return Math.max(0, proposedRescheduleFinalPrice - alreadyPaid);
     },
     [proposedRescheduleFinalPrice, reschedulePaidAmount],
+  );
+  const rescheduleHybridWalletApplied = useMemo(
+    () => (rescheduleUpgradeAmount > 0 ? Math.min(patientWalletBalance, rescheduleUpgradeAmount) : 0),
+    [patientWalletBalance, rescheduleUpgradeAmount],
+  );
+  const rescheduleHybridPaystackDue = useMemo(
+    () => Math.max(rescheduleUpgradeAmount - rescheduleHybridWalletApplied, 0),
+    [rescheduleUpgradeAmount, rescheduleHybridWalletApplied],
+  );
+  const effectiveReschedulePaymentMethod = useMemo<'paystack' | 'wallet' | 'hybrid'>(
+    () => (reschedulePaymentMethod === 'hybrid' && rescheduleHybridPaystackDue <= 0 ? 'wallet' : reschedulePaymentMethod),
+    [reschedulePaymentMethod, rescheduleHybridPaystackDue],
   );
 
   const openBooking = () => {
@@ -1383,6 +1441,7 @@ const PatientPortal = () => {
     setCurrentRescheduleConsultationType(currentConsultType);
     setRescheduleConsultationType(currentConsultType);
     setRescheduleRequestNote('');
+    setReschedulePaymentMethod('paystack');
     setBookingOpen(false);
     setSlotSelectionOpen(true);
   };
@@ -1431,7 +1490,7 @@ const PatientPortal = () => {
     }
 
     if (rescheduleUpgradeAmount > 0) {
-      if (reschedulePaymentMethod === 'paystack') {
+      if (effectiveReschedulePaymentMethod === 'paystack' || effectiveReschedulePaymentMethod === 'hybrid') {
         if (!paystackPublicKey) {
           toast({
             title: 'Payment not configured',
@@ -1451,11 +1510,21 @@ const PatientPortal = () => {
               proposedTime: proposedTimeForPayment,
               proposedDuration: rescheduleDurationMinutes,
               proposedConsultationType: rescheduleConsultationType,
+              paymentMethod: effectiveReschedulePaymentMethod,
             },
           });
           if (error) throw error;
           const paymentInit = data as any;
+          const walletChargedAmount = Number(paymentInit?.walletChargedAmount || 0);
+          const paystackAmountDue = Number(
+            paymentInit?.paystackAmountDue
+            ?? (paymentInit?.amountInKobo ? Number(paymentInit.amountInKobo) / 100 : 0),
+          );
+
           if (!paymentInit?.reference) throw new Error('Payment initialization failed');
+          if (!Number.isFinite(paystackAmountDue) || paystackAmountDue <= 0) {
+            throw new Error('Invalid Paystack amount for reschedule payment');
+          }
 
           setIsBooking(true);
           // Close the confirmation dialog before opening Paystack.
@@ -1474,26 +1543,48 @@ const PatientPortal = () => {
               const paidReference = String(response?.reference || paymentInit.reference || '').trim();
 
               try {
-                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
-                  body: { reference: paidReference },
-                });
+                let confirmResult: { error?: string; alreadyFinalized?: boolean } | null = null;
+                let lastConfirmError: any = null;
 
-                if (confirmError) throw confirmError;
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                  try {
+                    const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
+                      body: { reference: paidReference },
+                    });
+                    if (confirmError) throw confirmError;
 
-                const confirmResult = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
-                if (confirmResult.error) throw new Error(confirmResult.error);
+                    const parsed = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
+                    if (parsed.error) throw new Error(parsed.error);
+                    confirmResult = parsed;
+                    lastConfirmError = null;
+                    break;
+                  } catch (attemptError: any) {
+                    lastConfirmError = attemptError;
+                    if (attempt < 2) {
+                      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                    }
+                  }
+                }
+
+                if (!confirmResult) {
+                  throw lastConfirmError || new Error('Reschedule payment confirmation failed');
+                }
 
                 toast({
                   title: 'Payment successful',
                   description: confirmResult.alreadyFinalized
                     ? 'Your paid reschedule request is already pending doctor approval.'
+                    : walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your reschedule request is pending doctor approval.`
                     : 'Your reschedule request has been submitted and is pending doctor approval.',
                 });
               } catch (confirmErr: any) {
                 console.warn('[reschedule] client confirmation fallback failed:', confirmErr);
                 toast({
                   title: 'Payment successful',
-                  description: 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
+                  description: walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your request will appear under Pending Approval once webhook processing completes.`
+                    : 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
                 });
               } finally {
                 setIsBooking(false);
@@ -1521,7 +1612,7 @@ const PatientPortal = () => {
         return;
       }
       // if user chose wallet but has insufficient funds, block
-      if (reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
+      if (effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
         toast({
           title: 'Insufficient wallet balance',
           description: `You need ₦${rescheduleUpgradeAmount.toLocaleString()} in wallet for this upgrade.`,
@@ -1611,6 +1702,52 @@ const PatientPortal = () => {
       toast({ title: 'Cancellation failed', description: message });
     } finally {
       setIsBooking(false);
+    }
+  };
+
+  const submitWalletWithdrawalRequest = async () => {
+    if (!user?.id) return;
+    const amount = Number(withdrawAmount.replace(/,/g, '').trim());
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter a withdrawal amount greater than zero.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (amount > patientWalletBalance) {
+      toast({
+        title: 'Insufficient wallet balance',
+        description: `Available wallet balance is ₦${patientWalletBalance.toLocaleString()}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmittingWithdrawal(true);
+    try {
+      const response = await PatientWalletService.requestWalletWithdrawal(amount, withdrawNarration || undefined);
+      toast({
+        title: 'Withdrawal request submitted',
+        description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet. Admin processing target is within 48 hours.`,
+      });
+      setWithdrawDialogOpen(false);
+      setWithdrawAmount('');
+      setWithdrawNarration('');
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user.id] });
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet-withdrawals', user.id] });
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({
+        title: 'Withdrawal request failed',
+        description: message || 'Unable to submit wallet withdrawal request.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmittingWithdrawal(false);
     }
   };
 
@@ -2428,18 +2565,64 @@ const PatientPortal = () => {
       if (paymentInitError) throw paymentInitError;
       const paymentInit = paymentInitData as any;
 
+      let paymentCompleted = false;
       initializePayment({
         email: paymentInit?.email || user.email || '',
         amount: paymentInit?.amountInKobo,
         reference: paymentInit?.reference,
         publicKey: paystackPublicKey,
         metadata: paymentInit?.metadata,
-        onSuccess: () => {
-          toast({ title: 'Payment successful', description: 'Your appointment has been confirmed.' });
-          invalidateAppointments();
-          setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit?.reference || '').trim();
+
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: 'Payment successful',
+              description: confirmResult.alreadyProcessed
+                ? 'This payment was already processed and your appointment remains pending approval.'
+                : 'Your appointment has been confirmed.',
+            });
+          } catch (confirmErr: any) {
+            console.warn('[patient-portal] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: 'Payment successful',
+              description: 'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+            });
+          } finally {
+            invalidateAppointments();
+            setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+          }
         },
         onClose: () => {
+          if (paymentCompleted) return;
           toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
         },
       });
@@ -2683,11 +2866,56 @@ const PatientPortal = () => {
               <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
-                  <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}
+                    {' '}Withdrawal requests are processed within 48 hours.
+                  </p>
                 </div>
-                <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                <div className="flex items-center gap-3">
+                  {pendingWalletWithdrawalsCount > 0 ? (
+                    <Badge className="bg-warning/10 text-warning border-warning/20">
+                      {pendingWalletWithdrawalsCount} pending withdrawal{pendingWalletWithdrawalsCount > 1 ? 's' : ''}
+                    </Badge>
+                  ) : null}
+                  <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setWithdrawDialogOpen(true)}
+                    disabled={patientWalletBalance <= 0}
+                  >
+                    {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
+
+            {walletWithdrawalRequests.length > 0 ? (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{t('patientPortal.wallet.requestWithdrawal', 'Withdrawal Requests')}</CardTitle>
+                  <CardDescription>Track your latest payout requests and status updates.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {walletWithdrawalRequests.slice(0, 3).map((request) => (
+                    <div key={request.id} className="rounded-lg border border-border p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Badge className={getWithdrawalStatusBadgeClass(request.status)}>
+                          {getWithdrawalStatusLabel(request.status)}
+                        </Badge>
+                        <span className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                        <p>Requested: {new Date(request.created_at).toLocaleString()}</p>
+                        {request.sla_due_at ? <p>Expected by: {new Date(request.sla_due_at).toLocaleString()}</p> : null}
+                        {request.completed_at ? <p>Completed: {new Date(request.completed_at).toLocaleString()}</p> : null}
+                        {request.payout_reference ? <p>Transfer ref: {request.payout_reference}</p> : null}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
 
             {/* Slot Selection Modal */}
             <SlotSelectionModal
@@ -2818,12 +3046,29 @@ const PatientPortal = () => {
                                 />
                                 <span>{t('patientPortal.reschedule.useWallet', 'Use Wallet')} {patientWalletBalance < rescheduleUpgradeAmount ? t('patientPortal.reschedule.insufficientSuffix', '(insufficient)') : ''}</span>
                               </label>
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="hybrid"
+                                  checked={reschedulePaymentMethod === 'hybrid'}
+                                  onChange={() => setReschedulePaymentMethod('hybrid')}
+                                />
+                                <span>{t('patientPortal.reschedule.hybridSplit', 'Wallet + Paystack (split)')}</span>
+                              </label>
                             </div>
                           </div>
 
                           {patientWalletBalance < rescheduleUpgradeAmount && reschedulePaymentMethod === 'wallet' && (
                             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
                               {t('patientPortal.reschedule.walletInsufficientHint', 'Wallet balance insufficient. Please use Paystack or add funds to your wallet.')}
+                            </div>
+                          )}
+                          {reschedulePaymentMethod === 'hybrid' && (
+                            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary">
+                              {rescheduleHybridPaystackDue > 0
+                                ? `Wallet applies ₦${rescheduleHybridWalletApplied.toLocaleString()} and Paystack covers ₦${rescheduleHybridPaystackDue.toLocaleString()}.`
+                                : `Wallet covers the full upgrade amount of ₦${rescheduleUpgradeAmount.toLocaleString()}.`}
                             </div>
                           )}
                         </>
@@ -2862,12 +3107,14 @@ const PatientPortal = () => {
                   </Button>
                   <Button
                     onClick={rescheduleBooking}
-                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && reschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
+                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
                   >
                     {isBooking
                       ? t('common.submitting', 'Submitting...')
                       : rescheduleUpgradeAmount > 0
-                      ? t('patientPortal.reschedule.proceedToPayment', 'Proceed to Payment')
+                      ? (effectiveReschedulePaymentMethod === 'wallet'
+                        ? t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')
+                        : t('patientPortal.reschedule.proceedToPayment', 'Proceed to Payment'))
                       : t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')}
                   </Button>
                 </DialogFooter>
@@ -2890,6 +3137,72 @@ const PatientPortal = () => {
                     {isBooking
                       ? t('patientPortal.cancelling', 'Cancelling...')
                       : t('patientPortal.yesCancelAppointment', 'Yes, Cancel Appointment')}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={withdrawDialogOpen}
+              onOpenChange={(open) => {
+                setWithdrawDialogOpen(open);
+                if (!open) {
+                  setWithdrawAmount('');
+                  setWithdrawNarration('');
+                }
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}</DialogTitle>
+                  <DialogDescription>
+                    {t('patientPortal.wallet.withdrawalDescription', 'Submit a withdrawal request from your available wallet balance. Include your bank details in the note if needed.')}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2">
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    {t('patientPortal.wallet.availableBalance', 'Available Balance')}: <span className="font-semibold">₦{patientWalletBalance.toLocaleString()}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.amountLabel', 'Amount (₦)')}</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.noteOptional', 'Note (optional)')}</label>
+                    <textarea
+                      className="w-full rounded-md border border-input bg-background p-2 text-sm"
+                      rows={3}
+                      value={withdrawNarration}
+                      onChange={(e) => setWithdrawNarration(e.target.value)}
+                      placeholder={t('patientPortal.wallet.notePlaceholder', 'Add payout account details or note for this request')}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t('patientPortal.wallet.withdrawalProcessingHint', 'Withdrawal requests are processed manually within 48 hours and marked completed after transfer.')}
+                  </p>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setWithdrawDialogOpen(false);
+                      setWithdrawAmount('');
+                      setWithdrawNarration('');
+                    }}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                  <Button onClick={submitWalletWithdrawalRequest} disabled={!canSubmitWithdrawal}>
+                    {isSubmittingWithdrawal
+                      ? t('common.submitting', 'Submitting...')
+                      : t('patientPortal.wallet.submitWithdrawalRequest', 'Submit Request')}
                   </Button>
                 </DialogFooter>
               </DialogContent>

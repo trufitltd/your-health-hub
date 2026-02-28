@@ -6,7 +6,7 @@ import type {
   PricePreviewInput,
   PricePreviewResult,
 } from '../marketplace-types.ts';
-import { normalizeAppointmentStatusRaw, normalizeDoctorType } from '../marketplace-types.ts';
+import { normalizeAppointmentStatusRaw, normalizeDoctorType, roundMoney } from '../marketplace-types.ts';
 import { PricingService } from './PricingService.ts';
 import { AvailabilityService } from './AvailabilityService.ts';
 import { PaymentService } from './PaymentService.ts';
@@ -164,6 +164,46 @@ export class BookingService {
     };
   }
 
+  private async moveAppointmentToApprovalReady(appointmentId: string, paymentReference?: string | null) {
+    const updatePayload: Record<string, unknown> = {
+      status: 'pending_approval',
+      slot_locked_until: null,
+    };
+    if (paymentReference) {
+      updatePayload.payment_reference = paymentReference;
+    }
+
+    const { error: confirmError } = await this.supabase
+      .from('appointments')
+      .update(updatePayload)
+      .eq('id', appointmentId);
+
+    if (!confirmError) return;
+
+    const message = String(confirmError.message || '');
+    const statusConstraintError =
+      message.includes('appointments_status_marketplace_check')
+      || message.toLowerCase().includes('violates check constraint');
+
+    if (!statusConstraintError) {
+      throw new Error(confirmError.message);
+    }
+
+    const legacyUpdatePayload: Record<string, unknown> = {
+      ...updatePayload,
+      status: 'pending',
+    };
+
+    const { error: legacyConfirmError } = await this.supabase
+      .from('appointments')
+      .update(legacyUpdatePayload)
+      .eq('id', appointmentId);
+
+    if (legacyConfirmError) {
+      throw new Error(legacyConfirmError.message);
+    }
+  }
+
   async initiateBooking(input: BookingInitiateInput): Promise<BookingInitiateResult> {
     if (!input.patientId) throw new Error('Missing patientId');
     if (!input.doctorId) throw new Error('Missing doctorId');
@@ -219,6 +259,11 @@ export class BookingService {
       .eq('name', consultationType)
       .maybeSingle();
 
+    const requestedPaymentMethod: 'paystack' | 'wallet' | 'hybrid' = input.paymentMethod === 'wallet'
+      ? 'wallet'
+      : input.paymentMethod === 'hybrid'
+      ? 'hybrid'
+      : 'paystack';
     const lockUntil = new Date(Date.now() + (5 * 60 * 1000)).toISOString();
 
     const breakdown = {
@@ -258,25 +303,372 @@ export class BookingService {
       throw new Error(`Failed creating pending appointment: ${appointmentError.message}`);
     }
 
+    const amount = Number(appointment.final_price || price.finalPrice);
+    const basePaymentMetadata = {
+      appointment_date: slot.date,
+      appointment_time: slot.time,
+      duration_minutes: slot.durationMinutes,
+      consultation_type: consultationType,
+    };
+
+    const cancelPendingAppointment = async () => {
+      await this.supabase
+        .from('appointments')
+        .update({ status: 'cancelled', slot_locked_until: null })
+        .eq('id', appointment.id);
+    };
+
+    if (requestedPaymentMethod === 'wallet') {
+      const walletReference = `WALLET-${Date.now()}-${appointment.id.slice(0, 8)}`;
+      const nowIso = new Date().toISOString();
+
+      const { error: walletPaymentInitError } = await this.supabase.from('payments').insert({
+        appointment_id: appointment.id,
+        patient_id: input.patientId,
+        amount,
+        status: 'pending',
+        provider_reference: walletReference,
+        provider: 'wallet',
+        payment_reference: walletReference,
+        payment_method: 'wallet',
+        metadata: {
+          ...basePaymentMetadata,
+          type: 'booking_wallet',
+        },
+      });
+
+      if (walletPaymentInitError) {
+        await cancelPendingAppointment();
+        throw new Error(`Failed to initialize wallet booking payment: ${walletPaymentInitError.message}`);
+      }
+
+      let chargedAmount = 0;
+
+      try {
+        const { data: walletDebitData, error: walletDebitError } = await this.supabase.rpc(
+          'debit_patient_wallet_for_booking',
+          {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: amount,
+            p_narration: `Appointment payment from wallet (${appointment.id})`,
+          },
+        );
+
+        if (walletDebitError) {
+          throw new Error(walletDebitError.message || 'Wallet debit failed');
+        }
+
+        const walletDebit = (walletDebitData || {}) as Record<string, unknown>;
+        chargedAmount = Number(walletDebit.charged_amount || 0);
+        const balanceAfterRaw = Number(walletDebit.balance_after);
+        const balanceAfter = Number.isFinite(balanceAfterRaw) ? balanceAfterRaw : null;
+
+        if (!Number.isFinite(chargedAmount) || chargedAmount <= 0) {
+          throw new Error('Wallet debit returned invalid charged amount');
+        }
+
+        const { error: walletPaymentSuccessError } = await this.supabase
+          .from('payments')
+          .update({
+            status: 'completed',
+            verified_at: nowIso,
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_wallet',
+              charged_amount: chargedAmount,
+              balance_after: balanceAfter,
+              verified_at: nowIso,
+            },
+          })
+          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+        if (walletPaymentSuccessError) {
+          throw new Error(`Failed to mark wallet payment success: ${walletPaymentSuccessError.message}`);
+        }
+
+        try {
+          await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+        } catch (confirmError: any) {
+          throw new Error(`Failed to confirm wallet booking: ${confirmError?.message || confirmError}`);
+        }
+
+        await this.walletService.addPendingEarning({
+          id: appointment.id,
+          doctor_id: appointment.doctor_id,
+          final_price: amount,
+          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+        });
+
+        return {
+          appointmentId: appointment.id,
+          finalPrice: amount,
+          slot,
+          paymentInitialization: null,
+          paymentMethod: 'wallet',
+          paidWithWallet: true,
+          walletChargedAmount: chargedAmount,
+          paystackAmountDue: 0,
+        };
+      } catch (walletFlowError) {
+        const message = walletFlowError instanceof Error ? walletFlowError.message : String(walletFlowError);
+
+        if (chargedAmount > 0) {
+          const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: chargedAmount,
+            p_narration: `Rollback for failed wallet booking (${appointment.id})`,
+          });
+          if (rollbackError) {
+            console.error('[booking-service] wallet rollback failed', rollbackError.message);
+          }
+        }
+
+        await this.supabase
+          .from('payments')
+          .update({
+            status: 'failed',
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_wallet',
+              failure_reason: message,
+              failed_at: new Date().toISOString(),
+            },
+          })
+          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+        await cancelPendingAppointment();
+
+        throw new Error(message || 'Wallet booking failed');
+      }
+    }
+
+    if (requestedPaymentMethod === 'hybrid') {
+      const walletReference = `WALLET-HYB-${Date.now()}-${appointment.id.slice(0, 8)}`;
+      const nowIso = new Date().toISOString();
+      let walletChargedAmount = 0;
+      let balanceAfter: number | null = null;
+
+      try {
+        let walletDebitData: any = null;
+        let walletDebitError: any = null;
+
+        const walletDebitResponse = await this.supabase.rpc(
+          'debit_patient_wallet_for_booking_up_to',
+          {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: amount,
+            p_narration: `Hybrid booking wallet debit (${appointment.id})`,
+          },
+        );
+
+        walletDebitData = walletDebitResponse.data;
+        walletDebitError = walletDebitResponse.error;
+
+        if (walletDebitError) {
+          const walletDebitMessage = String(walletDebitError.message || '');
+          const isMissingRpc = walletDebitMessage.includes('debit_patient_wallet_for_booking_up_to');
+          if (!isMissingRpc) {
+            throw new Error(walletDebitMessage || 'Hybrid wallet debit failed');
+          }
+
+          // Backward-compatible fallback when the newest migration has not been applied yet.
+          const { data: walletRow, error: walletLookupError } = await this.supabase
+            .from('patient_wallet')
+            .select('available_balance')
+            .eq('patient_id', input.patientId)
+            .maybeSingle();
+
+          if (walletLookupError) {
+            throw new Error(`Hybrid wallet fallback lookup failed: ${walletLookupError.message}`);
+          }
+
+          const fallbackChargeAmount = roundMoney(Math.max(Math.min(Number(walletRow?.available_balance || 0), amount), 0));
+          if (fallbackChargeAmount > 0) {
+            const fallbackDebitResponse = await this.supabase.rpc(
+              'debit_patient_wallet_for_booking',
+              {
+                p_patient_id: input.patientId,
+                p_appointment_id: appointment.id,
+                p_amount: fallbackChargeAmount,
+                p_narration: `Hybrid booking wallet debit (${appointment.id})`,
+              },
+            );
+            if (fallbackDebitResponse.error) {
+              throw new Error(fallbackDebitResponse.error.message || 'Hybrid wallet fallback debit failed');
+            }
+            walletDebitData = fallbackDebitResponse.data;
+          } else {
+            walletDebitData = {
+              charged_amount: 0,
+              balance_after: Number(walletRow?.available_balance || 0),
+            };
+          }
+        }
+
+        const walletDebit = (walletDebitData || {}) as Record<string, unknown>;
+        const chargedRaw = Number(walletDebit.charged_amount || 0);
+        const balanceAfterRaw = Number(walletDebit.balance_after);
+        walletChargedAmount = Number.isFinite(chargedRaw) && chargedRaw > 0 ? roundMoney(chargedRaw) : 0;
+        balanceAfter = Number.isFinite(balanceAfterRaw) ? roundMoney(balanceAfterRaw) : null;
+
+        if (walletChargedAmount > 0) {
+          const { error: walletPaymentInitError } = await this.supabase.from('payments').insert({
+            appointment_id: appointment.id,
+            patient_id: input.patientId,
+            amount: walletChargedAmount,
+            status: 'pending',
+            provider_reference: walletReference,
+            provider: 'wallet',
+            payment_reference: walletReference,
+            payment_method: 'wallet',
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_hybrid_wallet',
+              charged_amount: walletChargedAmount,
+              balance_after: balanceAfter,
+              stage: 'wallet_charged_pending_paystack',
+            },
+          });
+
+          if (walletPaymentInitError) {
+            throw new Error(`Failed to initialize hybrid wallet payment row: ${walletPaymentInitError.message}`);
+          }
+        }
+
+        const paystackAmountDue = roundMoney(Math.max(amount - walletChargedAmount, 0));
+
+        if (paystackAmountDue <= 0) {
+          if (walletChargedAmount <= 0) {
+            throw new Error('No payable amount was available for hybrid booking');
+          }
+
+          const { error: walletFinalizeError } = await this.supabase
+            .from('payments')
+            .update({
+              status: 'completed',
+              verified_at: nowIso,
+              metadata: {
+                ...basePaymentMetadata,
+                type: 'booking_hybrid_wallet',
+                charged_amount: walletChargedAmount,
+                balance_after: balanceAfter,
+                stage: 'wallet_only_completed',
+                verified_at: nowIso,
+              },
+            })
+            .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+          if (walletFinalizeError) {
+            throw new Error(`Failed to finalize hybrid wallet payment: ${walletFinalizeError.message}`);
+          }
+
+          try {
+            await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+          } catch (confirmError: any) {
+            throw new Error(`Failed to confirm wallet-only hybrid booking: ${confirmError?.message || confirmError}`);
+          }
+
+          await this.walletService.addPendingEarning({
+            id: appointment.id,
+            doctor_id: appointment.doctor_id,
+            final_price: amount,
+            price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+          });
+
+          return {
+            appointmentId: appointment.id,
+            finalPrice: amount,
+            slot,
+            paymentInitialization: null,
+            paymentMethod: 'wallet',
+            paidWithWallet: true,
+            walletChargedAmount,
+            paystackAmountDue: 0,
+          };
+        }
+
+        const paystackMetadata = {
+          ...basePaymentMetadata,
+          type: 'booking_hybrid_paystack',
+          total_amount: amount,
+          wallet_applied_amount: walletChargedAmount,
+          balance_due_amount: paystackAmountDue,
+          ...(walletChargedAmount > 0 ? { wallet_payment_reference: walletReference } : {}),
+        };
+
+        const paymentInitialization = await this.paymentService.createPaymentIntent({
+          appointmentId: appointment.id,
+          patientId: input.patientId,
+          doctorId: input.doctorId,
+          email: input.patientEmail,
+          amount: paystackAmountDue,
+          metadata: paystackMetadata,
+        });
+
+        return {
+          appointmentId: appointment.id,
+          finalPrice: amount,
+          slot,
+          paymentInitialization,
+          paymentMethod: 'hybrid',
+          paidWithWallet: false,
+          walletChargedAmount,
+          paystackAmountDue,
+        };
+      } catch (hybridFlowError) {
+        const message = hybridFlowError instanceof Error ? hybridFlowError.message : String(hybridFlowError);
+
+        if (walletChargedAmount > 0) {
+          const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: walletChargedAmount,
+            p_narration: `Rollback for failed hybrid booking (${appointment.id})`,
+          });
+          if (rollbackError) {
+            console.error('[booking-service] hybrid wallet rollback failed', rollbackError.message);
+          }
+        }
+
+        await this.supabase
+          .from('payments')
+          .update({
+            status: 'failed',
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_hybrid_wallet',
+              failure_reason: message,
+              failed_at: new Date().toISOString(),
+            },
+          })
+          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+        await cancelPendingAppointment();
+        throw new Error(message || 'Hybrid booking failed');
+      }
+    }
+
     const paymentInitialization = await this.paymentService.createPaymentIntent({
       appointmentId: appointment.id,
       patientId: input.patientId,
       doctorId: input.doctorId,
       email: input.patientEmail,
-      amount: Number(appointment.final_price || price.finalPrice),
-      metadata: {
-        appointment_date: slot.date,
-        appointment_time: slot.time,
-        duration_minutes: slot.durationMinutes,
-        consultation_type: consultationType,
-      },
+      amount,
+      metadata: basePaymentMetadata,
     });
 
     return {
       appointmentId: appointment.id,
-      finalPrice: Number(appointment.final_price || price.finalPrice),
+      finalPrice: amount,
       slot,
       paymentInitialization,
+      paymentMethod: 'paystack',
+      paidWithWallet: false,
+      walletChargedAmount: 0,
+      paystackAmountDue: amount,
     };
   }
 
@@ -306,7 +698,7 @@ export class BookingService {
       throw new Error(`Payment verification failed: ${verified.status}`);
     }
 
-    const expectedKobo = Math.round(Number(appointment.final_price || 0) * 100);
+    const expectedKobo = Math.round(Number(payment.amount || 0) * 100);
     if (verified.amountInKobo !== expectedKobo) {
       await this.failPayment(reference, 'Amount mismatch');
       throw new Error('Payment amount mismatch');
@@ -317,15 +709,40 @@ export class BookingService {
       verify_response: verified.raw,
     });
 
-    const { error: confirmError } = await this.supabase
-      .from('appointments')
-      .update({
-        status: 'pending_approval',
-        slot_locked_until: null,
-      })
-      .eq('id', appointment.id);
+    const paymentMetadata = (payment.metadata || {}) as Record<string, unknown>;
+    const paymentType = String(paymentMetadata.type || '').trim().toLowerCase();
+    const walletPaymentReference = String(paymentMetadata.wallet_payment_reference || '').trim();
+    if (paymentType === 'booking_hybrid_paystack' && walletPaymentReference) {
+      const nowIso = new Date().toISOString();
+      const walletAppliedRaw = Number(paymentMetadata.wallet_applied_amount || 0);
+      const walletApplied = Number.isFinite(walletAppliedRaw) ? roundMoney(walletAppliedRaw) : 0;
+      const walletPayment = await this.paymentService.getPaymentByReference(walletPaymentReference);
 
-    if (confirmError) throw new Error(`Failed to confirm appointment after payment: ${confirmError.message}`);
+      const { error: walletMarkSuccessError } = await this.supabase
+        .from('payments')
+        .update({
+          status: 'SUCCESS',
+          verified_at: nowIso,
+          metadata: {
+            ...(walletPayment?.metadata || {}),
+            type: 'booking_hybrid_wallet',
+            charged_amount: walletApplied,
+            stage: 'wallet_applied',
+            verified_at: nowIso,
+          },
+        })
+        .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`);
+
+      if (walletMarkSuccessError) {
+        throw new Error(`Failed to finalize hybrid wallet payment after paystack success: ${walletMarkSuccessError.message}`);
+      }
+    }
+
+    try {
+      await this.moveAppointmentToApprovalReady(appointment.id);
+    } catch (confirmError: any) {
+      throw new Error(`Failed to confirm appointment after payment: ${confirmError?.message || confirmError}`);
+    }
 
     await this.walletService.addPendingEarning({
       id: appointment.id,
@@ -344,32 +761,113 @@ export class BookingService {
     const payment = await this.paymentService.getPaymentByReference(reference);
     if (!payment) return { updated: false };
 
-    await this.paymentService.markPaymentFailed(reference, reason);
+    const paymentMetadata = (payment.metadata || {}) as Record<string, unknown>;
+    const paymentType = String(paymentMetadata.type || '').trim().toLowerCase();
+    const walletPaymentReference = String(paymentMetadata.wallet_payment_reference || '').trim();
+    const walletAppliedRaw = Number(paymentMetadata.wallet_applied_amount || 0);
+    const walletApplied = Number.isFinite(walletAppliedRaw) && walletAppliedRaw > 0
+      ? roundMoney(walletAppliedRaw)
+      : 0;
 
-    if (payment.appointment_id) {
+    const appointmentId = payment.appointment_id ? String(payment.appointment_id) : '';
+    let appointmentStatus = '';
+    let rollbackPatientId = payment.patient_id ? String(payment.patient_id) : '';
+
+    if (appointmentId) {
       const { data: appointment, error: appointmentLookupError } = await this.supabase
         .from('appointments')
-        .select('id, status')
-        .eq('id', payment.appointment_id)
+        .select('id, status, patient_id')
+        .eq('id', appointmentId)
         .maybeSingle();
 
       if (appointmentLookupError) {
         throw new Error(`Failed to load appointment status before expiring payment: ${appointmentLookupError.message}`);
       }
 
-      const status = normalizeAppointmentStatusRaw(appointment?.status);
-      if (status !== 'pending_payment') {
-        return { updated: true };
+      appointmentStatus = normalizeAppointmentStatusRaw(appointment?.status);
+      if (appointment?.patient_id) {
+        rollbackPatientId = String(appointment.patient_id);
+      }
+    }
+
+    if (
+      appointmentStatus === 'pending_approval'
+      || appointmentStatus === 'confirmed'
+      || appointmentStatus === 'in_progress'
+      || appointmentStatus === 'completed'
+    ) {
+      return { updated: true, ignored: true };
+    }
+
+    await this.paymentService.markPaymentFailed(reference, reason);
+
+    const canRollbackHybridWallet = paymentType === 'booking_hybrid_paystack'
+      && walletApplied > 0
+      && !!appointmentId
+      && !!rollbackPatientId
+      && (appointmentStatus === '' || appointmentStatus === 'pending_payment' || appointmentStatus === 'cancelled');
+
+    if (canRollbackHybridWallet) {
+      const { data: rollbackRows, error: rollbackLookupError } = await this.supabase
+        .from('patient_wallet_transactions')
+        .select('amount')
+        .eq('appointment_id', appointmentId)
+        .eq('direction', 'credit')
+        .eq('transaction_type', 'adjustment')
+        .eq('status', 'completed')
+        .ilike('narration', 'Hybrid payment rollback%');
+
+      if (rollbackLookupError) {
+        throw new Error(`Failed to inspect existing hybrid rollback rows: ${rollbackLookupError.message}`);
       }
 
-      const { error } = await this.supabase
-        .from('appointments')
-        .update({ status: 'cancelled', slot_locked_until: null })
-        .eq('id', payment.appointment_id);
+      const alreadyRolledBack = roundMoney((rollbackRows || []).reduce((sum: number, row: any) => (
+        sum + Number(row.amount || 0)
+      ), 0));
+      const rollbackOutstanding = roundMoney(Math.max(walletApplied - alreadyRolledBack, 0));
 
-      if (error) {
-        throw new Error(`Failed to cancel appointment after failed payment: ${error.message}`);
+      if (rollbackOutstanding > 0) {
+        const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
+          p_patient_id: rollbackPatientId,
+          p_appointment_id: appointmentId,
+          p_amount: rollbackOutstanding,
+          p_narration: `Hybrid payment rollback (${appointmentId})`,
+        });
+
+        if (rollbackError) {
+          throw new Error(`Failed to rollback hybrid wallet debit: ${rollbackError.message}`);
+        }
       }
+    }
+
+    if (paymentType === 'booking_hybrid_paystack' && walletPaymentReference) {
+      const walletPayment = await this.paymentService.getPaymentByReference(walletPaymentReference);
+      await this.supabase
+        .from('payments')
+        .update({
+          status: 'FAILED',
+          metadata: {
+            ...(walletPayment?.metadata || {}),
+            type: 'booking_hybrid_wallet',
+            stage: 'rolled_back_after_paystack_failure',
+            failure_reason: reason,
+            failed_at: new Date().toISOString(),
+          },
+        })
+        .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`);
+    }
+
+    if (!appointmentId || appointmentStatus !== 'pending_payment') {
+      return { updated: true };
+    }
+
+    const { error } = await this.supabase
+      .from('appointments')
+      .update({ status: 'cancelled', slot_locked_until: null })
+      .eq('id', appointmentId);
+
+    if (error) {
+      throw new Error(`Failed to cancel appointment after failed payment: ${error.message}`);
     }
 
     return { updated: true };
