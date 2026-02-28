@@ -111,7 +111,7 @@ export interface BookingInitiateRequest {
   preferredTime?: string;
   duration?: number;
   consultationType?: 'chat' | 'voice' | 'video';
-  paymentMethod?: 'paystack' | 'wallet';
+  paymentMethod?: 'paystack' | 'wallet' | 'hybrid';
   notes?: string;
 }
 
@@ -129,8 +129,10 @@ export interface BookingInitiateResponse {
     email: string;
     metadata: Record<string, unknown>;
   } | null;
-  paymentMethod: 'paystack' | 'wallet';
+  paymentMethod: 'paystack' | 'wallet' | 'hybrid';
   paidWithWallet: boolean;
+  walletChargedAmount?: number;
+  paystackAmountDue?: number;
 }
 
 export interface PatientWalletWithdrawalRequest {
