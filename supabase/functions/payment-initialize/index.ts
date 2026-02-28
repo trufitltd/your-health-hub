@@ -75,23 +75,76 @@ serve(async (req) => {
       console.warn('[payment-initialize] profile lookup failed, falling back to auth email:', profileError.message);
     }
 
-    // Get the appointment's consultation type and duration to determine price
-    // For now, use the original appointment_price if available, otherwise default price
-    const appointmentPrice = appointment.appointment_price || 5000; // Default price in naira
-
     const paymentService = new PaymentService(serviceClient);
+
+    const { data: existingPendingPaystack, error: pendingLookupError } = await serviceClient
+      .from('payments')
+      .select('amount, provider_reference, payment_reference, metadata')
+      .eq('appointment_id', appointmentId)
+      .eq('provider', 'paystack')
+      .in('status', ['PENDING', 'pending'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (pendingLookupError) {
+      console.warn('[payment-initialize] failed to lookup pending paystack payment:', pendingLookupError.message);
+    }
+
+    const existingReference = String(
+      existingPendingPaystack?.provider_reference || existingPendingPaystack?.payment_reference || '',
+    ).trim();
+
+    if (existingPendingPaystack && existingReference) {
+      const existingAmountInKobo = Math.round(Number(existingPendingPaystack.amount || 0) * 100);
+      return new Response(
+        JSON.stringify({
+          email: profile?.email || user.email || '',
+          amountInKobo: existingAmountInKobo,
+          reference: existingReference,
+          metadata: existingPendingPaystack.metadata || {},
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        },
+      );
+    }
+
+    const { data: walletDebits, error: walletDebitLookupError } = await serviceClient
+      .from('patient_wallet_transactions')
+      .select('amount')
+      .eq('appointment_id', appointmentId)
+      .eq('direction', 'debit')
+      .eq('transaction_type', 'booking_wallet_use')
+      .eq('status', 'completed');
+
+    if (walletDebitLookupError) {
+      console.warn('[payment-initialize] failed to lookup wallet debits for appointment:', walletDebitLookupError.message);
+    }
+
+    const walletDebitedTotal = Number((Math.round(((walletDebits || []).reduce((sum: number, row: any) => (
+      sum + Number(row.amount || 0)
+    ), 0)) * 100) / 100).toFixed(2));
+    const finalPrice = Number(appointment.final_price || appointment.appointment_price || 0);
+    const outstandingAmount = Number((Math.round(Math.max(finalPrice - walletDebitedTotal, 0) * 100) / 100).toFixed(2));
+    const appointmentPrice = outstandingAmount > 0 ? outstandingAmount : Number(appointment.final_price || appointment.appointment_price || 5000);
+    const safeAmount = appointmentPrice > 0 ? appointmentPrice : 5000;
+
     const paymentIntent = await paymentService.createPaymentIntent({
       appointmentId,
       patientId: patientId || user.id,
       doctorId: appointment.doctor_id,
       email: profile?.email || user.email || '',
-      amount: appointmentPrice,
+      amount: safeAmount,
       metadata: {
         appointment_id: appointmentId,
         patient_id: patientId || user.id,
         doctor_id: appointment.doctor_id,
         consultation_type: appointment.consultation_type || 'general',
         type: 'appointment_confirmation',
+        outstanding_amount: safeAmount,
+        wallet_applied_amount: walletDebitedTotal,
       },
     });
 

@@ -42,22 +42,44 @@ serve(async (req) => {
       });
     }
 
-    const payload = await req.json();
+    const payload = await req.json().catch(() => ({}));
+    const reference = String(payload?.reference || '').trim();
+    if (!reference) {
+      return new Response(JSON.stringify({ error: 'Missing payment reference' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     const serviceClient = createClient(supabaseUrl, serviceRoleKey);
+    const paymentService = new PaymentService(serviceClient);
+    const payment = await paymentService.getPaymentByReference(reference);
+    if (!payment) {
+      return new Response(JSON.stringify({ error: 'Payment not found for reference' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
-    const { data: profile, error: profileError } = await serviceClient
-      .from('profiles')
-      .select('email')
-      .eq('user_id', user.id)
-      .maybeSingle();
-    if (profileError) {
-      console.warn('[booking-initiate] profile lookup failed, falling back to auth email:', profileError.message);
+    if (String(payment.patient_id || '') !== user.id) {
+      return new Response(JSON.stringify({ error: 'Forbidden' }), {
+        status: 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const paymentType = String((payment.metadata as Record<string, unknown> | null)?.type || '')
+      .trim()
+      .toLowerCase();
+    if (paymentType === 'reschedule_upgrade') {
+      return new Response(JSON.stringify({ error: 'Use reschedule-payment-confirm for reschedule upgrades' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const pricingService = new PricingService(serviceClient);
     const availabilityService = new AvailabilityService(serviceClient);
-    const paymentService = new PaymentService(serviceClient);
     const walletService = new WalletService(serviceClient);
     const bookingService = new BookingService(
       serviceClient,
@@ -67,27 +89,23 @@ serve(async (req) => {
       walletService,
     );
 
-    const result = await bookingService.initiateBooking({
-      patientId: user.id,
-      patientEmail: profile?.email || user.email || '',
-      doctorId: payload.doctorId,
-      preferredDate: payload.preferredDate,
-      preferredTime: payload.preferredTime,
-      duration: payload.duration,
-      consultationType: payload.consultationType,
-      paymentMethod: payload.paymentMethod,
-      notes: payload.notes,
+    const result = await bookingService.finalizeSuccessfulPayment(reference, {
+      confirm_source: 'booking-payment-confirm',
     });
 
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({
+      success: true,
+      appointmentId: result.appointmentId,
+      alreadyProcessed: !!result.alreadyProcessed,
+    }), {
       status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('[booking-initiate] error', error);
+    console.error('[booking-payment-confirm] error', error);
     return new Response(
       JSON.stringify({
-        error: error instanceof Error ? error.message : 'Unknown booking error',
+        error: error instanceof Error ? error.message : 'Unknown confirmation error',
       }),
       {
         status: 400,

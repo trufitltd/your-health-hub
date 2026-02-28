@@ -40,6 +40,114 @@ const BUSY_STATUSES = new Set([
 export class AvailabilityService {
   constructor(private readonly supabase: SupabaseClient) {}
 
+  private async rollbackExpiredHybridWalletContribution(appointmentId: string, patientId: string) {
+    const { data: hybridPaymentRows, error: hybridPaymentLookupError } = await this.supabase
+      .from('payments')
+      .select('metadata, provider_reference, payment_reference')
+      .eq('appointment_id', appointmentId)
+      .eq('provider', 'paystack')
+      .in('status', ['PENDING', 'pending'])
+      .order('created_at', { ascending: false })
+      .limit(3);
+
+    if (hybridPaymentLookupError) {
+      throw new Error(`Failed to inspect pending hybrid payments for expired appointment: ${hybridPaymentLookupError.message}`);
+    }
+
+    const hybridPaystack = (hybridPaymentRows || []).find((row: any) => {
+      const metadata = (row.metadata || {}) as Record<string, unknown>;
+      return String(metadata.type || '').trim().toLowerCase() === 'booking_hybrid_paystack';
+    }) as { metadata?: Record<string, unknown> | null; provider_reference?: string | null; payment_reference?: string | null } | undefined;
+
+    if (!hybridPaystack) return;
+
+    const metadata = (hybridPaystack.metadata || {}) as Record<string, unknown>;
+    const walletAppliedRaw = Number(metadata.wallet_applied_amount || 0);
+    const walletApplied = Number.isFinite(walletAppliedRaw) && walletAppliedRaw > 0
+      ? Number((Math.round(walletAppliedRaw * 100) / 100).toFixed(2))
+      : 0;
+    const walletPaymentReference = String(metadata.wallet_payment_reference || '').trim();
+
+    if (walletApplied > 0) {
+      const { data: rollbackRows, error: rollbackLookupError } = await this.supabase
+        .from('patient_wallet_transactions')
+        .select('amount')
+        .eq('appointment_id', appointmentId)
+        .eq('direction', 'credit')
+        .eq('transaction_type', 'adjustment')
+        .eq('status', 'completed')
+        .ilike('narration', 'Hybrid payment rollback%');
+
+      if (rollbackLookupError) {
+        throw new Error(`Failed checking prior hybrid rollback transactions: ${rollbackLookupError.message}`);
+      }
+
+      const alreadyRolledBack = Number((Math.round(((rollbackRows || []).reduce((sum: number, row: any) => (
+        sum + Number(row.amount || 0)
+      ), 0)) * 100) / 100).toFixed(2));
+      const rollbackOutstanding = Number((Math.round(Math.max(walletApplied - alreadyRolledBack, 0) * 100) / 100).toFixed(2));
+
+      if (rollbackOutstanding > 0) {
+        const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
+          p_patient_id: patientId,
+          p_appointment_id: appointmentId,
+          p_amount: rollbackOutstanding,
+          p_narration: `Hybrid payment rollback (${appointmentId})`,
+        });
+
+        if (rollbackError) {
+          throw new Error(`Failed rolling back hybrid wallet amount for expired appointment: ${rollbackError.message}`);
+        }
+      }
+    }
+
+    if (walletPaymentReference) {
+      const { data: walletPayment } = await this.supabase
+        .from('payments')
+        .select('metadata')
+        .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      await this.supabase
+        .from('payments')
+        .update({
+          status: 'FAILED',
+          metadata: {
+            ...((walletPayment?.metadata || {}) as Record<string, unknown>),
+            type: 'booking_hybrid_wallet',
+            stage: 'rolled_back_after_expiry',
+            failed_at: new Date().toISOString(),
+          },
+        })
+        .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`);
+    }
+
+    const paystackReference = String(hybridPaystack.provider_reference || hybridPaystack.payment_reference || '').trim();
+    if (paystackReference) {
+      const { data: paystackPayment } = await this.supabase
+        .from('payments')
+        .select('metadata')
+        .or(`provider_reference.eq.${paystackReference},payment_reference.eq.${paystackReference}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      await this.supabase
+        .from('payments')
+        .update({
+          status: 'FAILED',
+          metadata: {
+            ...((paystackPayment?.metadata || {}) as Record<string, unknown>),
+            expired_at: new Date().toISOString(),
+            expiry_reason: 'Pending payment lock expired',
+          },
+        })
+        .or(`provider_reference.eq.${paystackReference},payment_reference.eq.${paystackReference}`);
+    }
+  }
+
   async getDurationPricingEnabled() {
     const { data, error } = await this.supabase
       .from('pricing_feature_flags')
@@ -58,7 +166,7 @@ export class AvailabilityService {
   async cleanupExpiredPendingLocks(doctorId?: string) {
     let query = this.supabase
       .from('appointments')
-      .select('id, status')
+      .select('id, status, patient_id')
       .lt('slot_locked_until', new Date().toISOString());
 
     if (doctorId) query = query.eq('doctor_id', doctorId);
@@ -69,12 +177,22 @@ export class AvailabilityService {
       return;
     }
 
-    const pendingPaymentIds = (data || [])
+    const pendingPaymentRows = (data || [])
       .filter((row: any) => isPendingPaymentAppointmentStatus(row.status))
-      .map((row: any) => row.id)
-      .filter(Boolean);
+      .filter((row: any) => !!row.id) as Array<{ id: string; patient_id: string | null }>;
 
-    if (pendingPaymentIds.length === 0) return;
+    if (pendingPaymentRows.length === 0) return;
+
+    for (const row of pendingPaymentRows) {
+      if (!row.patient_id) continue;
+      try {
+        await this.rollbackExpiredHybridWalletContribution(row.id, row.patient_id);
+      } catch (rollbackError: any) {
+        console.warn(`[AvailabilityService] Failed hybrid rollback for expired appointment ${row.id}:`, rollbackError?.message || rollbackError);
+      }
+    }
+
+    const pendingPaymentIds = pendingPaymentRows.map((row) => row.id);
 
     const { error: updateError } = await this.supabase
       .from('appointments')

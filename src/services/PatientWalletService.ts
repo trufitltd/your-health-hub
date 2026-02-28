@@ -1,5 +1,10 @@
 import { supabase } from '@/integrations/supabase/client';
-import type { PatientWallet, PatientWalletTransaction } from './marketplaceTypes';
+import type {
+  PatientWallet,
+  PatientWalletTransaction,
+  PatientWalletWithdrawalRequest,
+  PatientWalletWithdrawalRequestRow,
+} from './marketplaceTypes';
 
 export const PatientWalletService = {
   async getPatientWallet(patientId: string): Promise<PatientWallet | null> {
@@ -54,5 +59,26 @@ export const PatientWalletService = {
       doctor_reversal_amount: number;
       already_no_show?: boolean;
     };
+  },
+
+  async requestWalletWithdrawal(amount: number, narration?: string) {
+    const { data, error } = await supabase.rpc('request_patient_wallet_withdrawal', {
+      p_amount: amount,
+      p_narration: narration ?? null,
+    });
+
+    if (error) throw error;
+    return data as PatientWalletWithdrawalRequest;
+  },
+
+  async getWalletWithdrawalRequests(patientId: string): Promise<PatientWalletWithdrawalRequestRow[]> {
+    const { data, error } = await supabase
+      .from('patient_wallet_withdrawal_requests')
+      .select('id, patient_id, amount, status, narration, created_at, updated_at, sla_due_at, processed_by, processed_at, completed_at, admin_note, payout_reference')
+      .eq('patient_id', patientId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return (data || []) as PatientWalletWithdrawalRequestRow[];
   },
 };
