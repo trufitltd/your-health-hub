@@ -219,6 +219,7 @@ export class BookingService {
       .eq('name', consultationType)
       .maybeSingle();
 
+    const paymentMethod = input.paymentMethod === 'wallet' ? 'wallet' : 'paystack';
     const lockUntil = new Date(Date.now() + (5 * 60 * 1000)).toISOString();
 
     const breakdown = {
@@ -258,25 +259,167 @@ export class BookingService {
       throw new Error(`Failed creating pending appointment: ${appointmentError.message}`);
     }
 
+    const amount = Number(appointment.final_price || price.finalPrice);
+    const basePaymentMetadata = {
+      appointment_date: slot.date,
+      appointment_time: slot.time,
+      duration_minutes: slot.durationMinutes,
+      consultation_type: consultationType,
+    };
+
+    if (paymentMethod === 'wallet') {
+      const walletReference = `WALLET-${Date.now()}-${appointment.id.slice(0, 8)}`;
+      const nowIso = new Date().toISOString();
+
+      const { error: walletPaymentInitError } = await this.supabase.from('payments').insert({
+        appointment_id: appointment.id,
+        patient_id: input.patientId,
+        amount,
+        status: 'pending',
+        provider_reference: walletReference,
+        provider: 'wallet',
+        payment_reference: walletReference,
+        payment_method: 'wallet',
+        metadata: {
+          ...basePaymentMetadata,
+          type: 'booking_wallet',
+        },
+      });
+
+      if (walletPaymentInitError) {
+        await this.supabase
+          .from('appointments')
+          .update({ status: 'cancelled', slot_locked_until: null })
+          .eq('id', appointment.id);
+        throw new Error(`Failed to initialize wallet booking payment: ${walletPaymentInitError.message}`);
+      }
+
+      let chargedAmount = 0;
+
+      try {
+        const { data: walletDebitData, error: walletDebitError } = await this.supabase.rpc(
+          'debit_patient_wallet_for_booking',
+          {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: amount,
+            p_narration: `Appointment payment from wallet (${appointment.id})`,
+          },
+        );
+
+        if (walletDebitError) {
+          throw new Error(walletDebitError.message || 'Wallet debit failed');
+        }
+
+        const walletDebit = (walletDebitData || {}) as Record<string, unknown>;
+        chargedAmount = Number(walletDebit.charged_amount || 0);
+        const balanceAfterRaw = Number(walletDebit.balance_after);
+        const balanceAfter = Number.isFinite(balanceAfterRaw) ? balanceAfterRaw : null;
+
+        if (!Number.isFinite(chargedAmount) || chargedAmount <= 0) {
+          throw new Error('Wallet debit returned invalid charged amount');
+        }
+
+        const { error: walletPaymentSuccessError } = await this.supabase
+          .from('payments')
+          .update({
+            status: 'completed',
+            verified_at: nowIso,
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_wallet',
+              charged_amount: chargedAmount,
+              balance_after: balanceAfter,
+              verified_at: nowIso,
+            },
+          })
+          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+        if (walletPaymentSuccessError) {
+          throw new Error(`Failed to mark wallet payment success: ${walletPaymentSuccessError.message}`);
+        }
+
+        const { error: confirmError } = await this.supabase
+          .from('appointments')
+          .update({
+            status: 'pending_approval',
+            slot_locked_until: null,
+            payment_reference: walletReference,
+          })
+          .eq('id', appointment.id);
+
+        if (confirmError) {
+          throw new Error(`Failed to confirm wallet booking: ${confirmError.message}`);
+        }
+
+        await this.walletService.addPendingEarning({
+          id: appointment.id,
+          doctor_id: appointment.doctor_id,
+          final_price: amount,
+          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+        });
+
+        return {
+          appointmentId: appointment.id,
+          finalPrice: amount,
+          slot,
+          paymentInitialization: null,
+          paymentMethod: 'wallet',
+          paidWithWallet: true,
+        };
+      } catch (walletFlowError) {
+        const message = walletFlowError instanceof Error ? walletFlowError.message : String(walletFlowError);
+
+        if (chargedAmount > 0) {
+          const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
+            p_patient_id: input.patientId,
+            p_appointment_id: appointment.id,
+            p_amount: chargedAmount,
+            p_narration: `Rollback for failed wallet booking (${appointment.id})`,
+          });
+          if (rollbackError) {
+            console.error('[booking-service] wallet rollback failed', rollbackError.message);
+          }
+        }
+
+        await this.supabase
+          .from('payments')
+          .update({
+            status: 'failed',
+            metadata: {
+              ...basePaymentMetadata,
+              type: 'booking_wallet',
+              failure_reason: message,
+              failed_at: new Date().toISOString(),
+            },
+          })
+          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+
+        await this.supabase
+          .from('appointments')
+          .update({ status: 'cancelled', slot_locked_until: null })
+          .eq('id', appointment.id);
+
+        throw new Error(message || 'Wallet booking failed');
+      }
+    }
+
     const paymentInitialization = await this.paymentService.createPaymentIntent({
       appointmentId: appointment.id,
       patientId: input.patientId,
       doctorId: input.doctorId,
       email: input.patientEmail,
-      amount: Number(appointment.final_price || price.finalPrice),
-      metadata: {
-        appointment_date: slot.date,
-        appointment_time: slot.time,
-        duration_minutes: slot.durationMinutes,
-        consultation_type: consultationType,
-      },
+      amount,
+      metadata: basePaymentMetadata,
     });
 
     return {
       appointmentId: appointment.id,
-      finalPrice: Number(appointment.final_price || price.finalPrice),
+      finalPrice: amount,
       slot,
       paymentInitialization,
+      paymentMethod: 'paystack',
+      paidWithWallet: false,
     };
   }
 

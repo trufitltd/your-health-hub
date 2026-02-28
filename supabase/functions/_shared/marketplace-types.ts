@@ -42,6 +42,7 @@ export interface BookingInitiateInput {
   preferredTime?: string;
   duration?: number;
   consultationType?: 'chat' | 'voice' | 'video';
+  paymentMethod?: 'paystack' | 'wallet';
   notes?: string;
 }
 
@@ -62,7 +63,9 @@ export interface BookingInitiateResult {
   appointmentId: string;
   finalPrice: number;
   slot: SlotResult;
-  paymentInitialization: PaymentIntentResult;
+  paymentInitialization: PaymentIntentResult | null;
+  paymentMethod: 'paystack' | 'wallet';
+  paidWithWallet: boolean;
 }
 
 export interface PricePreviewInput {

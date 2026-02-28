@@ -111,6 +111,7 @@ export interface BookingInitiateRequest {
   preferredTime?: string;
   duration?: number;
   consultationType?: 'chat' | 'voice' | 'video';
+  paymentMethod?: 'paystack' | 'wallet';
   notes?: string;
 }
 
@@ -127,7 +128,17 @@ export interface BookingInitiateResponse {
     amountInKobo: number;
     email: string;
     metadata: Record<string, unknown>;
-  };
+  } | null;
+  paymentMethod: 'paystack' | 'wallet';
+  paidWithWallet: boolean;
+}
+
+export interface PatientWalletWithdrawalRequest {
+  request_id: string;
+  patient_id: string;
+  status: 'pending' | 'approved' | 'rejected' | 'paid' | 'cancelled';
+  amount: number;
+  balance_after: number;
 }
 
 export interface PricePreviewRequest {
