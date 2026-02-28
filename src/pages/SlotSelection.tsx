@@ -381,29 +381,79 @@ export default function SlotSelection() {
         throw new Error('Missing payment initialization response');
       }
 
+      let paymentCompleted = false;
       initializePayment({
         email: paymentInit.email || user.email || '',
         amount: paymentInit.amountInKobo,
         reference: paymentInit.reference,
         publicKey: paystackPublicKey,
         metadata: paymentInit.metadata,
-        onSuccess: () => {
-          setIsConfirming(false);
-          toast({
-            title: t('booking.paymentSuccessTitle', 'Payment successful'),
-            description: walletChargedAmount > 0
-              ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
-              : t(
-                'slotSelection.toast.appointmentPendingApproval',
-                'Payment successful. Your appointment is pending doctor approval.',
-              ),
-          });
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit.reference || '').trim();
 
-          setTimeout(() => {
-            navigate('/patient-portal?tab=appointments');
-          }, 800);
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
+                : confirmResult.alreadyProcessed
+                ? t(
+                  'slotSelection.toast.appointmentAlreadyProcessed',
+                  'This payment was already processed and your appointment remains pending doctor approval.',
+                )
+                : t(
+                  'slotSelection.toast.appointmentPendingApproval',
+                  'Payment successful. Your appointment is pending doctor approval.',
+                ),
+            });
+          } catch (confirmErr: any) {
+            console.warn('[slot-selection] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment will appear after payment confirmation processing completes.`
+                : t(
+                  'slotSelection.toast.paymentSuccessPendingWebhook',
+                  'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+                ),
+            });
+          } finally {
+            setIsConfirming(false);
+            setTimeout(() => {
+              navigate('/patient-portal?tab=appointments');
+            }, 800);
+          }
         },
         onClose: () => {
+          if (paymentCompleted) return;
           setIsConfirming(false);
           toast({
             title: t('booking.paymentCancelledTitle', 'Payment cancelled'),

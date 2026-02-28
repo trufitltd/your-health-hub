@@ -11,6 +11,102 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-paystack-signature',
 };
 
+const roundMoney = (value: number) => Number((Math.round(value * 100) / 100).toFixed(2));
+
+async function rollbackHybridRescheduleWallet(
+  serviceClient: InstanceType<typeof createClient>,
+  payment: Record<string, any>,
+  reason: string,
+) {
+  const metadata = (payment.metadata || {}) as Record<string, unknown>;
+  const paymentMode = String(metadata.payment_mode || '').trim().toLowerCase();
+  const walletPaymentReference = String(metadata.wallet_payment_reference || '').trim();
+  const walletAppliedRaw = Number(metadata.wallet_applied_amount || 0);
+  const walletApplied = Number.isFinite(walletAppliedRaw) && walletAppliedRaw > 0
+    ? roundMoney(walletAppliedRaw)
+    : 0;
+
+  if (paymentMode !== 'hybrid' || walletApplied <= 0) return 0;
+
+  const appointmentId = String(payment.appointment_id || '').trim();
+  const patientId = String(payment.patient_id || '').trim();
+  if (!appointmentId || !patientId) return 0;
+
+  const { data: rollbackRows, error: rollbackLookupError } = await serviceClient
+    .from('patient_wallet_transactions')
+    .select('amount')
+    .eq('appointment_id', appointmentId)
+    .eq('patient_id', patientId)
+    .eq('direction', 'credit')
+    .eq('transaction_type', 'adjustment')
+    .eq('status', 'completed')
+    .ilike('narration', 'Reschedule hybrid payment rollback%');
+
+  if (rollbackLookupError) {
+    throw new Error(`Failed checking existing hybrid reschedule rollback rows: ${rollbackLookupError.message}`);
+  }
+
+  const alreadyRolledBack = roundMoney((rollbackRows || []).reduce((sum: number, row: any) => (
+    sum + Number(row.amount || 0)
+  ), 0));
+  const rollbackOutstanding = roundMoney(Math.max(walletApplied - alreadyRolledBack, 0));
+
+  if (rollbackOutstanding > 0) {
+    const { error: rollbackError } = await serviceClient.rpc('credit_patient_wallet_adjustment', {
+      p_patient_id: patientId,
+      p_appointment_id: appointmentId,
+      p_amount: rollbackOutstanding,
+      p_narration: `Reschedule hybrid payment rollback (${appointmentId})`,
+    });
+
+    if (rollbackError) {
+      throw new Error(`Failed to rollback hybrid reschedule wallet debit: ${rollbackError.message}`);
+    }
+  }
+
+  if (walletPaymentReference) {
+    const nowIso = new Date().toISOString();
+    const { data: walletPayment } = await serviceClient
+      .from('payments')
+      .select('metadata')
+      .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    await serviceClient
+      .from('payments')
+      .update({
+        status: 'FAILED',
+        metadata: {
+          ...((walletPayment?.metadata || {}) as Record<string, unknown>),
+          type: 'reschedule_hybrid_wallet',
+          payment_mode: 'hybrid',
+          stage: 'rolled_back_after_paystack_failure',
+          failure_reason: reason,
+          failed_at: nowIso,
+        },
+      })
+      .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`);
+  }
+
+  return rollbackOutstanding;
+}
+
+async function failReschedulePayment(
+  serviceClient: InstanceType<typeof createClient>,
+  reference: string,
+  reason: string,
+  paymentService: PaymentService,
+) {
+  const payment = await paymentService.getPaymentByReference(reference);
+  if (!payment) return { updated: false };
+
+  await paymentService.markPaymentFailed(reference, reason);
+  await rollbackHybridRescheduleWallet(serviceClient, payment as Record<string, any>, reason);
+  return { updated: true };
+}
+
 async function finalizeReschedulePayment(
   serviceClient: InstanceType<typeof createClient>,
   reference: string,
@@ -20,6 +116,16 @@ async function finalizeReschedulePayment(
   const payment = await paymentService.getPaymentByReference(reference);
   if (!payment) throw new Error('Payment not found for reference');
   const paymentMetadata = (payment.metadata || {}) as Record<string, unknown>;
+  const paymentMode = String(paymentMetadata.payment_mode || '').trim().toLowerCase();
+  const walletPaymentReference = String(paymentMetadata.wallet_payment_reference || '').trim();
+  const walletAppliedRaw = Number(paymentMetadata.wallet_applied_amount || 0);
+  const walletAppliedAmount = Number.isFinite(walletAppliedRaw) && walletAppliedRaw > 0
+    ? roundMoney(walletAppliedRaw)
+    : 0;
+  const totalUpgradeRaw = Number(paymentMetadata.total_upgrade_amount || 0);
+  const totalUpgradeAmount = Number.isFinite(totalUpgradeRaw) && totalUpgradeRaw > 0
+    ? roundMoney(totalUpgradeRaw)
+    : roundMoney(Number(payment.amount || 0) + walletAppliedAmount);
   if (
     String(payment.status || '').trim().toLowerCase() === 'success' &&
     typeof paymentMetadata.reschedule_finalized_at === 'string'
@@ -27,7 +133,7 @@ async function finalizeReschedulePayment(
     return {
       appointmentId: payment.appointment_id,
       type: 'reschedule_upgrade',
-      upgradeAmount: Number(payment.amount || 0),
+      upgradeAmount: totalUpgradeAmount,
       alreadyFinalized: true,
     };
   }
@@ -46,17 +152,24 @@ async function finalizeReschedulePayment(
   // Verify payment with Paystack
   const verified = await paymentService.verifyPayment(reference);
   if (!verified.ok) {
-    await paymentService.markPaymentFailed(reference, `Verification failed with status ${verified.status}`);
+    await failReschedulePayment(
+      serviceClient,
+      reference,
+      `Verification failed with status ${verified.status}`,
+      paymentService,
+    );
     throw new Error(`Payment verification failed: ${verified.status}`);
   }
-  const upgradeAmount = Number(payment.amount || 0);
+  const paystackAmount = roundMoney(Number(payment.amount || 0));
   const verifiedAmount = Number((Number(verified.amountInKobo || 0) / 100).toFixed(2));
-  if (Math.abs(verifiedAmount - upgradeAmount) > 0.01) {
-    await paymentService.markPaymentFailed(
+  if (Math.abs(verifiedAmount - paystackAmount) > 0.01) {
+    await failReschedulePayment(
+      serviceClient,
       reference,
-      `Verification amount mismatch. expected=${upgradeAmount}, got=${verifiedAmount}`,
+      `Verification amount mismatch. expected=${paystackAmount}, got=${verifiedAmount}`,
+      paymentService,
     );
-    throw new Error(`Payment verification amount mismatch: expected ${upgradeAmount}, got ${verifiedAmount}`);
+    throw new Error(`Payment verification amount mismatch: expected ${paystackAmount}, got ${verifiedAmount}`);
   }
 
   // Mark payment as successful
@@ -64,6 +177,37 @@ async function finalizeReschedulePayment(
     ...paystackVerification,
     verify_response: verified.raw,
   });
+
+  if (paymentMode === 'hybrid' && walletPaymentReference) {
+    const nowIso = new Date().toISOString();
+    const { data: walletPayment } = await serviceClient
+      .from('payments')
+      .select('metadata')
+      .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { error: walletMarkSuccessError } = await serviceClient
+      .from('payments')
+      .update({
+        status: 'SUCCESS',
+        verified_at: nowIso,
+        metadata: {
+          ...((walletPayment?.metadata || {}) as Record<string, unknown>),
+          type: 'reschedule_hybrid_wallet',
+          payment_mode: 'hybrid',
+          charged_amount: walletAppliedAmount,
+          stage: 'wallet_applied',
+          verified_at: nowIso,
+        },
+      })
+      .or(`provider_reference.eq.${walletPaymentReference},payment_reference.eq.${walletPaymentReference}`);
+
+    if (walletMarkSuccessError) {
+      throw new Error(`Failed to finalize hybrid reschedule wallet payment: ${walletMarkSuccessError.message}`);
+    }
+  }
 
   // For reschedule upgrades, keep request pending for doctor approval.
   // We only persist the paid proposed values here; we do not mutate the live
@@ -115,7 +259,7 @@ async function finalizeReschedulePayment(
 
   // Add doctor's earning for the upgrade amount
   const walletService = new WalletService(serviceClient);
-  if (upgradeAmount > 0) {
+  if (totalUpgradeAmount > 0) {
     const { data: existingWalletCredit, error: walletLookupError } = await serviceClient
       .from('doctor_wallet_transactions')
       .select('id')
@@ -132,9 +276,9 @@ async function finalizeReschedulePayment(
       await walletService.addPendingEarning({
         id: appointment.id,
         doctor_id: appointment.doctor_id,
-        final_price: upgradeAmount,
+        final_price: totalUpgradeAmount,
         price_breakdown: {
-          upgrade_amount: upgradeAmount,
+          upgrade_amount: totalUpgradeAmount,
           upgrade_reason: 'Reschedule upgrade payment',
         },
       });
@@ -150,6 +294,10 @@ async function finalizeReschedulePayment(
         metadata: {
           ...(paymentAfterSuccess.metadata || {}),
           reschedule_finalized_at: finalizedAt,
+          payment_mode: paymentMode || 'paystack',
+          total_upgrade_amount: totalUpgradeAmount,
+          wallet_applied_amount: walletAppliedAmount,
+          balance_due_amount: paystackAmount,
         },
       })
       .or(`provider_reference.eq.${reference},payment_reference.eq.${reference}`);
@@ -158,7 +306,7 @@ async function finalizeReschedulePayment(
   return {
     appointmentId: appointment.id,
     type: 'reschedule_upgrade',
-    upgradeAmount,
+    upgradeAmount: totalUpgradeAmount,
     requestStatus: 'pending',
   };
 }
@@ -214,7 +362,9 @@ serve(async (req) => {
     if (eventName === 'charge.success') {
       // Fetch payment to check if it's a reschedule payment
       const payment = await paymentService.getPaymentByReference(reference);
-      const paymentType = payment?.metadata?.type;
+      const paymentType = String((payment?.metadata as Record<string, unknown> | undefined)?.type || '')
+        .trim()
+        .toLowerCase();
 
       if (paymentType === 'reschedule_upgrade') {
         // Handle reschedule payment
@@ -234,7 +384,17 @@ serve(async (req) => {
     }
 
     if (eventName === 'charge.failed') {
-      await bookingService.failPayment(reference, 'Paystack charge.failed webhook');
+      const payment = await paymentService.getPaymentByReference(reference);
+      const paymentType = String((payment?.metadata as Record<string, unknown> | undefined)?.type || '')
+        .trim()
+        .toLowerCase();
+
+      if (paymentType === 'reschedule_upgrade') {
+        await failReschedulePayment(serviceClient, reference, 'Paystack charge.failed webhook', paymentService);
+      } else {
+        await bookingService.failPayment(reference, 'Paystack charge.failed webhook');
+      }
+
       return new Response(JSON.stringify({ success: true, event: eventName, marked: 'failed' }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
