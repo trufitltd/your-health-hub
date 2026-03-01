@@ -1234,6 +1234,12 @@ const DoctorPortal = () => {
       ? String(apt.reschedule_proposed_time || apt.time)
       : apt.time
   );
+  const getCalendarDisplayStatus = useCallback((apt: {
+    status: string;
+    reschedule_request_status?: string | null;
+  }) => (
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending' ? 'pending_approval' : apt.status
+  ), []);
   const hasEffectiveAppointmentTimePassed = (apt: {
     date: string;
     time: string;
@@ -1649,16 +1655,23 @@ const DoctorPortal = () => {
   const calendarStatusLegend = useMemo(() => {
     const seen = new Set<string>();
     return filteredAppointmentsByStatus
-      .filter((apt) => {
-        if (seen.has(apt.status)) return false;
-        seen.add(apt.status);
+      .map((apt) => getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      }))
+      .filter((status) => {
+        if (seen.has(status)) return false;
+        seen.add(status);
         return true;
       })
-      .map((apt) => apt.status);
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, getCalendarDisplayStatus]);
   const hasPastConfirmedInCalendar = useMemo(
-    () => filteredAppointmentsByStatus.some((apt) => apt.status === 'confirmed' && hasAppointmentTimePassed(apt)),
-    [filteredAppointmentsByStatus],
+    () => appointmentStatusFilter === 'confirmed' && filteredAppointmentsByStatus.some(
+      (apt) => apt.status === 'confirmed'
+        && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })
+        && hasAppointmentTimePassed(apt),
+    ),
+    [filteredAppointmentsByStatus, appointmentStatusFilter],
   );
   const hasPendingRescheduleInCalendar = useMemo(
     () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
@@ -1707,7 +1720,14 @@ const DoctorPortal = () => {
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
       const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
-      const isPastConfirmed = apt.status === 'confirmed' && hasAppointmentTimePassed(apt);
+      const displayStatus = getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      });
+      const isPastConfirmed = appointmentStatusFilter === 'confirmed'
+        && apt.status === 'confirmed'
+        && !pendingReschedule
+        && hasAppointmentTimePassed(apt);
       const eventDate = getCalendarAppointmentDate(apt as {
         date: string;
         reschedule_request_status?: string | null;
@@ -1722,7 +1742,7 @@ const DoctorPortal = () => {
         ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
         : isPastConfirmed
         ? PAST_CONFIRMED_CALENDAR_STYLE
-        : (APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[displayStatus as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       return {
         id: apt.id,
         title: apt.patient_name || 'Unknown Patient',
@@ -1732,14 +1752,15 @@ const DoctorPortal = () => {
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
-          status: apt.status,
+          status: displayStatus,
+          sourceStatus: apt.status,
           appointmentDate: eventDate,
           isPastConfirmed,
           isPendingReschedule: pendingReschedule,
         }
       };
     });
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, appointmentStatusFilter, getCalendarDisplayStatus]);
 
   const calendarRenderKey = `${appointmentStatusFilter}-${isMobileAppointmentsLayout ? 'mobile' : 'desktop'}-${filteredAppointmentsByStatus[0]
     ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
