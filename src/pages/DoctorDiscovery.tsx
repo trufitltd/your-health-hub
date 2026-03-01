@@ -38,6 +38,7 @@ interface Doctor {
   total_reviews?: number;
   experience_years?: number;
   bio?: string;
+  bio_translations?: Record<string, string> | null;
   preferred_consultation_languages?: string[] | null;
   is_active?: boolean;
   online_status?: 'online' | 'away' | 'offline';
@@ -101,7 +102,7 @@ const formatConsultationLanguageLabel = (value: string) => {
 
 export default function DoctorDiscovery() {
   const { user } = useAuth();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { formatDate, formatTime, formatNumber, formatCurrency } = useLocaleFormatter();
@@ -296,6 +297,7 @@ export default function DoctorDiscovery() {
           city,
           state,
           bio,
+          bio_translations,
           experience,
           preferred_consultation_languages
         `)
@@ -315,6 +317,7 @@ export default function DoctorDiscovery() {
         city: string;
         state: string;
         bio?: string;
+        bio_translations?: Record<string, unknown> | null;
         experience?: string | null;
         preferred_consultation_languages?: string[] | null;
       }> = [];
@@ -385,6 +388,18 @@ export default function DoctorDiscovery() {
               .map((language) => normalizeConsultationLanguage(String(language)))
               .filter(Boolean)
             : [];
+          const localizedBioTranslations = (doctor.bio_translations && typeof doctor.bio_translations === 'object')
+            ? Object.entries(doctor.bio_translations as Record<string, unknown>).reduce<Record<string, string>>(
+              (acc, [code, value]) => {
+                if (typeof value !== 'string') return acc;
+                const trimmed = value.trim();
+                if (!trimmed) return acc;
+                acc[code.toLowerCase()] = trimmed;
+                return acc;
+              },
+              {}
+            )
+            : {};
 
           return {
             ...doctor,
@@ -392,6 +407,7 @@ export default function DoctorDiscovery() {
             total_reviews: ratings.length,
             experience_years: doctor.experience ? Number(doctor.experience) : null,
             rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
+            bio_translations: localizedBioTranslations,
             preferred_consultation_languages: preferredConsultationLanguages,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
@@ -602,6 +618,22 @@ export default function DoctorDiscovery() {
       return `From ${startText}`;
     }
     return null;
+  };
+
+  const getLocalizedDoctorBio = (doctor: Doctor) => {
+    const fallbackBio = doctor.bio?.trim() || '';
+    if (language === 'en') return fallbackBio;
+    const translations = doctor.bio_translations;
+    if (!translations || typeof translations !== 'object') return fallbackBio;
+    const localized = translations[language];
+    if (typeof localized === 'string' && localized.trim().length > 0) {
+      return localized.trim();
+    }
+    const englishTranslation = translations.en;
+    if (typeof englishTranslation === 'string' && englishTranslation.trim().length > 0) {
+      return englishTranslation.trim();
+    }
+    return fallbackBio;
   };
 
   const handleBookNow = (doctor: Doctor) => {
@@ -1012,115 +1044,118 @@ export default function DoctorDiscovery() {
               </Card>
             ) : (
               <div className="grid md:grid-cols-3 gap-6">
-                {filteredDoctors.map(doctor => (
-                  <motion.div
-                    key={doctor.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
-                      <CardContent className="p-6 flex-1 flex flex-col">
-                        <div className="flex items-start justify-between mb-4">
-                            <div className="relative">
-                              <Avatar className="w-16 h-16">
-                                <AvatarImage src={doctor.profile_picture_url} />
-                                <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                                  {doctor.full_name.split(' ').map(n => n[0]).join('')}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
-                            </div>
-                            <div className="flex gap-2 flex-col">
-                              <Badge variant="outline" className="text-xs">
-                                {doctor.experience_years
-                                  ? `${doctor.experience_years}y exp`
-                                  : `${t('specialists.card.experience', 'Experience')} ${t('specialists.defaults.notAvailable', 'N/A')}`}
-                              </Badge>
-                              <Badge className="text-xs bg-blue-100 text-blue-800">
-                                {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
-                              </Badge>
-                              {!doctor.is_active && (
-                                <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
-                                  Unavailable
+                {filteredDoctors.map(doctor => {
+                  const localizedDoctorBio = getLocalizedDoctorBio(doctor);
+                  return (
+                    <motion.div
+                      key={doctor.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
+                        <CardContent className="p-6 flex-1 flex flex-col">
+                          <div className="flex items-start justify-between mb-4">
+                              <div className="relative">
+                                <Avatar className="w-16 h-16">
+                                  <AvatarImage src={doctor.profile_picture_url} />
+                                  <AvatarFallback className="bg-primary/10 text-primary text-lg">
+                                    {doctor.full_name.split(' ').map(n => n[0]).join('')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
+                              </div>
+                              <div className="flex gap-2 flex-col">
+                                <Badge variant="outline" className="text-xs">
+                                  {doctor.experience_years
+                                    ? `${doctor.experience_years}y exp`
+                                    : `${t('specialists.card.experience', 'Experience')} ${t('specialists.defaults.notAvailable', 'N/A')}`}
                                 </Badge>
-                              )}
-                            </div>
-                          </div>
-
-                          <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
-                          <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
-                          {doctor.bio && (
-                            <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{doctor.bio}</p>
-                          )}
-                          {doctor.preferred_consultation_languages && doctor.preferred_consultation_languages.length > 0 && (
-                            <div className="mb-3">
-                              <p className="text-xs text-muted-foreground mb-2">Consultation Languages</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                {doctor.preferred_consultation_languages.slice(0, 3).map((language, index) => (
-                                  <Badge key={`${doctor.id}-language-${language}-${index}`} variant="secondary" className="text-[11px]">
-                                    {formatConsultationLanguageLabel(language)}
-                                  </Badge>
-                                ))}
-                                {doctor.preferred_consultation_languages.length > 3 && (
-                                  <Badge variant="outline" className="text-[11px]">
-                                    +{doctor.preferred_consultation_languages.length - 3}
+                                <Badge className="text-xs bg-blue-100 text-blue-800">
+                                  {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
+                                </Badge>
+                                {!doctor.is_active && (
+                                  <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                    Unavailable
                                   </Badge>
                                 )}
                               </div>
                             </div>
-                          )}
 
-                          <div className="space-y-2 mb-4 flex-1">
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <MapPin className="w-4 h-4" />
-                              {doctor.city}, {doctor.state}
-                            </div>
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Award className="w-4 h-4" />
-                              {doctor.hospital_affiliation}
-                            </div>
-                          </div>
-
-                          {doctor.rating !== undefined && (
-                            <div className="flex items-center gap-2 mb-4">
-                              <div className="flex gap-1">
-                                {renderStars(doctor.rating)}
+                            <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
+                            <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
+                            {localizedDoctorBio && (
+                              <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{localizedDoctorBio}</p>
+                            )}
+                            {doctor.preferred_consultation_languages && doctor.preferred_consultation_languages.length > 0 && (
+                              <div className="mb-3">
+                                <p className="text-xs text-muted-foreground mb-2">Consultation Languages</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {doctor.preferred_consultation_languages.slice(0, 3).map((language, index) => (
+                                    <Badge key={`${doctor.id}-language-${language}-${index}`} variant="secondary" className="text-[11px]">
+                                      {formatConsultationLanguageLabel(language)}
+                                    </Badge>
+                                  ))}
+                                  {doctor.preferred_consultation_languages.length > 3 && (
+                                    <Badge variant="outline" className="text-[11px]">
+                                      +{doctor.preferred_consultation_languages.length - 3}
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
-                              <span className="text-sm font-medium">{doctor.rating?.toFixed(1)}</span>
-                              <span className="text-xs text-muted-foreground">({doctor.total_reviews})</span>
+                            )}
+
+                            <div className="space-y-2 mb-4 flex-1">
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <MapPin className="w-4 h-4" />
+                                {doctor.city}, {doctor.state}
+                              </div>
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Award className="w-4 h-4" />
+                                {doctor.hospital_affiliation}
+                              </div>
                             </div>
-                          )}
 
-                          <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                            <p className="text-sm font-semibold text-success">{formatCurrency(getConsultationFee(doctor))}</p>
-                            <p className="text-xs text-muted-foreground">Consultation Fee</p>
-                          </div>
+                            {doctor.rating !== undefined && (
+                              <div className="flex items-center gap-2 mb-4">
+                                <div className="flex gap-1">
+                                  {renderStars(doctor.rating)}
+                                </div>
+                                <span className="text-sm font-medium">{doctor.rating?.toFixed(1)}</span>
+                                <span className="text-xs text-muted-foreground">({doctor.total_reviews})</span>
+                              </div>
+                            )}
 
-                          <div className="flex gap-2 pt-4 border-t">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => handleViewProfile(doctor)}
-                              disabled={!doctor.is_active}
-                            >
-                              View Profile
-                            </Button>
-                            <Button
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => handleBookNow(doctor)}
-                              disabled={!doctor.is_active}
-                            >
-                              {doctor.is_active ? 'Book Now' : 'Unavailable'}
-                            </Button>
-                          </div>
-                        </CardContent>
+                            <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
+                              <p className="text-sm font-semibold text-success">{formatCurrency(getConsultationFee(doctor))}</p>
+                              <p className="text-xs text-muted-foreground">Consultation Fee</p>
+                            </div>
+
+                            <div className="flex gap-2 pt-4 border-t">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => handleViewProfile(doctor)}
+                                disabled={!doctor.is_active}
+                              >
+                                View Profile
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => handleBookNow(doctor)}
+                                disabled={!doctor.is_active}
+                              >
+                                {doctor.is_active ? 'Book Now' : 'Unavailable'}
+                              </Button>
+                            </div>
+                          </CardContent>
                       </Card>
                     </motion.div>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
+            )}
           </motion.div>
         </div>
 
@@ -1201,7 +1236,7 @@ export default function DoctorDiscovery() {
                   <div>
                     <h3 className="font-semibold mb-3">Professional Biography</h3>
                     <p className="text-muted-foreground leading-relaxed">
-                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
+                      {getLocalizedDoctorBio(selectedDoctor) || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
                     </p>
                   </div>
 
