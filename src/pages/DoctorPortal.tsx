@@ -205,8 +205,12 @@ const DoctorPortal = () => {
     notes: string | null;
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all'>('confirmed');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all' | 'closed'>('confirmed');
   const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [isMobileAppointmentsLayout, setIsMobileAppointmentsLayout] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
@@ -1374,6 +1378,10 @@ const DoctorPortal = () => {
     if ((apt as any).date && (apt as any).time) return !hasAppointmentTimePassed(apt as { date: string; time: string });
     return true;
   }).length;
+  const closedCount = doctorVisibleAppointments.filter((apt) =>
+    (apt.status === 'cancelled' || apt.status === 'no_show') &&
+    !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+  ).length;
   const walletAvailableBalance = Number(doctorWallet?.available_balance || 0);
   const walletPendingBalance = Number(doctorWallet?.pending_balance || 0);
   const pendingWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'pending').length;
@@ -1412,6 +1420,13 @@ const DoctorPortal = () => {
       case 'no_show':
         filtered = doctorVisibleAppointments.filter(
           (apt) => apt.status === 'no_show' && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'closed':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) =>
+            (apt.status === 'cancelled' || apt.status === 'no_show') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
         );
         break;
       case 'all':
@@ -1454,6 +1469,25 @@ const DoctorPortal = () => {
       return dateTimeB - dateTimeA;
     });
   }, [doctorVisibleAppointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobileAppointmentsLayout(event.matches);
+    };
+
+    setIsMobileAppointmentsLayout(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
 
   useEffect(() => {
     if (appointmentStatusFilter === 'in_progress') {
@@ -1586,7 +1620,7 @@ const DoctorPortal = () => {
     });
   }, [filteredAppointmentsByStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]
+  const calendarRenderKey = `${appointmentStatusFilter}-${isMobileAppointmentsLayout ? 'mobile' : 'desktop'}-${filteredAppointmentsByStatus[0]
     ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
       date: string;
       reschedule_request_status?: string | null;
@@ -1712,15 +1746,23 @@ const DoctorPortal = () => {
               center: 'title',
               right: 'dayGridMonth,timeGridWeek,timeGridDay'
             }}
+            buttonText={{
+              today: t('common.today', 'Today'),
+              month: t('patientPortal.calendar.monthShort', 'Month'),
+              week: t('patientPortal.calendar.weekShort', 'Week'),
+              day: t('patientPortal.calendar.dayShort', 'Day'),
+            }}
             events={fullCalendarEvents}
-            dayMaxEvents={2}
+            dayMaxEvents={isMobileAppointmentsLayout ? 2 : 3}
             eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
             slotMinTime="06:00:00"
             slotMaxTime="23:00:00"
             slotDuration="00:30:00"
             allDaySlot={false}
             nowIndicator
+            stickyHeaderDates
             height="auto"
+            expandRows
             dayCellDidMount={handleCalendarDayCellMount}
             eventDidMount={handleCalendarEventMount}
             dateClick={(arg: DateClickArg) => {
@@ -2384,6 +2426,9 @@ const DoctorPortal = () => {
     setWithdrawalNarration('');
   };
 
+  const appointmentViewToggleButtonBaseClass = 'h-8 flex-1 sm:flex-none gap-1';
+  const appointmentStatusTriggerClass = 'relative h-10 w-full border border-transparent px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-background/70 sm:text-sm data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:border-border data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border';
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -2921,11 +2966,14 @@ const DoctorPortal = () => {
                         <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
                         <CardDescription>{t('doctorPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
-                      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                      <div className="inline-flex w-full sm:w-auto items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
                         <Button
                           size="sm"
-                          variant={appointmentViewMode === 'list' ? 'default' : 'ghost'}
-                          className="h-8 gap-1"
+                          variant="ghost"
+                          className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'list'
+                            ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                            }`}
                           onClick={() => setAppointmentViewMode('list')}
                         >
                           <List className="w-4 h-4" />
@@ -2933,8 +2981,11 @@ const DoctorPortal = () => {
                         </Button>
                         <Button
                           size="sm"
-                          variant={appointmentViewMode === 'calendar' ? 'default' : 'ghost'}
-                          className="h-8 gap-1"
+                          variant="ghost"
+                          className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'calendar'
+                            ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                            }`}
                           onClick={() => setAppointmentViewMode('calendar')}
                         >
                           <Calendar className="w-4 h-4" />
@@ -2946,27 +2997,33 @@ const DoctorPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
-                        <TabsTrigger value="pending_approval" className="relative">
-                          Pending Approval
+                      <TabsList className="mb-6 grid h-auto w-full grid-cols-2 gap-1 rounded-xl bg-muted/40 p-1 sm:grid-cols-3 lg:grid-cols-5">
+                        <TabsTrigger value="pending_approval" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.pending', 'Pending')}
                           {stats.pendingRequests > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
                               {formatNumber(stats.pendingRequests)}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="confirmed" className="relative">
-                          Confirmed
+                        <TabsTrigger value="confirmed" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.confirmed', 'Confirmed')}
                           {confirmedCount > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
                               {confirmedCount}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
-                        <TabsTrigger value="no_show">No Show</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="completed" className={appointmentStatusTriggerClass}>{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="closed" className={appointmentStatusTriggerClass}>
+                          {t('doctorPortal.appointments.closed', 'Closed')}
+                          {closedCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {closedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="all" className={appointmentStatusTriggerClass}>{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
                       {/* Pending Approval Tab Content */}
@@ -3162,92 +3219,62 @@ const DoctorPortal = () => {
                         )}
                       </TabsContent>
 
-                      {/* No Show Tab Content */}
-                      <TabsContent value="no_show" className="space-y-4">
+                      {/* Closed Tab Content (Cancelled + No Show) */}
+                      <TabsContent value="closed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No no-show appointments')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noClosedAppointments', 'No closed appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No no-show appointments</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noClosedAppointments', 'No closed appointments')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
-                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                    <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isNoShow = apt.status === 'no_show';
+                                return (
+                                  <div
+                                    key={apt.id}
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                      isNoShow ? 'border-destructive/30 bg-destructive/5' : 'border-muted-foreground/30 bg-muted/40'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                      <div className="text-center w-20">
+                                        <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                        <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      </div>
+                                      <div className="w-px h-12 bg-border" />
+                                      <Avatar className="w-12 h-12">
+                                        <AvatarImage src={(apt as any).patient_profile_picture} />
+                                        <AvatarFallback className="bg-primary/10 text-primary">
+                                          {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div>
+                                        <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                        <p className="text-sm text-muted-foreground">
+                                          {apt.patient_age
+                                            ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                            : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                      </div>
                                     </div>
-                                    <div className="w-px h-12 bg-border" />
-                                    <Avatar className="w-12 h-12">
-                                      <AvatarImage src={(apt as any).patient_profile_picture} />
-                                      <AvatarFallback className="bg-primary/10 text-primary">
-                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">
-                                        {apt.patient_age
-                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
-                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
-                                      </p>
-                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    {apt.patient_id && (
-                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
-                                      </Button>
-                                    )}
-                                    <Badge variant="destructive">No Show</Badge>
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </>
-                        )}
-                      </TabsContent>
-
-                      {/* Cancelled Tab Content */}
-                      <TabsContent value="cancelled" className="space-y-4">
-                        {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No cancelled appointments')
-                        ) : (
-                          <>
-                            {filteredAppointmentsByStatus.length === 0 ? (
-                              <div className="text-center py-12">
-                                <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No cancelled appointments</p>
-                              </div>
-                            ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-muted-foreground/30 bg-muted/40">
-                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                    <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                                    </div>
-                                    <div className="w-px h-12 bg-border" />
-                                    <Avatar className="w-12 h-12">
-                                      <AvatarImage src={(apt as any).patient_profile_picture} />
-                                      <AvatarFallback className="bg-primary/10 text-primary">
-                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    <div className="flex gap-2">
+                                      {apt.patient_id && (
+                                        <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                          {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                        </Button>
+                                      )}
+                                      <Badge variant={isNoShow ? 'destructive' : 'secondary'}>
+                                        {isNoShow ? t('appointmentStatus.noShow', 'No Show') : t('appointmentStatus.cancelled', 'Cancelled')}
+                                      </Badge>
                                     </div>
                                   </div>
-                                  <Badge variant="destructive">Cancelled</Badge>
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </>
                         )}
