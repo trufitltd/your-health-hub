@@ -102,6 +102,26 @@ const getJsonTranslationValue = (value: unknown, key: string) => {
   return typeof candidate === 'string' ? candidate : '';
 };
 
+const CONSULTATION_LANGUAGE_VALUES = [
+  'english',
+  'hausa',
+  'igbo',
+  'yoruba',
+  'arabic',
+  'swahili',
+  'fulfulde',
+  'tiv',
+  'pidgin_english',
+  'french',
+  'spanish',
+  'portuguese',
+] as const;
+
+const normalizeConsultationLanguage = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+};
+
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -217,6 +237,23 @@ const DoctorPortal = () => {
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const consultationLanguageOptions = useMemo(() => {
+    const fallbackLabels: Record<string, string> = {
+      pidgin_english: 'Pidgin English',
+    };
+
+    return CONSULTATION_LANGUAGE_VALUES.map((value) => ({
+      value,
+      label: t(
+        `auth.values.languages.${value}`,
+        fallbackLabels[value]
+          || value
+            .split('_')
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(' ')
+      ),
+    }));
+  }, [t]);
   const unreadReviewsCount = unreadReviewIds.length;
   const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
 
@@ -497,6 +534,7 @@ const DoctorPortal = () => {
     confirmPassword: '',
   });
   const [profileTranslations, setProfileTranslations] = useState(createEmptyProfileTranslations);
+  const [selectedConsultationLanguages, setSelectedConsultationLanguages] = useState<string[]>([]);
 
   const patientFolderFieldOrder = [
     'patient_type',
@@ -759,6 +797,12 @@ const DoctorPortal = () => {
         bio: doctorRegistration.bio || '',
       });
       setProfileTranslations(nextTranslations);
+      const existingConsultationLanguages = Array.isArray(doctorRegistration.preferred_consultation_languages)
+        ? doctorRegistration.preferred_consultation_languages
+          .map((item: string) => normalizeConsultationLanguage(item))
+          .filter(Boolean)
+        : [];
+      setSelectedConsultationLanguages(existingConsultationLanguages);
     }
   }, [doctorRegistration]);
 
@@ -1877,6 +1921,26 @@ const DoctorPortal = () => {
         {}
       );
 
+      const normalizedConsultationLanguages = Array.from(
+        new Set(
+          selectedConsultationLanguages
+            .map((item) => normalizeConsultationLanguage(item))
+            .filter(Boolean)
+        )
+      );
+
+      if (normalizedConsultationLanguages.length === 0) {
+        toast({
+          title: t('auth.toast.consultationLanguagesRequiredTitle', 'Consultation languages required'),
+          description: t(
+            'auth.toast.consultationLanguagesRequiredDescription',
+            'Please select at least one consultation language.'
+          ),
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const { error } = await supabase
         .from('doctor_registrations')
         .update({
@@ -1899,12 +1963,14 @@ const DoctorPortal = () => {
           bio_de: profileTranslations.bio.de.trim() || null,
           bio_translations: bioTranslationsPayload,
           specialty_translations: specialtyTranslationsPayload,
+          preferred_consultation_languages: normalizedConsultationLanguages,
         })
         .eq('user_id', user.id);
 
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
+      queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
       toast({
         title: t('common.success', 'Success'),
         description: t('common.profileUpdated', 'Profile updated successfully!'),
@@ -1917,6 +1983,14 @@ const DoctorPortal = () => {
     } finally {
       setIsSavingProfile(false);
     }
+  };
+
+  const toggleConsultationLanguage = (language: string) => {
+    setSelectedConsultationLanguages((prev) =>
+      prev.includes(language)
+        ? prev.filter((item) => item !== language)
+        : [...prev, language]
+    );
   };
 
   const handleChangePassword = async () => {
@@ -3551,6 +3625,31 @@ const DoctorPortal = () => {
                                 onChange={(e) => setProfileFormData({...profileFormData, experience: e.target.value})}
                                 className="mt-1" 
                               />
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className="text-sm font-medium">{t('auth.fields.consultationLanguages', 'Preferred Consultation Languages')}</label>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {t('auth.fields.consultationLanguagesHint', 'Select all languages you can use to consult patients.')}
+                              </p>
+                              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+                                {consultationLanguageOptions.map((languageOption) => {
+                                  const optionValue = normalizeConsultationLanguage(languageOption.value);
+                                  return (
+                                    <label
+                                      key={optionValue}
+                                      className="flex items-center gap-2 text-sm rounded-md border border-border px-3 py-2 cursor-pointer hover:bg-muted/40"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedConsultationLanguages.includes(optionValue)}
+                                        onChange={() => toggleConsultationLanguage(optionValue)}
+                                        className="h-4 w-4"
+                                      />
+                                      <span>{languageOption.label}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
                             </div>
                           </div>
 
