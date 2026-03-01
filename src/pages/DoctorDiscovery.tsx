@@ -128,6 +128,7 @@ export default function DoctorDiscovery() {
     endTime: '',
   });
   const [showAvailabilityDialog, setShowAvailabilityDialog] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
 
@@ -135,6 +136,12 @@ export default function DoctorDiscovery() {
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
+
+      if (window.innerWidth < 768) {
+        setShowFilters(true);
+        setLastScrollY(currentScrollY);
+        return;
+      }
       
       if (currentScrollY < 50) {
         setShowFilters(true);
@@ -495,6 +502,29 @@ export default function DoctorDiscovery() {
     [...new Set(doctorsWithPresence.map(d => d.hospital_affiliation))].sort(), [doctorsWithPresence]
   );
 
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (doctorTypeFilter !== 'all') count += 1;
+    if (filters.specialty) count += 1;
+    if (filters.minRating > 0) count += 1;
+    if (filters.minExperience > 0) count += 1;
+    if (filters.hospital) count += 1;
+    if (filters.consultationLanguage) count += 1;
+    if (availabilityMode !== 'none') count += 1;
+    return count;
+  }, [doctorTypeFilter, filters, availabilityMode]);
+
+  const hasActiveSearch = searchQuery.trim().length > 0;
+  const hasAnyActiveControls = hasActiveSearch || activeFilterCount > 0;
+
+  const clearAllFilters = () => {
+    setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' });
+    setSearchQuery('');
+    setDoctorTypeFilter('all');
+    setAvailabilityMode('none');
+    setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+  };
+
   const consultationLanguageOptions = useMemo(() => {
     const languageValues = new Set<string>(SUPPORTED_CONSULTATION_LANGUAGES);
 
@@ -624,8 +654,203 @@ export default function DoctorDiscovery() {
               <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
             </div>
 
+            {/* Mobile Search + Filters */}
+            <div className="md:hidden sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-3 mb-4 -mx-4 px-4">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search doctors..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="relative gap-2"
+                  onClick={() => setMobileFiltersOpen(true)}
+                >
+                  <Filter className="w-4 h-4" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="inline-flex min-w-5 h-5 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] leading-none">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </Button>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground truncate">
+                  <span className="font-semibold text-foreground">{filteredDoctors.length}</span> doctors
+                  {activeFilterCount > 0 ? ` • ${activeFilterCount} active` : ''}
+                </p>
+                {hasAnyActiveControls && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={clearAllFilters}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <Dialog open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
+              <DialogContent className="md:hidden w-[calc(100%-1rem)] max-w-lg rounded-2xl p-0 overflow-hidden">
+                <DialogHeader className="px-4 pt-4 pb-2">
+                  <DialogTitle>Filter Doctors</DialogTitle>
+                  <DialogDescription>Refine results by specialty, language, and availability.</DialogDescription>
+                </DialogHeader>
+
+                <div className="px-4 pb-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Doctor Type</label>
+                    <select
+                      value={doctorTypeFilter}
+                      onChange={(e) => setDoctorTypeFilter(e.target.value as 'all' | 'general' | 'specialist')}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="all">All Doctors</option>
+                      <option value="general">General Practice</option>
+                      <option value="specialist">Specialists</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Specialty</label>
+                    <select
+                      value={filters.specialty}
+                      onChange={(e) => setFilters({ ...filters, specialty: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">All Specialties</option>
+                      {specialties.map(specialty => (
+                        <option key={specialty} value={specialty}>{specialty}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Consultation Language</label>
+                    <select
+                      value={filters.consultationLanguage}
+                      onChange={(e) => setFilters({ ...filters, consultationLanguage: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">Any Language</option>
+                      {consultationLanguageOptions.map((languageOption) => (
+                        <option key={languageOption.value} value={languageOption.value}>
+                          {languageOption.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Minimum Rating</label>
+                      <select
+                        value={filters.minRating}
+                        onChange={(e) => setFilters({ ...filters, minRating: parseFloat(e.target.value) })}
+                        className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                      >
+                        <option value={0}>Any Rating</option>
+                        <option value={3}>3+ ⭐</option>
+                        <option value={4}>4+ ⭐</option>
+                        <option value={4.5}>4.5+ ⭐</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Experience</label>
+                      <select
+                        value={filters.minExperience}
+                        onChange={(e) => setFilters({ ...filters, minExperience: parseFloat(e.target.value) })}
+                        className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                      >
+                        <option value={0}>Any Experience</option>
+                        <option value={5}>{formatNumber(5)}+ Years</option>
+                        <option value={10}>{formatNumber(10)}+ Years</option>
+                        <option value={15}>{formatNumber(15)}+ Years</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Hospital</label>
+                    <select
+                      value={filters.hospital}
+                      onChange={(e) => setFilters({ ...filters, hospital: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">All Hospitals</option>
+                      {hospitals.map(hospital => (
+                        <option key={hospital} value={hospital}>{hospital}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={availabilityMode === 'now'}
+                        onChange={(e) => setAvailabilityMode(e.target.checked ? 'now' : 'none')}
+                        className="w-4 h-4 cursor-pointer"
+                      />
+                      <span className="text-sm font-medium">Available Now</span>
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setMobileFiltersOpen(false);
+                        setShowAvailabilityDialog(true);
+                      }}
+                      className="w-full justify-start gap-2"
+                    >
+                      <Clock className="w-4 h-4" />
+                      {getAvailabilityFilterText() || 'Choose date/time'}
+                    </Button>
+                    {(availabilityMode === 'exact' || availabilityMode === 'range') && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setAvailabilityMode('none');
+                          setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+                        }}
+                        className="w-full justify-start text-xs"
+                      >
+                        Clear date/time filter
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-border px-4 py-3 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={clearAllFilters}
+                  >
+                    Clear All
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    onClick={() => setMobileFiltersOpen(false)}
+                  >
+                    Show {filteredDoctors.length}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
             {/* Sticky Filter Bar */}
-            <div className={`sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-4 mb-6 -mx-4 px-4 transition-transform duration-300 ${showFilters ? 'translate-y-0' : '-translate-y-full'}`}>
+            <div className={`hidden md:block sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-4 mb-6 -mx-4 px-4 transition-transform duration-300 ${showFilters ? 'translate-y-0' : '-translate-y-full'}`}>
               <div className="space-y-4">
                 {/* Primary Filters */}
                 <div className="flex flex-wrap gap-3">
@@ -744,17 +969,11 @@ export default function DoctorDiscovery() {
                     </Button>
                   )}
 
-                  {(Object.values(filters).some(v => v) || searchQuery || doctorTypeFilter !== 'all' || availabilityMode !== 'none') && (
+                  {hasAnyActiveControls && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' });
-                        setSearchQuery('');
-                        setDoctorTypeFilter('all');
-                        setAvailabilityMode('none');
-                        setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
-                      }}
+                      onClick={clearAllFilters}
                       className="gap-1 text-destructive hover:text-destructive"
                     >
                       <Filter className="w-4 h-4" />
@@ -785,7 +1004,7 @@ export default function DoctorDiscovery() {
                   <p className="text-muted-foreground mb-4">Try adjusting your filters or search query</p>
                   <Button
                     variant="outline"
-                    onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' })}
+                    onClick={clearAllFilters}
                   >
                     Clear All Filters
                   </Button>
