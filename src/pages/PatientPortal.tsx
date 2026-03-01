@@ -3618,17 +3618,10 @@ const PatientPortal = () => {
                       <p className="text-sm">
                         {t('patientPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')} <span className="font-semibold">{t('patientPortal.downloadApp', 'Download App')}</span> {t('patientPortal.installBannerTextSuffix', 'to install on your phone.')}
                       </p>
-                      <div className="flex items-center gap-2">
-                        <Button size="sm" className="gap-2" onClick={handleInstallApp}>
-                          <Download className="w-4 h-4" />
-                          {t('common.installApp', 'Install App')}
-                        </Button>
-                        <Link to="/install">
-                          <Button size="sm" variant="outline">
-                            {t('patientPortal.openInstallPage', 'Open Install Page')}
-                          </Button>
-                        </Link>
-                      </div>
+                      <Button size="sm" className="gap-2" onClick={handleInstallApp}>
+                        <Download className="w-4 h-4" />
+                        {t('common.installApp', 'Install App')}
+                      </Button>
                     </CardContent>
                   </Card>
                 ) : null}
