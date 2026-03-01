@@ -19,7 +19,11 @@ import { useLocaleFormatter } from '@/lib/locale';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { BookingService } from '@/services/BookingService';
 import { PatientWalletService } from '@/services/PatientWalletService';
-import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
+import {
+  isSlotBlockedByAppointments,
+  normalizeDurationMinutes,
+  type AppointmentIntervalRow,
+} from '@/lib/appointmentIntervals';
 
 interface LocationState {
   doctorId?: string;
@@ -27,6 +31,11 @@ interface LocationState {
   specialty?: string;
   profilePicture?: string;
 }
+
+type BookedAppointmentRow = AppointmentIntervalRow & {
+  time: string | null;
+  duration_minutes: number | null;
+};
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -161,29 +170,22 @@ export default function SlotSelection() {
     },
   });
 
-  // Fetch booked appointments for selected doctor and date
-  const { data: bookedSlots = [] } = useQuery({
-    queryKey: ['booked-slots', state.doctorId, selectedDate],
+  // Fetch blocking appointments for selected doctor and date
+  const { data: bookedAppointments = [] } = useQuery({
+    queryKey: ['booked-appointments', state.doctorId, selectedDate],
     queryFn: async () => {
       if (!state.doctorId || !selectedDate) return [];
 
       const { data, error } = await supabase
         .from('appointments')
-        .select('time, status, slot_locked_until')
+        .select('time, duration_minutes, status, slot_locked_until')
         .eq('doctor_id', state.doctorId)
         .eq('date', selectedDate);
 
       if (error) throw error;
 
-      const nowMs = Date.now();
       return (data || [])
-        .filter((apt: any) => {
-          if (!isSlotBlockingAppointmentStatus(apt.status)) return false;
-          if (!isPendingPaymentAppointmentStatus(apt.status)) return true;
-          if (!apt.slot_locked_until) return false;
-          return new Date(apt.slot_locked_until).getTime() > nowMs;
-        })
-        .map((apt: any) => apt.time?.slice(0, 5));
+        .map((apt) => apt as BookedAppointmentRow);
     },
     enabled: !!state.doctorId && !!selectedDate,
   });
@@ -250,6 +252,21 @@ export default function SlotSelection() {
 
     return sorted;
   }, [selectedDate, schedules, selectedDuration, durationPricingEnabled]);
+
+  const blockedStartTimes = useMemo(() => {
+    if (!availableTimes.length) return new Set<string>();
+
+    const requestedDuration = normalizeDurationMinutes(selectedDuration, 30);
+    const blocked = new Set<string>();
+
+    availableTimes.forEach((time) => {
+      if (isSlotBlockedByAppointments(time, requestedDuration, bookedAppointments)) {
+        blocked.add(time);
+      }
+    });
+
+    return blocked;
+  }, [availableTimes, bookedAppointments, selectedDuration]);
 
   const summaryReady = !!(selectedDate && (!durationPricingEnabled || selectedTime));
 
@@ -721,7 +738,7 @@ export default function SlotSelection() {
                     ) : (
                       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
                         {availableTimes.map(time => {
-                          const isBooked = bookedSlots.includes(time);
+                          const isBooked = blockedStartTimes.has(time);
                           const isPast = (() => {
                             const now = new Date();
                             const slotDateTime = new Date(`${selectedDate}T${time}`);

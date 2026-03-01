@@ -15,8 +15,12 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
-import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
+import {
+  isSlotBlockedByAppointments,
+  normalizeDurationMinutes,
+  type AppointmentIntervalRow,
+} from '@/lib/appointmentIntervals';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -39,10 +43,9 @@ interface SlotSelectionModalProps {
   onConsultationTypeChange?: (type: 'chat' | 'voice' | 'video') => void;
 }
 
-type BookedSlotRow = {
+type BookedSlotRow = AppointmentIntervalRow & {
   time: string | null;
-  status: string | null;
-  slot_locked_until: string | null;
+  duration_minutes: number | null;
 };
 
 const toDateKey = (date: Date) => {
@@ -76,29 +79,22 @@ export function SlotSelectionModal({
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const { formatDate, formatClockTime, formatCurrency } = useLocaleFormatter();
 
-  // Fetch booked appointments for selected doctor and date
-  const { data: bookedSlots = [] } = useQuery({
-    queryKey: ['booked-slots', selectedDoctor, selectedDate],
+  // Fetch blocking appointments for selected doctor and date
+  const { data: bookedAppointments = [] } = useQuery({
+    queryKey: ['booked-appointments', selectedDoctor, selectedDate],
     queryFn: async () => {
       if (!selectedDoctor || !selectedDate) return [];
       
       const { data, error } = await supabase
         .from('appointments')
-        .select('time,status,slot_locked_until')
+        .select('time,duration_minutes,status,slot_locked_until')
         .eq('doctor_id', selectedDoctor)
         .eq('date', selectedDate);
       
       if (error) throw error;
-      const nowMs = Date.now();
+
       return (data || [])
-        .filter((apt) => {
-          const typedApt = apt as BookedSlotRow;
-          if (!isSlotBlockingAppointmentStatus(typedApt.status)) return false;
-          if (!isPendingPaymentAppointmentStatus(typedApt.status)) return true;
-          if (!typedApt.slot_locked_until) return false;
-          return new Date(typedApt.slot_locked_until).getTime() > nowMs;
-        })
-        .map((apt) => String((apt as BookedSlotRow).time || '').slice(0, 5));
+        .map((apt) => apt as BookedSlotRow);
     },
     enabled: !!selectedDoctor && !!selectedDate,
   });
@@ -179,9 +175,8 @@ export function SlotSelectionModal({
     return Array.from(dates).sort();
   }, [selectedDoctor, doctorSchedules]);
 
-  // Get time slots for selected date, excluding booked slots
-  const timeSlots = useMemo(() => {
-    if (!selectedDate || !selectedDoctor) return [];
+  const timeSlotDurations = useMemo(() => {
+    if (!selectedDate || !selectedDoctor) return new Map<string, number>();
 
     const date = new Date(`${selectedDate}T00:00:00`);
     const dayOfWeek = date.getDay();
@@ -191,22 +186,37 @@ export function SlotSelectionModal({
     );
 
     if (schedules.length === 0) {
-      return [];
+      return new Map<string, number>();
     }
 
-    const times = new Set<string>();
+    const durationsByTime = new Map<string, number>();
     schedules.forEach((schedule) => {
       const slotDuration = mode === 'reschedule'
         ? (effectiveDurationMinutes || schedule.slot_duration_minutes)
         : schedule.slot_duration_minutes;
+      const normalizedDuration = normalizeDurationMinutes(slotDuration, 30);
 
       const slots = generateTimeSlots(
         schedule.start_time,
         schedule.end_time,
         slotDuration
       );
-      slots.forEach((time) => times.add(time));
+      slots.forEach((time) => {
+        const existingDuration = durationsByTime.get(time);
+        if (typeof existingDuration === 'number') {
+          durationsByTime.set(time, Math.min(existingDuration, normalizedDuration));
+        } else {
+          durationsByTime.set(time, normalizedDuration);
+        }
+      });
     });
+
+    return durationsByTime;
+  }, [selectedDate, selectedDoctor, doctorSchedules, mode, effectiveDurationMinutes]);
+
+  // Get time slots for selected date, excluding past times
+  const timeSlots = useMemo(() => {
+    let sorted = Array.from(timeSlotDurations.keys()).sort();
 
     // Filter out past times if selected date is today
     const now = new Date();
@@ -214,11 +224,27 @@ export function SlotSelectionModal({
     
     if (isToday) {
       const currentTime = now.toTimeString().slice(0, 5);
-      return Array.from(times).filter(time => time > currentTime).sort();
+      sorted = sorted.filter((time) => time > currentTime);
     }
 
-    return Array.from(times).sort();
-  }, [selectedDate, selectedDoctor, doctorSchedules, mode, effectiveDurationMinutes]);
+    return sorted;
+  }, [selectedDate, timeSlotDurations]);
+
+  const blockedStartTimes = useMemo(() => {
+    if (!timeSlots.length) return new Set<string>();
+
+    const fallbackDuration = normalizeDurationMinutes(effectiveDurationMinutes || 30, 30);
+    const blocked = new Set<string>();
+
+    timeSlots.forEach((time) => {
+      const duration = timeSlotDurations.get(time) || fallbackDuration;
+      if (isSlotBlockedByAppointments(time, duration, bookedAppointments)) {
+        blocked.add(time);
+      }
+    });
+
+    return blocked;
+  }, [timeSlots, timeSlotDurations, bookedAppointments, effectiveDurationMinutes]);
 
   const handleConfirm = () => {
     if (!selectedDoctor || !selectedDate || !selectedTime) {
@@ -412,7 +438,7 @@ export function SlotSelectionModal({
               ) : (
                 <div className="grid grid-cols-4 gap-2">
                   {timeSlots.map((time) => {
-                    const isBooked = bookedSlots.includes(time);
+                    const isBooked = blockedStartTimes.has(time);
                     const isPast = (() => {
                       const now = new Date();
                       const slotDateTime = new Date(`${selectedDate}T${time}`);
