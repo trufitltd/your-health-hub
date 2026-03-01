@@ -49,7 +49,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
+import { SUPPORTED_LANGUAGES, useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
 import {
   formatAppointmentStatusLabel,
@@ -114,6 +114,25 @@ const normalizeBioLanguageCode = (value: string | null | undefined) => {
   return value.trim().toLowerCase().replace(/[^a-z]/g, '');
 };
 
+const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
+  en: { key: 'auth.values.languages.english', fallback: 'English' },
+  ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
+  ig: { key: 'auth.values.languages.igbo', fallback: 'Igbo' },
+  yo: { key: 'auth.values.languages.yoruba', fallback: 'Yoruba' },
+  sw: { key: 'auth.values.languages.swahili', fallback: 'Swahili' },
+  ar: { key: 'auth.values.languages.arabic', fallback: 'Arabic' },
+  fr: { key: 'auth.values.languages.french', fallback: 'French' },
+  es: { key: 'auth.values.languages.spanish', fallback: 'Spanish' },
+  pt: { key: 'auth.values.languages.portuguese', fallback: 'Portuguese' },
+  nl: { key: 'common.language.dutch', fallback: 'Dutch' },
+  zh: { key: 'common.language.chinese', fallback: 'Chinese' },
+  de: { key: 'common.language.german', fallback: 'German' },
+};
+
+const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
+  typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
+);
+
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -169,6 +188,9 @@ const PAST_CONFIRMED_CALENDAR_STYLE = {
   bg: '#f59e0b',
   text: '#ffffff',
 } as const;
+
+const APPROVED_BANNER_WINDOW_DAYS = 7;
+const APPROVED_BANNER_STORAGE_PREFIX = 'doctor-approved-banner-dismissed';
 
 type WalletTransactionRow = {
   status: string | null;
@@ -228,10 +250,12 @@ const DoctorPortal = () => {
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduleTime, setRescheduleTime] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [isApprovedBannerDismissed, setIsApprovedBannerDismissed] = useState(false);
+  const appliedPreferredLanguageRef = useRef(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
-  const { t, language } = useLanguage();
+  const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -494,6 +518,59 @@ const DoctorPortal = () => {
 
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
+  const approvedBannerStorageKey = useMemo(() => {
+    if (!user?.id || !doctorRegistration) return null;
+    const approvalMarker = String(
+      (doctorRegistration as { verified_at?: string | null }).verified_at
+      || (doctorRegistration as { created_at?: string | null }).created_at
+      || 'unknown',
+    );
+    return `${APPROVED_BANNER_STORAGE_PREFIX}:${user.id}:${approvalMarker}`;
+  }, [
+    user?.id,
+    doctorRegistration,
+    (doctorRegistration as { verified_at?: string | null } | null)?.verified_at,
+    (doctorRegistration as { created_at?: string | null } | null)?.created_at,
+  ]);
+
+  useEffect(() => {
+    if (!approvedBannerStorageKey || typeof window === 'undefined') {
+      setIsApprovedBannerDismissed(false);
+      return;
+    }
+
+    try {
+      setIsApprovedBannerDismissed(window.localStorage.getItem(approvedBannerStorageKey) === '1');
+    } catch {
+      setIsApprovedBannerDismissed(false);
+    }
+  }, [approvedBannerStorageKey]);
+
+  const shouldShowApprovedBanner = useMemo(() => {
+    if (!doctorRegistration || doctorRegistration.verification_status !== 'approved') return false;
+    if (isApprovedBannerDismissed) return false;
+
+    const referenceTimestamp = String(
+      (doctorRegistration as { verified_at?: string | null }).verified_at
+      || (doctorRegistration as { created_at?: string | null }).created_at
+      || '',
+    );
+    const parsed = Date.parse(referenceTimestamp);
+    if (Number.isNaN(parsed)) return true;
+
+    const ageMs = Date.now() - parsed;
+    return ageMs <= APPROVED_BANNER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  }, [doctorRegistration, isApprovedBannerDismissed]);
+
+  const dismissApprovedBanner = useCallback(() => {
+    setIsApprovedBannerDismissed(true);
+    if (!approvedBannerStorageKey || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(approvedBannerStorageKey, '1');
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [approvedBannerStorageKey]);
   
   // Fetch doctor availability status
   const { data: doctorAvailability } = useQuery({
@@ -600,20 +677,32 @@ const DoctorPortal = () => {
     specialty: '',
     experience: '',
     bio: '',
+    preferredLanguage: language as AppLanguage,
   });
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
   });
   const [bioTranslations, setBioTranslations] = useState<Record<string, string>>({});
+  const [specialtyTranslations, setSpecialtyTranslations] = useState<Record<string, string>>({});
   const [newBioLanguageCode, setNewBioLanguageCode] = useState('');
   const [selectedConsultationLanguages, setSelectedConsultationLanguages] = useState<string[]>([]);
   const availableBioTranslationLanguageOptions = useMemo(
     () =>
       PROFILE_BIO_TRANSLATION_LANGUAGES.filter(
-        (languageOption) => !bioTranslations[languageOption.code]
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(bioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(specialtyTranslations, languageOption.code)
       ),
-    [bioTranslations]
+    [bioTranslations, specialtyTranslations]
+  );
+  const profileTranslationLanguageCodes = useMemo(
+    () =>
+      Array.from(new Set([
+        ...Object.keys(bioTranslations),
+        ...Object.keys(specialtyTranslations),
+      ])).sort((codeA, codeB) => codeA.localeCompare(codeB)),
+    [bioTranslations, specialtyTranslations]
   );
 
   const patientFolderFieldOrder = [
@@ -855,7 +944,9 @@ const DoctorPortal = () => {
   useEffect(() => {
     if (doctorRegistration) {
       const nextBioTranslations: Record<string, string> = {};
+      const nextSpecialtyTranslations: Record<string, string> = {};
       const rawBioTranslations = doctorRegistration.bio_translations;
+      const rawSpecialtyTranslations = (doctorRegistration as { specialty_translations?: unknown }).specialty_translations;
 
       if (rawBioTranslations && typeof rawBioTranslations === 'object') {
         Object.entries(rawBioTranslations as Record<string, unknown>).forEach(([code, value]) => {
@@ -865,6 +956,17 @@ const DoctorPortal = () => {
           const trimmedValue = value.trim();
           if (!trimmedValue) return;
           nextBioTranslations[normalizedCode] = trimmedValue;
+        });
+      }
+
+      if (rawSpecialtyTranslations && typeof rawSpecialtyTranslations === 'object') {
+        Object.entries(rawSpecialtyTranslations as Record<string, unknown>).forEach(([code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return;
+          if (typeof value !== 'string') return;
+          const trimmedValue = value.trim();
+          if (!trimmedValue) return;
+          nextSpecialtyTranslations[normalizedCode] = trimmedValue;
         });
       }
 
@@ -887,10 +989,18 @@ const DoctorPortal = () => {
         specialty: doctorRegistration.specialty || '',
         experience: doctorRegistration.experience || '',
         bio: doctorRegistration.bio || '',
+        preferredLanguage: isSupportedAppLanguage((doctorRegistration as { preferred_language?: unknown })?.preferred_language)
+          ? ((doctorRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
+          : language,
       });
       setBioTranslations(nextBioTranslations);
+      setSpecialtyTranslations(nextSpecialtyTranslations);
       const initialAddLanguage =
-        PROFILE_BIO_TRANSLATION_LANGUAGES.find((languageOption) => !nextBioTranslations[languageOption.code])?.code || '';
+        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+          (languageOption) =>
+            !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+            && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+        )?.code || '';
       setNewBioLanguageCode(initialAddLanguage);
       const existingConsultationLanguages = Array.isArray(doctorRegistration.preferred_consultation_languages)
         ? doctorRegistration.preferred_consultation_languages
@@ -900,6 +1010,17 @@ const DoctorPortal = () => {
       setSelectedConsultationLanguages(existingConsultationLanguages);
     }
   }, [doctorRegistration]);
+
+  useEffect(() => {
+    if (appliedPreferredLanguageRef.current) return;
+    if (!doctorRegistration) return;
+    appliedPreferredLanguageRef.current = true;
+
+    const preferredLanguage = (doctorRegistration as { preferred_language?: unknown })?.preferred_language;
+    if (isSupportedAppLanguage(preferredLanguage) && preferredLanguage !== language) {
+      setLanguage(preferredLanguage);
+    }
+  }, [doctorRegistration, language, setLanguage]);
 
   // Real-time subscription for doctor appointments
   useEffect(() => {
@@ -2111,33 +2232,47 @@ const DoctorPortal = () => {
 
   const handleAddBioTranslation = () => {
     const normalizedCode = normalizeBioLanguageCode(newBioLanguageCode);
-    if (!normalizedCode || bioTranslations[normalizedCode]) return;
+    if (
+      !normalizedCode
+      || Object.prototype.hasOwnProperty.call(bioTranslations, normalizedCode)
+      || Object.prototype.hasOwnProperty.call(specialtyTranslations, normalizedCode)
+    ) return;
 
-    setBioTranslations((prev) => {
-      const next = {
-        ...prev,
-        [normalizedCode]: '',
-      };
-      const nextAvailableCode =
-        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
-          (languageOption) => !next[languageOption.code]
-        )?.code || '';
-      setNewBioLanguageCode(nextAvailableCode);
-      return next;
-    });
+    const nextBioTranslations = {
+      ...bioTranslations,
+      [normalizedCode]: '',
+    };
+    const nextSpecialtyTranslations = {
+      ...specialtyTranslations,
+      [normalizedCode]: '',
+    };
+    const nextAvailableCode =
+      PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+      )?.code || '';
+
+    setBioTranslations(nextBioTranslations);
+    setSpecialtyTranslations(nextSpecialtyTranslations);
+    setNewBioLanguageCode(nextAvailableCode);
   };
 
   const handleRemoveBioTranslation = (languageCode: string) => {
-    setBioTranslations((prev) => {
-      const next = { ...prev };
-      delete next[languageCode];
-      const nextAvailableCode =
-        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
-          (languageOption) => !next[languageOption.code]
-        )?.code || '';
-      setNewBioLanguageCode((current) => current || nextAvailableCode);
-      return next;
-    });
+    const nextBioTranslations = { ...bioTranslations };
+    const nextSpecialtyTranslations = { ...specialtyTranslations };
+    delete nextBioTranslations[languageCode];
+    delete nextSpecialtyTranslations[languageCode];
+    const nextAvailableCode =
+      PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+      )?.code || '';
+
+    setBioTranslations(nextBioTranslations);
+    setSpecialtyTranslations(nextSpecialtyTranslations);
+    setNewBioLanguageCode((current) => current || nextAvailableCode);
   };
 
   const handleSaveProfile = async () => {
@@ -2165,6 +2300,20 @@ const DoctorPortal = () => {
         },
         {}
       );
+      const specialtyTranslationsPayload = Object.entries(specialtyTranslations).reduce<Record<string, string>>(
+        (acc, [code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return acc;
+          const trimmedValue = String(value || '').trim();
+          if (!trimmedValue) return acc;
+          acc[normalizedCode] = trimmedValue;
+          return acc;
+        },
+        {}
+      );
+      const preferredLanguageToSave = isSupportedAppLanguage(profileFormData.preferredLanguage)
+        ? profileFormData.preferredLanguage
+        : language;
 
       const normalizedConsultationLanguages = Array.from(
         new Set(
@@ -2186,25 +2335,39 @@ const DoctorPortal = () => {
         return;
       }
 
+      const baseProfilePayload = {
+        full_name: profileFormData.fullName.trim(),
+        email: profileFormData.email.trim(),
+        phone_number: profileFormData.phone.trim(),
+        specialty: profileFormData.specialty.trim(),
+        experience: profileFormData.experience.trim(),
+        bio: profileFormData.bio.trim(),
+        ...legacyBioColumnPayload,
+        bio_translations: bioTranslationsPayload,
+        specialty_translations: specialtyTranslationsPayload,
+        preferred_consultation_languages: normalizedConsultationLanguages,
+      };
       const { error } = await supabase
         .from('doctor_registrations')
         .update({
-          full_name: profileFormData.fullName.trim(),
-          email: profileFormData.email.trim(),
-          phone_number: profileFormData.phone.trim(),
-          specialty: profileFormData.specialty.trim(),
-          experience: profileFormData.experience.trim(),
-          bio: profileFormData.bio.trim(),
-          ...legacyBioColumnPayload,
-          bio_translations: bioTranslationsPayload,
-          preferred_consultation_languages: normalizedConsultationLanguages,
+          ...baseProfilePayload,
+          preferred_language: preferredLanguageToSave,
         })
         .eq('user_id', user.id);
 
-      if (error) throw error;
+      if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+        const { error: fallbackError } = await supabase
+          .from('doctor_registrations')
+          .update(baseProfilePayload)
+          .eq('user_id', user.id);
+        if (fallbackError) throw fallbackError;
+      } else if (error) {
+        throw error;
+      }
 
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
       queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
+      setLanguage(preferredLanguageToSave);
       toast({
         title: t('common.success', 'Success'),
         description: t('common.profileUpdated', 'Profile updated successfully!'),
@@ -2446,13 +2609,6 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Link to="/install" className="hidden md:block">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Download className="w-4 h-4" />
-                  {t('doctorPortal.downloadApp', 'Download App')}
-                </Button>
-              </Link>
-
               {/* Availability Toggle */}
               <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
@@ -2468,30 +2624,6 @@ const DoctorPortal = () => {
                 />
               </div>
 
-              {!isPwaInstalled && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="hidden md:inline-flex"
-                    onClick={handleInstallApp}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    {t('common.installApp', 'Install App')}
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="md:hidden"
-                    onClick={handleInstallApp}
-                    aria-label="Install app"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </>
-              )}
-
               <Button
                 variant="ghost"
                 size="icon"
@@ -2503,6 +2635,9 @@ const DoctorPortal = () => {
                   {formatNumber(stats.pendingRequests + unreadReviewsCount)}
                 </span>
               </Button>
+              <div className="hidden lg:block">
+                <LanguageSelector />
+              </div>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -2535,9 +2670,6 @@ const DoctorPortal = () => {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <div className="hidden lg:block">
-                <LanguageSelector />
-              </div>
 
               <Button 
                 variant="ghost" 
@@ -2682,21 +2814,21 @@ const DoctorPortal = () => {
               </motion.div>
             )}
 
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <p className="text-sm">
-                  {t('doctorPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')}{" "}
-                  <span className="font-semibold">{t('doctorPortal.downloadApp', 'Download App')}</span>{" "}
-                  {t('doctorPortal.installBannerTextSuffix', 'to install on your phone.')}
-                </p>
-                <Link to="/install">
-                  <Button size="sm" className="gap-2">
+            {activeTab === 'overview' && !isPwaInstalled ? (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-sm">
+                    {t('doctorPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')}{" "}
+                    <span className="font-semibold">{t('doctorPortal.downloadApp', 'Download App')}</span>{" "}
+                    {t('doctorPortal.installBannerTextSuffix', 'to install on your phone.')}
+                  </p>
+                  <Button size="sm" className="gap-2" onClick={handleInstallApp}>
                     <Download className="w-4 h-4" />
-                    {t('doctorPortal.openInstallPage', 'Open Install Page')}
+                    {t('common.installApp', 'Install App')}
                   </Button>
-                </Link>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            ) : null}
 
             {/* Verification Status Banner */}
             {doctorRegistration?.verification_status === 'pending' && (
@@ -2717,20 +2849,31 @@ const DoctorPortal = () => {
               </motion.div>
             )}
 
-            {doctorRegistration?.verification_status === 'approved' && (
+            {activeTab === 'overview' && shouldShowApprovedBanner && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-lg border-2 border-success/50 bg-success/10 p-4 md:p-6"
               >
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-success mb-1">{t('doctorPortal.verification.approvedTitle', 'Account Approved ✓')}</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {t('doctorPortal.verification.approvedBody', 'Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.')}
-                    </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-success mb-1">{t('doctorPortal.verification.approvedTitle', 'Account Approved ✓')}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {t('doctorPortal.verification.approvedBody', 'Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.')}
+                      </p>
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                    onClick={dismissApprovedBanner}
+                  >
+                    {t('common.dismiss', 'Dismiss')}
+                  </Button>
                 </div>
               </motion.div>
             )}
@@ -2753,36 +2896,37 @@ const DoctorPortal = () => {
               </motion.div>
             )}
 
-            {/* Quick Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
-              {[
-                { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
-                { label: 'Pending Approval', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
-                { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
-              ].map((stat, index) => (
-                <motion.div
-                  key={stat.label}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                >
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">{stat.label}</p>
-                          <p className="text-2xl font-bold mt-1">{stat.value}</p>
+            {activeTab === 'overview' && (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+                {[
+                  { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
+                  { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
+                  { label: 'Pending Approval', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
+                  { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
+                ].map((stat, index) => (
+                  <motion.div
+                    key={stat.label}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                  >
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">{stat.label}</p>
+                            <p className="text-2xl font-bold mt-1">{stat.value}</p>
+                          </div>
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
+                            <stat.icon className="w-6 h-6" />
+                          </div>
                         </div>
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
-                          <stat.icon className="w-6 h-6" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
-            </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ))}
+              </div>
+            )}
 
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -3892,6 +4036,26 @@ const DoctorPortal = () => {
                                 className="mt-1" 
                               />
                             </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('common.language', 'Language')}</label>
+                              <select
+                                className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                value={profileFormData.preferredLanguage || language}
+                                onChange={(e) => setProfileFormData({
+                                  ...profileFormData,
+                                  preferredLanguage: (e.target.value as AppLanguage),
+                                })}
+                              >
+                                {SUPPORTED_LANGUAGES.map((languageCode) => (
+                                  <option key={languageCode} value={languageCode}>
+                                    {t(APP_LANGUAGE_OPTION_MAP[languageCode].key, APP_LANGUAGE_OPTION_MAP[languageCode].fallback)}
+                                  </option>
+                                ))}
+                              </select>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {t('doctorPortal.settings.preferredLanguageHint', 'This will be your default app language when you sign in.')}
+                              </p>
+                            </div>
                             <div className="md:col-span-2">
                               <label className="text-sm font-medium">{t('auth.fields.consultationLanguages', 'Preferred Consultation Languages')}</label>
                               <p className="text-xs text-muted-foreground mt-1">
@@ -3961,19 +4125,18 @@ const DoctorPortal = () => {
                                     onClick={handleAddBioTranslation}
                                     disabled={!newBioLanguageCode}
                                   >
-                                    Add Language Bio
+                                    Add Language
                                   </Button>
                                 </div>
 
-                                {Object.keys(bioTranslations).length === 0 ? (
+                                {profileTranslationLanguageCodes.length === 0 ? (
                                   <p className="text-xs text-muted-foreground">
-                                    No additional bio languages added yet.
+                                    No additional profile languages added yet.
                                   </p>
                                 ) : (
                                   <div className="space-y-3">
-                                    {Object.entries(bioTranslations)
-                                      .sort(([codeA], [codeB]) => codeA.localeCompare(codeB))
-                                      .map(([languageCode, value]) => (
+                                    {profileTranslationLanguageCodes
+                                      .map((languageCode) => (
                                         <div key={languageCode} className="rounded-lg border border-border p-3 space-y-2">
                                           <div className="flex items-center justify-between gap-2">
                                             <p className="text-sm font-semibold">{getBioLanguageLabel(languageCode)}</p>
@@ -3987,17 +4150,38 @@ const DoctorPortal = () => {
                                               Remove
                                             </Button>
                                           </div>
+                                          <div>
+                                            <label className="text-xs font-medium text-muted-foreground">
+                                              {t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            </label>
+                                            <Input
+                                              value={specialtyTranslations[languageCode] || ''}
+                                              onChange={(e) =>
+                                                setSpecialtyTranslations((prev) => ({
+                                                  ...prev,
+                                                  [languageCode]: e.target.value,
+                                                }))
+                                              }
+                                              className="mt-1"
+                                              placeholder={t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-xs font-medium text-muted-foreground">
+                                              {t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            </label>
                                           <Textarea
-                                            value={value}
+                                            value={bioTranslations[languageCode] || ''}
                                             onChange={(e) =>
                                               setBioTranslations((prev) => ({
                                                 ...prev,
                                                 [languageCode]: e.target.value,
                                               }))
                                             }
-                                            className="min-h-[88px]"
+                                            className="mt-1 min-h-[88px]"
                                             placeholder={t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
                                           />
+                                          </div>
                                         </div>
                                       ))}
                                   </div>
