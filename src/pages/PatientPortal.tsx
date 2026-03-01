@@ -55,7 +55,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { useLanguage } from '@/contexts/LanguageContext';
+import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
@@ -126,6 +126,25 @@ const PAST_CONFIRMED_CALENDAR_STYLE = {
   bg: '#f59e0b',
   text: '#ffffff',
 } as const;
+
+const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
+  en: { key: 'auth.values.languages.english', fallback: 'English' },
+  ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
+  ig: { key: 'auth.values.languages.igbo', fallback: 'Igbo' },
+  yo: { key: 'auth.values.languages.yoruba', fallback: 'Yoruba' },
+  sw: { key: 'auth.values.languages.swahili', fallback: 'Swahili' },
+  ar: { key: 'auth.values.languages.arabic', fallback: 'Arabic' },
+  fr: { key: 'auth.values.languages.french', fallback: 'French' },
+  es: { key: 'auth.values.languages.spanish', fallback: 'Spanish' },
+  pt: { key: 'auth.values.languages.portuguese', fallback: 'Portuguese' },
+  nl: { key: 'common.language.dutch', fallback: 'Dutch' },
+  zh: { key: 'common.language.chinese', fallback: 'Chinese' },
+  de: { key: 'common.language.german', fallback: 'German' },
+};
+
+const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
+  typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
+);
 
 interface PatientPrescription {
   id: string;
@@ -259,7 +278,7 @@ const PatientPortal = () => {
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
-  const { t, language } = useLanguage();
+  const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   
   // Track patient presence
@@ -509,6 +528,7 @@ const PatientPortal = () => {
     phone: '',
     age: '',
     bloodType: '',
+    preferredLanguage: language as AppLanguage,
   });
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
@@ -523,6 +543,9 @@ const PatientPortal = () => {
         phone: patientRegistration.phone_number || '',
         age: patientRegistration.age?.toString() || '',
         bloodType: patientRegistration.blood_type || '',
+        preferredLanguage: isSupportedAppLanguage((patientRegistration as { preferred_language?: unknown })?.preferred_language)
+          ? ((patientRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
+          : language,
       });
     }
   }, [patientRegistration]);
@@ -1278,12 +1301,17 @@ const PatientPortal = () => {
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all'>('all');
   const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [isMobileAppointmentsLayout, setIsMobileAppointmentsLayout] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
+  const appliedPreferredLanguageRef = useRef(false);
   const withdrawalAmountValue = Number(withdrawAmount.replace(/,/g, '').trim());
   const canSubmitWithdrawal = Number.isFinite(withdrawalAmountValue) &&
     withdrawalAmountValue > 0 &&
@@ -1346,6 +1374,36 @@ const PatientPortal = () => {
       navigate('/doctor-discovery', { replace: true });
     }
   }, [searchParams, navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobileAppointmentsLayout(event.matches);
+    };
+
+    setIsMobileAppointmentsLayout(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (appliedPreferredLanguageRef.current) return;
+    if (!patientRegistration) return;
+    appliedPreferredLanguageRef.current = true;
+
+    const preferredLanguage = (patientRegistration as { preferred_language?: unknown })?.preferred_language;
+    if (isSupportedAppLanguage(preferredLanguage) && preferredLanguage !== language) {
+      setLanguage(preferredLanguage);
+    }
+  }, [patientRegistration, language, setLanguage]);
 
   // Handle post-consultation review deep-link
   useEffect(() => {
@@ -2052,20 +2110,36 @@ const PatientPortal = () => {
     setIsSavingProfile(true);
     
     try {
+      const preferredLanguageToSave = isSupportedAppLanguage(profileFormData.preferredLanguage)
+        ? profileFormData.preferredLanguage
+        : language;
+      const baseProfilePayload = {
+        full_name: profileFormData.fullName,
+        email: profileFormData.email,
+        phone_number: profileFormData.phone,
+        age: parseInt(profileFormData.age) || null,
+        blood_type: profileFormData.bloodType,
+      };
       const { error } = await supabase
         .from('patient_registrations')
         .update({
-          full_name: profileFormData.fullName,
-          email: profileFormData.email,
-          phone_number: profileFormData.phone,
-          age: parseInt(profileFormData.age) || null,
-          blood_type: profileFormData.bloodType,
+          ...baseProfilePayload,
+          preferred_language: preferredLanguageToSave,
         })
         .eq('user_id', user.id);
 
-      if (error) throw error;
+      if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+        const { error: fallbackError } = await supabase
+          .from('patient_registrations')
+          .update(baseProfilePayload)
+          .eq('user_id', user.id);
+        if (fallbackError) throw fallbackError;
+      } else if (error) {
+        throw error;
+      }
 
       queryClient.invalidateQueries({ queryKey: ['patient-registration'] });
+      setLanguage(preferredLanguageToSave);
       toast({
         title: t('common.success', 'Success'),
         description: t('common.profileUpdated', 'Profile updated successfully!'),
@@ -2198,6 +2272,12 @@ const PatientPortal = () => {
       ? String(apt.reschedule_proposed_time || apt.time)
       : apt.time
   );
+  const getCalendarDisplayStatus = useCallback((apt: {
+    status: string;
+    reschedule_request_status?: string | null;
+  }) => (
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending' ? 'pending_approval' : apt.status
+  ), []);
   const hasEffectiveAppointmentTimePassed = (apt: {
     date: string;
     time: string;
@@ -2324,21 +2404,28 @@ const PatientPortal = () => {
       acc[dateKey].push(apt);
       return acc;
     }, {});
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, getCalendarDisplayStatus]);
 
   const calendarStatusLegend = useMemo(() => {
     const seen = new Set<string>();
     return filteredAppointmentsByStatus
-      .filter((apt) => {
-        if (seen.has(apt.status)) return false;
-        seen.add(apt.status);
+      .map((apt) => getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      }))
+      .filter((status) => {
+        if (seen.has(status)) return false;
+        seen.add(status);
         return true;
-      })
-      .map((apt) => apt.status);
+      });
   }, [filteredAppointmentsByStatus]);
   const hasPastConfirmedInCalendar = useMemo(
-    () => filteredAppointmentsByStatus.some((apt) => apt.status === 'confirmed' && hasAppointmentTimePassed(apt)),
-    [filteredAppointmentsByStatus],
+    () => appointmentStatusFilter === 'confirmed' && filteredAppointmentsByStatus.some(
+      (apt) => apt.status === 'confirmed'
+        && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })
+        && hasAppointmentTimePassed(apt),
+    ),
+    [filteredAppointmentsByStatus, appointmentStatusFilter],
   );
   const hasPendingRescheduleInCalendar = useMemo(
     () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
@@ -2387,7 +2474,14 @@ const PatientPortal = () => {
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
       const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
-      const isPastConfirmed = apt.status === 'confirmed' && hasAppointmentTimePassed(apt);
+      const displayStatus = getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      });
+      const isPastConfirmed = appointmentStatusFilter === 'confirmed'
+        && apt.status === 'confirmed'
+        && !pendingReschedule
+        && hasAppointmentTimePassed(apt);
       const eventDate = getCalendarAppointmentDate(apt as {
         date: string;
         reschedule_request_status?: string | null;
@@ -2402,7 +2496,7 @@ const PatientPortal = () => {
         ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
         : isPastConfirmed
         ? PAST_CONFIRMED_CALENDAR_STYLE
-        : (APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[displayStatus as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       const doctorName = getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name);
       return {
         id: apt.id,
@@ -2413,16 +2507,17 @@ const PatientPortal = () => {
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
-          status: apt.status,
+          status: displayStatus,
+          sourceStatus: apt.status,
           appointmentDate: eventDate,
           isPastConfirmed,
           isPendingReschedule: pendingReschedule,
         }
       };
     });
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, appointmentStatusFilter, getCalendarDisplayStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]
+  const calendarRenderKey = `${appointmentStatusFilter}-${isMobileAppointmentsLayout ? 'mobile' : 'desktop'}-${filteredAppointmentsByStatus[0]
     ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
       date: string;
       reschedule_request_status?: string | null;
@@ -2547,15 +2642,23 @@ const PatientPortal = () => {
               center: 'title',
               right: 'dayGridMonth,timeGridWeek,timeGridDay'
             }}
+            buttonText={{
+              today: t('common.today', 'Today'),
+              month: t('patientPortal.calendar.monthShort', 'Month'),
+              week: t('patientPortal.calendar.weekShort', 'Week'),
+              day: t('patientPortal.calendar.dayShort', 'Day'),
+            }}
             events={fullCalendarEvents}
-            dayMaxEvents={2}
+            dayMaxEvents={isMobileAppointmentsLayout ? 2 : 3}
             eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
             slotMinTime="06:00:00"
             slotMaxTime="23:00:00"
             slotDuration="00:30:00"
             allDaySlot={false}
             nowIndicator
+            stickyHeaderDates
             height="auto"
+            expandRows
             dayCellDidMount={handleCalendarDayCellMount}
             eventDidMount={handleCalendarEventMount}
             dateClick={(arg: DateClickArg) => {
@@ -2944,6 +3047,8 @@ const PatientPortal = () => {
     }
   };
 
+  const appointmentStatusTriggerClass = 'relative h-10 w-full px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-background/70 sm:text-sm md:w-auto md:min-w-[116px] md:px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md data-[state=active]:ring-1 data-[state=active]:ring-primary/35';
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -3159,8 +3264,8 @@ const PatientPortal = () => {
 
             {/* Reschedule Confirmation Modal */}
             <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
-              <DialogContent>
-                <DialogHeader>
+              <DialogContent className="w-[95vw] max-w-3xl max-h-[92vh] overflow-hidden p-0">
+                <DialogHeader className="px-5 pt-5 pb-1 sm:px-6 sm:pt-6">
                   <DialogTitle>{t('patientPortal.reschedule.confirmTitle', 'Confirm Reschedule Request')}</DialogTitle>
                   <DialogDescription>
                     {rescheduleUpgradeAmount > 0 
@@ -3169,7 +3274,7 @@ const PatientPortal = () => {
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid gap-4 py-4">
+                <div className="grid max-h-[calc(92vh-160px)] gap-4 overflow-y-auto px-5 py-4 sm:px-6">
                   {rescheduleAppointment && (
                     <>
                       <div className="p-3 rounded-lg border border-border bg-background/60">
@@ -3315,7 +3420,7 @@ const PatientPortal = () => {
                   )}
                 </div>
 
-                <DialogFooter>
+                <DialogFooter className="border-t bg-background px-5 py-4 sm:px-6">
                   <Button variant="outline" onClick={() => {
                     setBookingOpen(false);
                     setSlotSelectionOpen(true);
@@ -3877,12 +3982,12 @@ const PatientPortal = () => {
                         <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
                         <CardDescription>{t('patientPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                        <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                      <div className="flex w-full flex-col sm:w-auto sm:flex-row sm:items-center gap-2">
+                        <div className="inline-flex w-full sm:w-auto items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
                           <Button
                             size="sm"
                             variant={appointmentViewMode === 'list' ? 'default' : 'ghost'}
-                            className="h-8 gap-1"
+                            className="h-8 flex-1 sm:flex-none gap-1"
                             onClick={() => setAppointmentViewMode('list')}
                           >
                             <List className="w-4 h-4" />
@@ -3891,14 +3996,14 @@ const PatientPortal = () => {
                           <Button
                             size="sm"
                             variant={appointmentViewMode === 'calendar' ? 'default' : 'ghost'}
-                            className="h-8 gap-1"
+                            className="h-8 flex-1 sm:flex-none gap-1"
                             onClick={() => setAppointmentViewMode('calendar')}
                           >
                             <Calendar className="w-4 h-4" />
                             {t('common.calendar', 'Calendar')}
                           </Button>
                         </div>
-                        <Button onClick={openBooking} className="gap-2">
+                        <Button onClick={openBooking} className="w-full sm:w-auto gap-2">
                           <Plus className="w-4 h-4" />
                           {t('patientPortal.headers.newAppointment', 'New Appointment')}
                         </Button>
@@ -3908,27 +4013,27 @@ const PatientPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 mb-6">
-                        <TabsTrigger value="pending_approval" className="relative">
-                          Pending Approval
+                      <TabsList className="mb-6 grid h-auto w-full grid-cols-3 gap-1 rounded-xl bg-muted/40 p-1 md:flex md:flex-wrap md:items-center md:justify-start md:gap-1.5">
+                        <TabsTrigger value="pending_approval" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.pending', 'Pending')}
                           {pendingApprovalCount > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
                               {pendingApprovalCount}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="confirmed" className="relative">
-                          Confirmed
+                        <TabsTrigger value="confirmed" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.confirmed', 'Confirmed')}
                           {confirmedCount > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
                               {confirmedCount}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
-                        <TabsTrigger value="no_show">No Show</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="completed" className={appointmentStatusTriggerClass}>{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="cancelled" className={appointmentStatusTriggerClass}>{t('appointmentStatus.cancelled', 'Cancelled')}</TabsTrigger>
+                        <TabsTrigger value="no_show" className={appointmentStatusTriggerClass}>{t('appointmentStatus.noShow', 'No Show')}</TabsTrigger>
+                        <TabsTrigger value="all" className={appointmentStatusTriggerClass}>{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
                       {/* Pending Approval Tab Content */}
@@ -4752,6 +4857,26 @@ const PatientPortal = () => {
                             placeholder={t('common.bloodTypeExample', 'e.g., A+, O-, B+')}
                             className="mt-1" 
                           />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">{t('common.language', 'Language')}</label>
+                          <select
+                            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={profileFormData.preferredLanguage || language}
+                            onChange={(e) => setProfileFormData({
+                              ...profileFormData,
+                              preferredLanguage: (e.target.value as AppLanguage),
+                            })}
+                          >
+                            {SUPPORTED_LANGUAGES.map((languageCode) => (
+                              <option key={languageCode} value={languageCode}>
+                                {t(APP_LANGUAGE_OPTION_MAP[languageCode].key, APP_LANGUAGE_OPTION_MAP[languageCode].fallback)}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t('patientPortal.settings.preferredLanguageHint', 'This will be your default app language until you change it again.')}
+                          </p>
                         </div>
                       </div>
 
