@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -235,6 +235,7 @@ const PatientPortal = () => {
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
+  const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [selectedInvestigationRequest, setSelectedInvestigationRequest] = useState<PatientInvestigationRequest | null>(null);
@@ -251,6 +252,72 @@ const PatientPortal = () => {
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
   useRealtimeMessageNotifications(user?.id, 'patient');
+
+  const getMessageReadState = useCallback(() => {
+    if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
+    const storageKey = `patient-messages-read-${user.id}`;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      );
+    } catch {
+      return {};
+    }
+  }, [user?.id]);
+
+  const refreshUnreadMessagesCount = useCallback(async () => {
+    if (!user?.id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const { data: sessions, error: sessionError } = await supabase
+      .from('consultation_sessions')
+      .select('id')
+      .eq('patient_id', user.id);
+
+    if (sessionError || !sessions || sessions.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const sessionIds = sessions
+      .map((row) => row.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (sessionIds.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const readState = getMessageReadState();
+    const { data: messages, error: messageError } = await supabase
+      .from('consultation_messages')
+      .select('session_id, created_at, sender_role')
+      .in('session_id', sessionIds)
+      .eq('sender_role', 'doctor')
+      .order('created_at', { ascending: true });
+
+    if (messageError || !messages) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const total = messages.reduce((count, row: any) => {
+      const sessionId = String(row.session_id || '');
+      const createdAt = String(row.created_at || '');
+      if (!sessionId || !createdAt) return count;
+      const lastReadAt = readState[sessionId];
+      if (lastReadAt && new Date(createdAt).getTime() <= new Date(lastReadAt).getTime()) return count;
+      return count + 1;
+    }, 0);
+
+    setUnreadMessagesCount(total);
+  }, [getMessageReadState, user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -270,7 +337,6 @@ const PatientPortal = () => {
           if (!message?.session_id || !message.sender_id) return;
           if (message.sender_id === user.id) return;
           if (message.sender_role !== 'doctor') return;
-          if (activeTab === 'messages') return;
 
           let session = sessionParticipantsCacheRef.current.get(message.session_id);
           if (!session) {
@@ -288,7 +354,7 @@ const PatientPortal = () => {
           }
 
           if (session.patient_id !== user.id) return;
-          setUnreadMessagesCount((prev) => prev + 1);
+          refreshUnreadMessagesCount();
         }
       )
       .subscribe();
@@ -296,13 +362,19 @@ const PatientPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, activeTab]);
+  }, [user?.id, refreshUnreadMessagesCount]);
 
   useEffect(() => {
-    if (activeTab === 'messages' && unreadMessagesCount > 0) {
-      setUnreadMessagesCount(0);
-    }
-  }, [activeTab, unreadMessagesCount]);
+    refreshUnreadMessagesCount();
+  }, [activeTab, messagesJumpToUnreadSignal, refreshUnreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'messages') return;
+    const timer = window.setInterval(() => {
+      refreshUnreadMessagesCount();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [activeTab, refreshUnreadMessagesCount]);
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
   const { data: patientWallet } = useQuery({
@@ -1446,6 +1518,70 @@ const PatientPortal = () => {
     setSlotSelectionOpen(true);
   };
 
+  const openMessagesForAppointment = async (apt: any) => {
+    if (!user?.id) return;
+    const appointmentId = (apt as { id?: string | null }).id;
+    const doctorId = (apt as { doctor_id?: string | null }).doctor_id;
+    if (!appointmentId || !doctorId) {
+      toast({
+        title: t('patientPortal.messaging.unavailableTitle', 'Messaging unavailable'),
+        description: t('patientPortal.messaging.missingDoctorContext', 'Doctor details are missing for this appointment.'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const consultationTypeCandidate = String(
+      (apt as { consultation_type?: string | null }).consultation_type ||
+      ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
+      (apt as { consultationType?: string | null }).consultationType ||
+      (apt as { consultation_mode?: string | null }).consultation_mode ||
+      'video'
+    ).toLowerCase();
+    const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
+      ? consultationTypeCandidate
+      : 'video';
+
+    try {
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointmentId)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      let sessionId = existingSession?.id ?? null;
+      if (!sessionId) {
+        const { data: createdSession, error: createSessionError } = await supabase
+          .from('consultation_sessions')
+          .insert({
+            appointment_id: appointmentId,
+            patient_id: user.id,
+            doctor_id: doctorId,
+            consultation_type: consultationType,
+          })
+          .select('id')
+          .single();
+
+        if (createSessionError) throw createSessionError;
+        sessionId = createdSession.id;
+      }
+
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(sessionId), 0);
+      setActiveTab('messages');
+      setSidebarOpen(false);
+    } catch (err) {
+      console.error('Failed to open appointment messages:', err);
+      toast({
+        title: t('patientPortal.messaging.failedTitle', 'Unable to open messages'),
+        description: t('patientPortal.messaging.failedDescription', 'Please try again in a moment.'),
+        variant: 'destructive',
+      });
+    }
+  };
+
   const rescheduleBooking = async () => {
     if (!requireAuthForBooking()) return;
     if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId || !rescheduleAppointment) {
@@ -2427,6 +2563,19 @@ const PatientPortal = () => {
                       size="sm"
                     />
                   )}
+                  {(calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'completed') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        openMessagesForAppointment(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      {t('patientPortal.actions.message', 'Message')}
+                    </Button>
+                  )}
                   {calendarFocusedAppointment.status === 'completed' && !(calendarFocusedAppointment as any).rating && (
                     <Button
                       size="sm"
@@ -2779,6 +2928,9 @@ const PatientPortal = () => {
                     <button
                       key={item.id}
                       onClick={() => {
+                        if (item.id === 'messages' && unreadMessagesCount > 0) {
+                          setMessagesJumpToUnreadSignal(Date.now());
+                        }
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -3297,6 +3449,17 @@ const PatientPortal = () => {
                                   className="w-full sm:w-auto"
                                 />
                               )}
+                              {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => openMessagesForAppointment(apt)}
+                                >
+                                  <MessageSquare className="w-4 h-4 mr-2" />
+                                  {t('patientPortal.actions.message', 'Message')}
+                                </Button>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -3601,6 +3764,14 @@ const PatientPortal = () => {
                                       size="sm"
                                       className="gradient-primary"
                                     />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
+                                    </Button>
                                     {apt.status === 'confirmed' && (
                                       <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
                                         Reschedule
@@ -3659,17 +3830,27 @@ const PatientPortal = () => {
                                       )}
                                     </div>
                                   </div>
-                                  {!(apt as any).rating && (
+                                  <div className="flex gap-2">
                                     <Button
                                       size="sm"
-                                      onClick={() => {
-                                        setSelectedAppointment(apt);
-                                        setReviewModalOpen(true);
-                                      }}
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
                                     >
-                                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
                                     </Button>
-                                  )}
+                                    {!(apt as any).rating && (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => {
+                                          setSelectedAppointment(apt);
+                                          setReviewModalOpen(true);
+                                        }}
+                                      >
+                                        {t('patientPortal.actions.leaveReview', 'Leave Review')}
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                               ))
                             )}
@@ -3847,6 +4028,12 @@ const PatientPortal = () => {
                                       size="sm"
                                     />
                                   )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'completed') && (
+                                    <Button size="sm" variant="outline" onClick={() => openMessagesForAppointment(apt)}>
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
+                                    </Button>
+                                  )}
                                   {apt.status === 'completed' && !(apt as any).rating && (
                                     <Button
                                       size="sm"
@@ -4015,7 +4202,10 @@ const PatientPortal = () => {
 
               {/* Messages Tab */}
               <TabsContent value="messages" className="space-y-6">
-                <MessagesTab focusSessionId={messagesFocusSessionId} />
+                <MessagesTab
+                  focusSessionId={messagesFocusSessionId}
+                  jumpToUnreadSignal={messagesJumpToUnreadSignal}
+                />
               </TabsContent>
 
               {/* Records Tab */}
