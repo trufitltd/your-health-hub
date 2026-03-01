@@ -29,7 +29,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download, Menu, X, List,
-  Wallet, CreditCard
+  Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -2659,7 +2659,50 @@ const PatientPortal = () => {
     }
     return true;
   }).length;
-  const pendingPaymentAppointmentsCount = appointments.filter((apt) => apt.status === 'pending_payment').length;
+  const overviewKpis = useMemo(() => {
+    const upcomingAppointments = appointments.filter((apt) => {
+      const status = String(apt.status || '').trim().toLowerCase();
+      const isUpcomingStatus = ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(status);
+      if (!isUpcomingStatus) return false;
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }).length;
+    const completedAppointments = appointments.filter((apt) => apt.status === 'completed').length;
+    const pendingApprovalAppointments = appointments.filter((apt) => apt.status === 'pending_approval').length;
+    const pendingPaymentAppointments = appointments.filter((apt) => apt.status === 'pending_payment').length;
+    const rescheduleResponseNeeded = appointments.filter((apt) =>
+      isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) &&
+      isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null }),
+    ).length;
+    const missedAppointments = appointments.filter((apt) =>
+      apt.status === 'no_show' &&
+      !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+    ).length;
+    const actionNeeded = pendingPaymentAppointments + rescheduleResponseNeeded;
+    const activePrescriptions = fetchedPrescriptions.filter((prescription) => prescription.status === 'active').length;
+
+    return {
+      upcomingAppointments,
+      completedAppointments,
+      pendingApprovalAppointments,
+      pendingPaymentAppointments,
+      rescheduleResponseNeeded,
+      missedAppointments,
+      actionNeeded,
+      activePrescriptions,
+    };
+  }, [
+    appointments,
+    fetchedPrescriptions,
+    hasEffectiveAppointmentTimePassed,
+    isPendingRescheduleRequest,
+    isDoctorRequestedReschedule,
+  ]);
 
   const handlePayNow = async (apt: any) => {
     if (!user) {
@@ -3251,40 +3294,52 @@ const PatientPortal = () => {
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <CardTitle className="text-base">{t('patientPortal.payments.financialSnapshot', 'Financial Snapshot')}</CardTitle>
-                        <CardDescription>{t('patientPortal.payments.financialSnapshotHint', 'Quick payment and wallet summary for your account.')}</CardDescription>
+                        <CardTitle className="text-base">{t('patientPortal.kpi.careSnapshot', 'Care Snapshot')}</CardTitle>
+                        <CardDescription>{t('patientPortal.kpi.careSnapshotHint', 'A quick view of your appointment and treatment journey.')}</CardDescription>
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="gap-2"
-                        onClick={() => setActiveTab('payments')}
+                        onClick={() => setActiveTab('appointments')}
                       >
-                        <CreditCard className="w-4 h-4" />
-                        {t('patientPortal.payments.openPaymentsTab', 'Open Payments')}
+                        {t('common.appointments', 'Appointments')}
                       </Button>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                       <div className="rounded-lg border border-border p-3 bg-muted/20">
-                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
-                        <p className="text-lg font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.upcomingAppointments', 'Upcoming')}</p>
+                        <p className="text-lg font-semibold">{overviewKpis.upcomingAppointments}</p>
                       </div>
                       <div className="rounded-lg border border-border p-3 bg-muted/20">
-                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.pendingWithdrawals', 'Pending Withdrawals')}</p>
-                        <p className="text-lg font-semibold">{pendingWalletWithdrawalsCount}</p>
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.actionNeeded', 'Action Needed')}</p>
+                        <p className="text-lg font-semibold text-amber-700">{overviewKpis.actionNeeded}</p>
                       </div>
                       <div className="rounded-lg border border-border p-3 bg-muted/20">
-                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.successfulPayments', 'Successful Payments')}</p>
-                        <p className="text-lg font-semibold">{paymentSummary.successfulCount}</p>
-                        <p className="text-xs text-muted-foreground">₦{paymentSummary.successfulAmount.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.pendingApproval', 'Pending Approval')}</p>
+                        <p className="text-lg font-semibold text-blue-700">{overviewKpis.pendingApprovalAppointments}</p>
                       </div>
                       <div className="rounded-lg border border-border p-3 bg-muted/20">
-                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.pendingPayments', 'Pending Payments')}</p>
-                        <p className="text-lg font-semibold">{pendingPaymentAppointmentsCount}</p>
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.completedAppointments', 'Completed')}</p>
+                        <p className="text-lg font-semibold">{overviewKpis.completedAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.missedAppointments', 'Missed (No-show)')}</p>
+                        <p className="text-lg font-semibold text-destructive">{overviewKpis.missedAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.activePrescriptions', 'Active Prescriptions')}</p>
+                        <p className="text-lg font-semibold text-emerald-700">{overviewKpis.activePrescriptions}</p>
                       </div>
                     </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {t(
+                        'patientPortal.kpi.actionNeededHint',
+                        'Action Needed includes pending payments and doctor-proposed reschedule requests awaiting your response.',
+                      )}
+                    </p>
                   </CardContent>
                 </Card>
 
