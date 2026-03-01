@@ -67,7 +67,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
 
-const PROFILE_TRANSLATION_LANGUAGES = [
+const PROFILE_BIO_TRANSLATION_LANGUAGES = [
   { code: 'ha', label: 'Hausa' },
   { code: 'ig', label: 'Igbo' },
   { code: 'yo', label: 'Yoruba' },
@@ -81,26 +81,13 @@ const PROFILE_TRANSLATION_LANGUAGES = [
   { code: 'de', label: 'German' },
 ] as const;
 
-type ProfileTranslationLanguageCode = (typeof PROFILE_TRANSLATION_LANGUAGES)[number]['code'];
-
-const createEmptyProfileTranslations = () =>
-  PROFILE_TRANSLATION_LANGUAGES.reduce(
-    (acc, lang) => {
-      acc.specialty[lang.code] = '';
-      acc.bio[lang.code] = '';
-      return acc;
-    },
-    {
-      specialty: {} as Record<ProfileTranslationLanguageCode, string>,
-      bio: {} as Record<ProfileTranslationLanguageCode, string>,
-    }
-  );
-
-const getJsonTranslationValue = (value: unknown, key: string) => {
-  if (!value || typeof value !== 'object') return '';
-  const candidate = (value as Record<string, unknown>)[key];
-  return typeof candidate === 'string' ? candidate : '';
-};
+const PROFILE_BIO_LANGUAGE_LABELS: Record<string, string> = PROFILE_BIO_TRANSLATION_LANGUAGES.reduce(
+  (acc, languageOption) => {
+    acc[languageOption.code] = languageOption.label;
+    return acc;
+  },
+  {} as Record<string, string>
+);
 
 const CONSULTATION_LANGUAGE_VALUES = [
   'english',
@@ -120,6 +107,11 @@ const CONSULTATION_LANGUAGE_VALUES = [
 const normalizeConsultationLanguage = (value: string | null | undefined) => {
   if (!value) return '';
   return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+};
+
+const normalizeBioLanguageCode = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[^a-z]/g, '');
 };
 
 const formatDateKey = (date: Date) => {
@@ -256,6 +248,9 @@ const DoctorPortal = () => {
       ),
     }));
   }, [t]);
+  const getBioLanguageLabel = (code: string) =>
+    PROFILE_BIO_LANGUAGE_LABELS[code]
+    || code.toUpperCase();
   const unreadReviewsCount = unreadReviewIds.length;
   const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
 
@@ -606,8 +601,16 @@ const DoctorPortal = () => {
     newPassword: '',
     confirmPassword: '',
   });
-  const [profileTranslations, setProfileTranslations] = useState(createEmptyProfileTranslations);
+  const [bioTranslations, setBioTranslations] = useState<Record<string, string>>({});
+  const [newBioLanguageCode, setNewBioLanguageCode] = useState('');
   const [selectedConsultationLanguages, setSelectedConsultationLanguages] = useState<string[]>([]);
+  const availableBioTranslationLanguageOptions = useMemo(
+    () =>
+      PROFILE_BIO_TRANSLATION_LANGUAGES.filter(
+        (languageOption) => !bioTranslations[languageOption.code]
+      ),
+    [bioTranslations]
+  );
 
   const patientFolderFieldOrder = [
     'patient_type',
@@ -847,18 +850,30 @@ const DoctorPortal = () => {
   // Initialize form data when doctorRegistration loads
   useEffect(() => {
     if (doctorRegistration) {
-      const nextTranslations = createEmptyProfileTranslations();
-      const specialtyTranslations = doctorRegistration.specialty_translations;
-      const bioTranslations = doctorRegistration.bio_translations;
+      const nextBioTranslations: Record<string, string> = {};
+      const rawBioTranslations = doctorRegistration.bio_translations;
 
-      PROFILE_TRANSLATION_LANGUAGES.forEach((lang) => {
-        const bioColumnKey = `bio_${lang.code}` as keyof typeof doctorRegistration;
-        nextTranslations.bio[lang.code] =
-          (doctorRegistration[bioColumnKey] as string | undefined) ||
-          getJsonTranslationValue(bioTranslations, lang.code);
+      if (rawBioTranslations && typeof rawBioTranslations === 'object') {
+        Object.entries(rawBioTranslations as Record<string, unknown>).forEach(([code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return;
+          if (typeof value !== 'string') return;
+          const trimmedValue = value.trim();
+          if (!trimmedValue) return;
+          nextBioTranslations[normalizedCode] = trimmedValue;
+        });
+      }
 
-        nextTranslations.specialty[lang.code] =
-          getJsonTranslationValue(specialtyTranslations, lang.code);
+      PROFILE_BIO_TRANSLATION_LANGUAGES.forEach((languageOption) => {
+        const normalizedCode = normalizeBioLanguageCode(languageOption.code);
+        if (!normalizedCode || normalizedCode === 'en') return;
+        if (nextBioTranslations[normalizedCode]) return;
+        const legacyBioColumnKey = `bio_${normalizedCode}` as keyof typeof doctorRegistration;
+        const legacyValue = doctorRegistration[legacyBioColumnKey];
+        if (typeof legacyValue !== 'string') return;
+        const trimmedValue = legacyValue.trim();
+        if (!trimmedValue) return;
+        nextBioTranslations[normalizedCode] = trimmedValue;
       });
 
       setProfileFormData({
@@ -869,7 +884,10 @@ const DoctorPortal = () => {
         experience: doctorRegistration.experience || '',
         bio: doctorRegistration.bio || '',
       });
-      setProfileTranslations(nextTranslations);
+      setBioTranslations(nextBioTranslations);
+      const initialAddLanguage =
+        PROFILE_BIO_TRANSLATION_LANGUAGES.find((languageOption) => !nextBioTranslations[languageOption.code])?.code || '';
+      setNewBioLanguageCode(initialAddLanguage);
       const existingConsultationLanguages = Array.isArray(doctorRegistration.preferred_consultation_languages)
         ? doctorRegistration.preferred_consultation_languages
           .map((item: string) => normalizeConsultationLanguage(item))
@@ -2049,24 +2067,58 @@ const DoctorPortal = () => {
     }
   };
 
+  const handleAddBioTranslation = () => {
+    const normalizedCode = normalizeBioLanguageCode(newBioLanguageCode);
+    if (!normalizedCode || bioTranslations[normalizedCode]) return;
+
+    setBioTranslations((prev) => {
+      const next = {
+        ...prev,
+        [normalizedCode]: '',
+      };
+      const nextAvailableCode =
+        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+          (languageOption) => !next[languageOption.code]
+        )?.code || '';
+      setNewBioLanguageCode(nextAvailableCode);
+      return next;
+    });
+  };
+
+  const handleRemoveBioTranslation = (languageCode: string) => {
+    setBioTranslations((prev) => {
+      const next = { ...prev };
+      delete next[languageCode];
+      const nextAvailableCode =
+        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+          (languageOption) => !next[languageOption.code]
+        )?.code || '';
+      setNewBioLanguageCode((current) => current || nextAvailableCode);
+      return next;
+    });
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.id) return;
     setIsSavingProfile(true);
     
     try {
-      const specialtyTranslationsPayload = PROFILE_TRANSLATION_LANGUAGES.reduce<Record<string, string>>(
-        (acc, lang) => {
-          const value = profileTranslations.specialty[lang.code]?.trim();
-          if (value) acc[lang.code] = value;
+      const bioTranslationsPayload = Object.entries(bioTranslations).reduce<Record<string, string>>(
+        (acc, [code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return acc;
+          const trimmedValue = String(value || '').trim();
+          if (!trimmedValue) return acc;
+          acc[normalizedCode] = trimmedValue;
           return acc;
         },
         {}
       );
-
-      const bioTranslationsPayload = PROFILE_TRANSLATION_LANGUAGES.reduce<Record<string, string>>(
-        (acc, lang) => {
-          const value = profileTranslations.bio[lang.code]?.trim();
-          if (value) acc[lang.code] = value;
+      const legacyBioColumnPayload = PROFILE_BIO_TRANSLATION_LANGUAGES.reduce<Record<string, string | null>>(
+        (acc, languageOption) => {
+          const normalizedCode = normalizeBioLanguageCode(languageOption.code);
+          const legacyColumnKey = `bio_${normalizedCode}`;
+          acc[legacyColumnKey] = bioTranslationsPayload[normalizedCode] || null;
           return acc;
         },
         {}
@@ -2101,19 +2153,8 @@ const DoctorPortal = () => {
           specialty: profileFormData.specialty.trim(),
           experience: profileFormData.experience.trim(),
           bio: profileFormData.bio.trim(),
-          bio_ha: profileTranslations.bio.ha.trim() || null,
-          bio_ig: profileTranslations.bio.ig.trim() || null,
-          bio_yo: profileTranslations.bio.yo.trim() || null,
-          bio_sw: profileTranslations.bio.sw.trim() || null,
-          bio_ar: profileTranslations.bio.ar.trim() || null,
-          bio_fr: profileTranslations.bio.fr.trim() || null,
-          bio_es: profileTranslations.bio.es.trim() || null,
-          bio_pt: profileTranslations.bio.pt.trim() || null,
-          bio_nl: profileTranslations.bio.nl.trim() || null,
-          bio_zh: profileTranslations.bio.zh.trim() || null,
-          bio_de: profileTranslations.bio.de.trim() || null,
+          ...legacyBioColumnPayload,
           bio_translations: bioTranslationsPayload,
-          specialty_translations: specialtyTranslationsPayload,
           preferred_consultation_languages: normalizedConsultationLanguages,
         })
         .eq('user_id', user.id);
@@ -3865,50 +3906,76 @@ const DoctorPortal = () => {
                             <div>
                               <p className="text-sm font-medium">{t('doctorPortal.settings.multilingualTitle', 'Multilingual Profile Content')}</p>
                               <p className="text-xs text-muted-foreground">
-                                {t('doctorPortal.settings.multilingualDescription', 'Add translated specialty and bio for patients using other languages.')}
+                                {t('doctorPortal.settings.multilingualDescription', 'Add translated bio for patients using other languages.')}
                               </p>
                             </div>
 
                             <div className="space-y-4">
-                              {PROFILE_TRANSLATION_LANGUAGES.map((lang) => (
-                                <div key={lang.code} className="rounded-lg border border-border p-4 space-y-3">
-                                  <p className="text-sm font-semibold">{lang.label}</p>
+                              <div className="rounded-lg border border-border p-4 space-y-3">
+                                <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
                                   <div>
-                                    <label className="text-xs font-medium text-muted-foreground">{t('common.specialty', 'Specialty')} ({lang.code.toUpperCase()})</label>
-                                    <Input
-                                      value={profileTranslations.specialty[lang.code]}
-                                      onChange={(e) =>
-                                        setProfileTranslations((prev) => ({
-                                          ...prev,
-                                          specialty: {
-                                            ...prev.specialty,
-                                            [lang.code]: e.target.value,
-                                          },
-                                        }))
-                                      }
-                                      className="mt-1"
-                                      placeholder={t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', lang.label)}
-                                    />
+                                    <label className="text-xs font-medium text-muted-foreground">Language</label>
+                                    <select
+                                      value={newBioLanguageCode}
+                                      onChange={(e) => setNewBioLanguageCode(normalizeBioLanguageCode(e.target.value))}
+                                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                                    >
+                                      <option value="">Select language</option>
+                                      {availableBioTranslationLanguageOptions.map((languageOption) => (
+                                        <option key={languageOption.code} value={languageOption.code}>
+                                          {languageOption.label}
+                                        </option>
+                                      ))}
+                                    </select>
                                   </div>
-                                  <div>
-                                    <label className="text-xs font-medium text-muted-foreground">{t('common.bio', 'Bio')} ({lang.code.toUpperCase()})</label>
-                                    <Textarea
-                                      value={profileTranslations.bio[lang.code]}
-                                      onChange={(e) =>
-                                        setProfileTranslations((prev) => ({
-                                          ...prev,
-                                          bio: {
-                                            ...prev.bio,
-                                            [lang.code]: e.target.value,
-                                          },
-                                        }))
-                                      }
-                                      className="mt-1 min-h-[88px]"
-                                      placeholder={t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', lang.label)}
-                                    />
-                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={handleAddBioTranslation}
+                                    disabled={!newBioLanguageCode}
+                                  >
+                                    Add Language Bio
+                                  </Button>
                                 </div>
-                              ))}
+
+                                {Object.keys(bioTranslations).length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    No additional bio languages added yet.
+                                  </p>
+                                ) : (
+                                  <div className="space-y-3">
+                                    {Object.entries(bioTranslations)
+                                      .sort(([codeA], [codeB]) => codeA.localeCompare(codeB))
+                                      .map(([languageCode, value]) => (
+                                        <div key={languageCode} className="rounded-lg border border-border p-3 space-y-2">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className="text-sm font-semibold">{getBioLanguageLabel(languageCode)}</p>
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-8 px-2 text-destructive hover:text-destructive"
+                                              onClick={() => handleRemoveBioTranslation(languageCode)}
+                                            >
+                                              Remove
+                                            </Button>
+                                          </div>
+                                          <Textarea
+                                            value={value}
+                                            onChange={(e) =>
+                                              setBioTranslations((prev) => ({
+                                                ...prev,
+                                                [languageCode]: e.target.value,
+                                              }))
+                                            }
+                                            className="min-h-[88px]"
+                                            placeholder={t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                          />
+                                        </div>
+                                      ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
 
