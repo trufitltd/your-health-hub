@@ -1,4 +1,5 @@
 import { type AppLanguage, useLanguage } from "@/contexts/LanguageContext";
+import { useLocation } from "react-router-dom";
 
 interface LanguageSelectorProps {
   className?: string;
@@ -44,6 +45,15 @@ export function LanguageSelector({ className = "" }: LanguageSelectorProps) {
 }
 
 export function FloatingLanguageSelector() {
+  const location = useLocation();
+  const pathname = location.pathname || "";
+  const isMessagingSensitiveRoute =
+    pathname.startsWith("/patient-portal") ||
+    pathname.startsWith("/doctor-portal") ||
+    pathname.startsWith("/consultation/");
+
+  if (isMessagingSensitiveRoute) return null;
+
   return (
     <div
       className="fixed z-[120] rounded-lg border border-border bg-background/95 p-2 shadow-lg backdrop-blur-sm bottom-4 left-4"
