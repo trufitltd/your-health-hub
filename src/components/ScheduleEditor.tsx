@@ -24,7 +24,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
   // Local state to manage multiple slots while editing a day
   const [localSlots, setLocalSlots] = useState<Array<{ id?: string; start: string; end: string }>>([]);
   const [newStart, setNewStart] = useState('09:00');
-  const [newEnd, setNewEnd] = useState('17:00');
+  const [newEnd, setNewEnd] = useState('23:00');
   const [validationError, setValidationError] = useState<string | null>(null);
   const { upsertSchedule, toggleAvailability, deleteSchedule } = useSchedules(doctorId);
 
@@ -35,7 +35,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
     const slots = (day?.schedules || []).map(s => ({ id: s.id, start: s.start_time, end: s.end_time }));
     setLocalSlots(sortSlots(slots));
     setNewStart(currentStart || '09:00');
-    setNewEnd(currentEnd || '17:00');
+    setNewEnd(currentEnd || '23:00');
     setValidationError(null);
   };
 
@@ -46,7 +46,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
   // Editing an existing slot
   const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
   const [editingStart, setEditingStart] = useState('09:00');
-  const [editingEnd, setEditingEnd] = useState('09:30');
+  const [editingEnd, setEditingEnd] = useState('23:00');
 
   const handleStartEdit = (slot: { id?: string; start: string; end: string }) => {
     setEditingSlotId(slot.id || null);
@@ -61,9 +61,9 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
     return hh * 60 + mm;
   };
 
-  const isOnHalfHour = (t: string) => {
+  const isOnQuarterHour = (t: string) => {
     const mm = Number(t.split(':')[1] || 0);
-    return mm % 30 === 0;
+    return mm % 15 === 0;
   };
 
   const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) => {
@@ -78,8 +78,8 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
       return;
     }
 
-    if (!isOnHalfHour(newStart) || !isOnHalfHour(newEnd)) {
-      setValidationError(t('scheduleEditor.errors.halfHourOnly', 'Times must be on the hour or half hour (e.g. 09:00 or 09:30)'));
+    if (!isOnQuarterHour(newStart) || !isOnQuarterHour(newEnd)) {
+      setValidationError(t('scheduleEditor.errors.halfHourOnly', 'Times must be in 15-minute increments (e.g. 09:00, 09:15, 09:30)'));
       return;
     }
 
@@ -106,14 +106,14 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
         day_of_week: editingDay,
         start_time: newStart,
         end_time: newEnd,
-        slot_duration_minutes: 30,
+        slot_duration_minutes: 15,
         is_available: true,
       });
 
       // Add to local list with returned id and sort
       setLocalSlots(prev => sortSlots([...prev, { id: created.id, start: created.start_time, end: created.end_time }]));
       setNewStart('09:00');
-      setNewEnd('17:00');
+      setNewEnd('23:00');
     } catch (err) {
       console.error('Failed to add slot:', err);
       setValidationError(t('scheduleEditor.errors.addSlotFailed', 'Failed to add slot'));
@@ -139,8 +139,8 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
       setValidationError(t('scheduleEditor.errors.provideStartEnd', 'Please provide both start and end times'));
       return;
     }
-    if (!isOnHalfHour(editingStart) || !isOnHalfHour(editingEnd)) {
-      setValidationError(t('scheduleEditor.errors.halfHourOnly', 'Times must be on the hour or half hour (e.g. 09:00 or 09:30)'));
+    if (!isOnQuarterHour(editingStart) || !isOnQuarterHour(editingEnd)) {
+      setValidationError(t('scheduleEditor.errors.halfHourOnly', 'Times must be in 15-minute increments (e.g. 09:00, 09:15, 09:30)'));
       return;
     }
     const s = timeToMinutes(editingStart);
@@ -169,7 +169,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
           day_of_week: editingDay,
           start_time: editingStart,
           end_time: editingEnd,
-          slot_duration_minutes: 30,
+          slot_duration_minutes: 15,
           is_available: true,
         });
         setLocalSlots(prev => sortSlots(prev.map(s => s.id === editingSlotId ? { id: updated.id, start: updated.start_time, end: updated.end_time } : s)));
@@ -178,7 +178,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
           day_of_week: editingDay,
           start_time: editingStart,
           end_time: editingEnd,
-          slot_duration_minutes: 30,
+          slot_duration_minutes: 15,
           is_available: true,
         });
         setLocalSlots(prev => sortSlots([...prev, { id: created.id, start: created.start_time, end: created.end_time }]));
@@ -186,7 +186,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
 
       setEditingSlotId(null);
       setEditingStart('09:00');
-      setEditingEnd('09:30');
+      setEditingEnd('23:00');
     } catch (err) {
       console.error('Failed to save slot edit:', err);
       setValidationError(t('scheduleEditor.errors.saveEditFailed', 'Failed to save slot edit'));
@@ -292,7 +292,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
                       <DialogHeader>
                         <DialogTitle>{t('scheduleEditor.editDaySchedule', 'Edit {day} Schedule').replace('{day}', getLocalizedDayName(day.dayOfWeek))}</DialogTitle>
                         <DialogDescription>
-                          {t('scheduleEditor.addMultipleSlotsForDay', 'Add multiple time slots for {day} (30-minute granularity)').replace('{day}', getLocalizedDayName(day.dayOfWeek))}
+                          {t('scheduleEditor.addMultipleSlotsForDay', 'Add multiple time slots for {day} (15-minute granularity)').replace('{day}', getLocalizedDayName(day.dayOfWeek))}
                         </DialogDescription>
                       </DialogHeader>
 
@@ -308,8 +308,8 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
                                 <div key={slot.id || `${slot.start}-${slot.end}-${idx}`} className="flex items-center justify-between p-2 rounded border border-border">
                                   {editingSlotId === slot.id || (editingSlotId === null && !slot.id && editingStart === slot.start && editingEnd === slot.end) ? (
                                     <div className="flex-1 grid grid-cols-3 gap-2 items-center">
-                                      <Input type="time" step={1800} value={editingStart} onChange={(e) => setEditingStart(e.target.value)} />
-                                      <Input type="time" step={1800} value={editingEnd} onChange={(e) => setEditingEnd(e.target.value)} />
+                                      <Input type="time" step={900} value={editingStart} onChange={(e) => setEditingStart(e.target.value)} />
+                                      <Input type="time" step={900} value={editingEnd} onChange={(e) => setEditingEnd(e.target.value)} />
                                       <div className="flex gap-2">
                                         <Button size="sm" onClick={handleSaveEdit}>{t('common.save', 'Save')}</Button>
                                         <Button size="sm" variant="outline" onClick={() => setEditingSlotId(null)}>{t('patientPortal.actions.cancel', 'Cancel')}</Button>
@@ -340,7 +340,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
                               <Input
                                 id="new-start"
                                 type="time"
-                                step={1800}
+                                step={900}
                                 value={newStart}
                                 onChange={(e) => setNewStart(e.target.value)}
                               />
@@ -349,7 +349,7 @@ export const ScheduleEditor = ({ doctorId, onScheduleUpdate }: ScheduleEditorPro
                               <Input
                                 id="new-end"
                                 type="time"
-                                step={1800}
+                                step={900}
                                 value={newEnd}
                                 onChange={(e) => setNewEnd(e.target.value)}
                               />

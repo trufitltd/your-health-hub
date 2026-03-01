@@ -153,7 +153,7 @@ export const useSchedules = (doctorId: string | undefined) => {
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
         title: t('common.success', 'Success'),
-        description: t('scheduleEditor.toast.defaultCreated', 'Default schedule created (Mon-Fri, 9 AM - 5 PM)'),
+        description: t('scheduleEditor.toast.defaultCreated', 'Default schedule created (9 AM - 11 PM)'),
       });
     },
     onError: (error) => {
