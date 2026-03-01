@@ -38,6 +38,7 @@ interface Doctor {
   total_reviews?: number;
   experience_years?: number;
   bio?: string;
+  preferred_consultation_languages?: string[] | null;
   is_active?: boolean;
   online_status?: 'online' | 'away' | 'offline';
 }
@@ -46,6 +47,56 @@ type SlotStatusRow = {
   id: string;
   status: string | null;
   slot_locked_until: string | null;
+};
+
+const SUPPORTED_CONSULTATION_LANGUAGES = [
+  'english',
+  'hausa',
+  'igbo',
+  'yoruba',
+  'arabic',
+  'swahili',
+  'fulfulde',
+  'tiv',
+  'pidgin_english',
+  'french',
+  'spanish',
+  'portuguese',
+] as const;
+
+const CONSULTATION_LANGUAGE_LABELS: Record<string, string> = {
+  english: 'English',
+  hausa: 'Hausa',
+  igbo: 'Igbo',
+  yoruba: 'Yoruba',
+  arabic: 'Arabic',
+  swahili: 'Swahili',
+  fulfulde: 'Fulfulde',
+  tiv: 'Tiv',
+  pidgin_english: 'Pidgin English',
+  french: 'French',
+  spanish: 'Spanish',
+  portuguese: 'Portuguese',
+};
+
+const isMissingColumnError = (error: { code?: string; message?: string } | null | undefined) => {
+  if (!error) return false;
+  return error.code === '42703' || error.code === 'PGRST204';
+};
+
+const normalizeConsultationLanguage = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+};
+
+const formatConsultationLanguageLabel = (value: string) => {
+  const normalized = normalizeConsultationLanguage(value);
+  if (!normalized) return 'Unknown';
+  return CONSULTATION_LANGUAGE_LABELS[normalized]
+    || normalized
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
 };
 
 export default function DoctorDiscovery() {
@@ -65,6 +116,7 @@ export default function DoctorDiscovery() {
     minRating: 0,
     minExperience: 0,
     hospital: '',
+    consultationLanguage: '',
   });
   const [availabilityMode, setAvailabilityMode] = useState<'none' | 'now' | 'exact' | 'range'>('none');
   const [availabilityFilters, setAvailabilityFilters] = useState({
@@ -222,7 +274,7 @@ export default function DoctorDiscovery() {
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
     queryKey: ['doctors-discovery'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const doctorsWithLanguagesQuery = await supabase
         .from('doctor_registrations')
         .select(`
           id,
@@ -237,16 +289,63 @@ export default function DoctorDiscovery() {
           city,
           state,
           bio,
-          experience
+          experience,
+          preferred_consultation_languages
         `)
         .eq('verification_status', 'approved')
         .order('full_name');
 
-      if (error) throw error;
+      let registrationRows: Array<{
+        id: string;
+        user_id: string;
+        full_name: string;
+        specialty: string;
+        rate_per_consultation?: number | null;
+        hospital_affiliation: string;
+        profile_picture_url?: string;
+        age: number;
+        verification_status: string;
+        city: string;
+        state: string;
+        bio?: string;
+        experience?: string | null;
+        preferred_consultation_languages?: string[] | null;
+      }> = [];
+
+      if (doctorsWithLanguagesQuery.error) {
+        if (!isMissingColumnError(doctorsWithLanguagesQuery.error)) {
+          throw doctorsWithLanguagesQuery.error;
+        }
+
+        const doctorsFallbackQuery = await supabase
+          .from('doctor_registrations')
+          .select(`
+            id,
+            user_id,
+            full_name,
+            specialty,
+            rate_per_consultation,
+            hospital_affiliation,
+            profile_picture_url,
+            age,
+            verification_status,
+            city,
+            state,
+            bio,
+            experience
+          `)
+          .eq('verification_status', 'approved')
+          .order('full_name');
+
+        if (doctorsFallbackQuery.error) throw doctorsFallbackQuery.error;
+        registrationRows = (doctorsFallbackQuery.data || []) as typeof registrationRows;
+      } else {
+        registrationRows = (doctorsWithLanguagesQuery.data || []) as typeof registrationRows;
+      }
 
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
-        (data || []).map(async (doctor) => {
+        registrationRows.map(async (doctor) => {
           // Fetch doctor availability status
           const { data: doctorStatus } = await supabase
             .from('doctors')
@@ -274,6 +373,11 @@ export default function DoctorDiscovery() {
 
           const hasAvailableSchedules = (schedules || []).length > 0;
           const isActive = doctorStatus?.is_active !== false;
+          const preferredConsultationLanguages = Array.isArray(doctor.preferred_consultation_languages)
+            ? doctor.preferred_consultation_languages
+              .map((language) => normalizeConsultationLanguage(String(language)))
+              .filter(Boolean)
+            : [];
 
           return {
             ...doctor,
@@ -281,6 +385,7 @@ export default function DoctorDiscovery() {
             total_reviews: ratings.length,
             experience_years: doctor.experience ? Number(doctor.experience) : null,
             rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
+            preferred_consultation_languages: preferredConsultationLanguages,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })
@@ -293,7 +398,7 @@ export default function DoctorDiscovery() {
   // Merge presence data with doctors
   const doctorsWithPresence = useMemo(() => {
     console.log('[DoctorDiscovery] Current presence map:', presenceMap);
-    console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, auth_user_id: d.auth_user_id, name: d.full_name })));
+    console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, name: d.full_name })));
     return doctors.map(doctor => {
       // Use user_id which matches the auth user ID
       const status = presenceMap[doctor.user_id] || 'offline';
@@ -366,9 +471,18 @@ export default function DoctorDiscovery() {
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
       const matchesExperience = !filters.minExperience || (doctor.experience_years || 0) >= filters.minExperience;
       const matchesHospital = !filters.hospital || doctor.hospital_affiliation.toLowerCase().includes(filters.hospital.toLowerCase());
+      const matchesLanguage = !filters.consultationLanguage
+        || (doctor.preferred_consultation_languages || []).includes(filters.consultationLanguage);
       const matchesAvailability = availabilityMode === 'none' || availableDoctorIds.includes(doctor.user_id);
 
-      return matchesSearch && matchesDoctorType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
+      return matchesSearch
+        && matchesDoctorType
+        && matchesSpecialty
+        && matchesRating
+        && matchesExperience
+        && matchesHospital
+        && matchesLanguage
+        && matchesAvailability;
     });
   }, [searchQuery, filters, doctorsWithPresence, availabilityMode, availableDoctorIds, doctorTypeFilter]);
 
@@ -380,6 +494,23 @@ export default function DoctorDiscovery() {
   const hospitals = useMemo(() =>
     [...new Set(doctorsWithPresence.map(d => d.hospital_affiliation))].sort(), [doctorsWithPresence]
   );
+
+  const consultationLanguageOptions = useMemo(() => {
+    const languageValues = new Set<string>(SUPPORTED_CONSULTATION_LANGUAGES);
+
+    doctorsWithPresence.forEach((doctor) => {
+      (doctor.preferred_consultation_languages || []).forEach((language) => {
+        const normalizedLanguage = normalizeConsultationLanguage(language);
+        if (normalizedLanguage) {
+          languageValues.add(normalizedLanguage);
+        }
+      });
+    });
+
+    return Array.from(languageValues)
+      .map((value) => ({ value, label: formatConsultationLanguageLabel(value) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [doctorsWithPresence]);
 
   const handleViewProfile = (doctor: Doctor) => {
     setSelectedDoctor(doctor);
@@ -585,6 +716,19 @@ export default function DoctorDiscovery() {
                     ))}
                   </select>
 
+                  <select
+                    value={filters.consultationLanguage}
+                    onChange={(e) => setFilters({ ...filters, consultationLanguage: e.target.value })}
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                  >
+                    <option value="">Any Language</option>
+                    {consultationLanguageOptions.map((languageOption) => (
+                      <option key={languageOption.value} value={languageOption.value}>
+                        {languageOption.label}
+                      </option>
+                    ))}
+                  </select>
+
                   {(availabilityMode === 'exact' || availabilityMode === 'range') && (
                     <Button
                       variant="ghost"
@@ -605,7 +749,7 @@ export default function DoctorDiscovery() {
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' });
+                        setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' });
                         setSearchQuery('');
                         setDoctorTypeFilter('all');
                         setAvailabilityMode('none');
@@ -641,7 +785,7 @@ export default function DoctorDiscovery() {
                   <p className="text-muted-foreground mb-4">Try adjusting your filters or search query</p>
                   <Button
                     variant="outline"
-                    onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' })}
+                    onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' })}
                   >
                     Clear All Filters
                   </Button>
@@ -688,6 +832,23 @@ export default function DoctorDiscovery() {
                           <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
                           {doctor.bio && (
                             <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{doctor.bio}</p>
+                          )}
+                          {doctor.preferred_consultation_languages && doctor.preferred_consultation_languages.length > 0 && (
+                            <div className="mb-3">
+                              <p className="text-xs text-muted-foreground mb-2">Consultation Languages</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {doctor.preferred_consultation_languages.slice(0, 3).map((language, index) => (
+                                  <Badge key={`${doctor.id}-language-${language}-${index}`} variant="secondary" className="text-[11px]">
+                                    {formatConsultationLanguageLabel(language)}
+                                  </Badge>
+                                ))}
+                                {doctor.preferred_consultation_languages.length > 3 && (
+                                  <Badge variant="outline" className="text-[11px]">
+                                    +{doctor.preferred_consultation_languages.length - 3}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
                           )}
 
                           <div className="space-y-2 mb-4 flex-1">
@@ -771,6 +932,15 @@ export default function DoctorDiscovery() {
                         <Badge variant="outline" className="text-xs">{getStatusColor(selectedDoctor.online_status).text}</Badge>
                       </div>
                       <p className="text-lg text-primary font-medium mb-3">{selectedDoctor.specialty}</p>
+                      {selectedDoctor.preferred_consultation_languages && selectedDoctor.preferred_consultation_languages.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {selectedDoctor.preferred_consultation_languages.map((language, index) => (
+                            <Badge key={`profile-language-${language}-${index}`} variant="secondary" className="text-xs">
+                              {formatConsultationLanguageLabel(language)}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="flex items-center gap-4 mb-4">
                         {selectedDoctor.rating !== undefined && (
