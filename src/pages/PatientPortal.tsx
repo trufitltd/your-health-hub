@@ -28,7 +28,8 @@ import {
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
-  Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download, Menu, X, List
+  Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download, Menu, X, List,
+  Wallet, CreditCard
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -64,6 +65,7 @@ import {
   normalizeAppointmentStatus,
   normalizeRescheduleRequestStatus,
   type AppointmentStatus,
+  type PatientWalletTransaction,
 } from '@/services/marketplaceTypes';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
@@ -153,6 +155,20 @@ interface PatientInvestigationRequest {
   sessionId: string | null;
   date: string;
   details: string;
+}
+
+interface PatientPaymentTransactionRow {
+  id: string;
+  appointment_id: string | null;
+  amount: number;
+  status: string | null;
+  provider: string | null;
+  payment_method: string | null;
+  payment_reference: string | null;
+  provider_reference: string | null;
+  created_at: string;
+  verified_at: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 const INVESTIGATION_SECTION_HEADERS = [
@@ -317,6 +333,28 @@ const PatientPortal = () => {
     enabled: !!user?.id,
     refetchInterval: 30000,
   });
+  const { data: walletTransactions = [], isLoading: walletTransactionsLoading } = useQuery({
+    queryKey: ['patient-wallet-transactions', user?.id],
+    queryFn: () => PatientWalletService.getWalletTransactions(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: paymentTransactions = [], isLoading: paymentTransactionsLoading } = useQuery({
+    queryKey: ['patient-payments', user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('payments')
+        .select('id, appointment_id, amount, status, provider, payment_method, payment_reference, provider_reference, created_at, verified_at, metadata')
+        .eq('patient_id', user!.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      return (data || []) as PatientPaymentTransactionRow[];
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
@@ -332,6 +370,60 @@ const PatientPortal = () => {
     }).length,
     [walletWithdrawalRequests],
   );
+  const paymentSummary = useMemo(() => {
+    const successfulStatuses = new Set(['completed', 'success', 'paid', 'succeeded']);
+    const failedStatuses = new Set(['failed', 'error', 'abandoned']);
+
+    let successfulCount = 0;
+    let failedCount = 0;
+    let pendingCount = 0;
+    let successfulAmount = 0;
+
+    paymentTransactions.forEach((row) => {
+      const amount = Number(row.amount || 0);
+      const status = String(row.status || '').trim().toLowerCase();
+      if (successfulStatuses.has(status)) {
+        successfulCount += 1;
+        successfulAmount += Number.isFinite(amount) ? amount : 0;
+        return;
+      }
+      if (failedStatuses.has(status)) {
+        failedCount += 1;
+        return;
+      }
+      pendingCount += 1;
+    });
+
+    return {
+      successfulCount,
+      failedCount,
+      pendingCount,
+      successfulAmount,
+      totalCount: paymentTransactions.length,
+    };
+  }, [paymentTransactions]);
+  const walletSummary = useMemo(() => {
+    let creditTotal = 0;
+    let debitTotal = 0;
+
+    walletTransactions.forEach((tx) => {
+      const amount = Number(tx.amount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      const direction = String(tx.direction || '').toLowerCase();
+      if (direction === 'credit') {
+        creditTotal += amount;
+      } else if (direction === 'debit') {
+        debitTotal += amount;
+      }
+    });
+
+    return {
+      creditTotal,
+      debitTotal,
+      net: creditTotal - debitTotal,
+      totalCount: walletTransactions.length,
+    };
+  }, [walletTransactions]);
   const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawNarration, setWithdrawNarration] = useState('');
@@ -1147,6 +1239,33 @@ const PatientPortal = () => {
       return 'bg-destructive/10 text-destructive border-destructive/20';
     }
     return 'bg-warning/10 text-warning border-warning/20';
+  };
+
+  const getPaymentStatusLabel = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (['completed', 'success', 'paid', 'succeeded'].includes(normalized)) return 'Successful';
+    if (['failed', 'error', 'abandoned'].includes(normalized)) return 'Failed';
+    if (!normalized) return 'Pending';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const getPaymentStatusBadgeClass = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (['completed', 'success', 'paid', 'succeeded'].includes(normalized)) {
+      return 'bg-success/10 text-success border-success/20';
+    }
+    if (['failed', 'error', 'abandoned'].includes(normalized)) {
+      return 'bg-destructive/10 text-destructive border-destructive/20';
+    }
+    return 'bg-warning/10 text-warning border-warning/20';
+  };
+
+  const getWalletTransactionLabel = (tx: PatientWalletTransaction) => {
+    const type = String(tx.transaction_type || '').trim().toLowerCase();
+    if (type === 'refund') return 'Refund';
+    if (type === 'booking_wallet_use') return 'Appointment Payment';
+    if (type === 'adjustment') return 'Adjustment';
+    return type ? type.replace(/_/g, ' ') : 'Wallet Transaction';
   };
 
   // Legacy deep-link support: previous booking links opened an in-portal dialog.
@@ -2540,6 +2659,7 @@ const PatientPortal = () => {
     }
     return true;
   }).length;
+  const pendingPaymentAppointmentsCount = appointments.filter((apt) => apt.status === 'pending_payment').length;
 
   const handlePayNow = async (apt: any) => {
     if (!user) {
@@ -2662,30 +2782,6 @@ const PatientPortal = () => {
                 />
               </div>
 
-              {!isPwaInstalled && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="hidden md:inline-flex"
-                    onClick={handleInstallApp}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    {t('common.installApp', 'Install App')}
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="md:hidden"
-                    onClick={handleInstallApp}
-                    aria-label="Install app"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </>
-              )}
-
               <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
                 {notifications.filter(n => !n.read).length > 0 && (
@@ -2774,6 +2870,7 @@ const PatientPortal = () => {
                       badgeTone: 'danger' as const
                     },
                     { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
+                    { id: 'payments', label: t('common.payments', 'Payments'), icon: Wallet },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -2847,75 +2944,6 @@ const PatientPortal = () => {
                 </Button>
               </div>
             </motion.div>
-
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <p className="text-sm">
-                  {t('patientPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')} <span className="font-semibold">{t('patientPortal.downloadApp', 'Download App')}</span> {t('patientPortal.installBannerTextSuffix', 'to install on your phone.')}
-                </p>
-                <Link to="/install">
-                  <Button size="sm" className="gap-2">
-                    <Download className="w-4 h-4" />
-                    {t('patientPortal.openInstallPage', 'Open Install Page')}
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t('patientPortal.wallet.refundHint', 'Cancellation and no-show refunds are credited here.')}
-                    {' '}Withdrawal requests are processed within 48 hours.
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {pendingWalletWithdrawalsCount > 0 ? (
-                    <Badge className="bg-warning/10 text-warning border-warning/20">
-                      {pendingWalletWithdrawalsCount} pending withdrawal{pendingWalletWithdrawalsCount > 1 ? 's' : ''}
-                    </Badge>
-                  ) : null}
-                  <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setWithdrawDialogOpen(true)}
-                    disabled={patientWalletBalance <= 0}
-                  >
-                    {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {walletWithdrawalRequests.length > 0 ? (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">{t('patientPortal.wallet.requestWithdrawal', 'Withdrawal Requests')}</CardTitle>
-                  <CardDescription>Track your latest payout requests and status updates.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {walletWithdrawalRequests.slice(0, 3).map((request) => (
-                    <div key={request.id} className="rounded-lg border border-border p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Badge className={getWithdrawalStatusBadgeClass(request.status)}>
-                          {getWithdrawalStatusLabel(request.status)}
-                        </Badge>
-                        <span className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</span>
-                      </div>
-                      <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                        <p>Requested: {new Date(request.created_at).toLocaleString()}</p>
-                        {request.sla_due_at ? <p>Expected by: {new Date(request.sla_due_at).toLocaleString()}</p> : null}
-                        {request.completed_at ? <p>Completed: {new Date(request.completed_at).toLocaleString()}</p> : null}
-                        {request.payout_reference ? <p>Transfer ref: {request.payout_reference}</p> : null}
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            ) : null}
 
             {/* Slot Selection Modal */}
             <SlotSelectionModal
@@ -3212,12 +3240,75 @@ const PatientPortal = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">{t('common.overview', 'Overview')}</TabsTrigger>
+                <TabsTrigger value="payments">{t('common.payments', 'Payments')}</TabsTrigger>
                 <TabsTrigger value="appointments">{t('common.appointments', 'Appointments')}</TabsTrigger>
                 <TabsTrigger value="prescriptions">{t('common.prescriptions', 'Prescriptions')}</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
               <TabsContent value="overview" className="space-y-6">
+                <Card className="border-primary/15">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base">{t('patientPortal.payments.financialSnapshot', 'Financial Snapshot')}</CardTitle>
+                        <CardDescription>{t('patientPortal.payments.financialSnapshotHint', 'Quick payment and wallet summary for your account.')}</CardDescription>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-2"
+                        onClick={() => setActiveTab('payments')}
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        {t('patientPortal.payments.openPaymentsTab', 'Open Payments')}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
+                        <p className="text-lg font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.pendingWithdrawals', 'Pending Withdrawals')}</p>
+                        <p className="text-lg font-semibold">{pendingWalletWithdrawalsCount}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.successfulPayments', 'Successful Payments')}</p>
+                        <p className="text-lg font-semibold">{paymentSummary.successfulCount}</p>
+                        <p className="text-xs text-muted-foreground">₦{paymentSummary.successfulAmount.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.pendingPayments', 'Pending Payments')}</p>
+                        <p className="text-lg font-semibold">{pendingPaymentAppointmentsCount}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {!isPwaInstalled ? (
+                  <Card className="border-primary/20 bg-primary/5">
+                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <p className="text-sm">
+                        {t('patientPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')} <span className="font-semibold">{t('patientPortal.downloadApp', 'Download App')}</span> {t('patientPortal.installBannerTextSuffix', 'to install on your phone.')}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" className="gap-2" onClick={handleInstallApp}>
+                          <Download className="w-4 h-4" />
+                          {t('common.installApp', 'Install App')}
+                        </Button>
+                        <Link to="/install">
+                          <Button size="sm" variant="outline">
+                            {t('patientPortal.openInstallPage', 'Open Install Page')}
+                          </Button>
+                        </Link>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
                 {/* Upcoming Appointments */}
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
@@ -3384,6 +3475,179 @@ const PatientPortal = () => {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              {/* Payments Tab */}
+              <TabsContent value="payments" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <CardTitle>{t('common.payments', 'Payments')}</CardTitle>
+                        <CardDescription>{t('patientPortal.payments.manageWalletAndTransactions', 'View wallet balance, transactions, and withdrawal requests in one place.')}</CardDescription>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setWithdrawDialogOpen(true)}
+                        disabled={patientWalletBalance <= 0}
+                      >
+                        {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                      <div className="rounded-lg border border-border p-3 bg-primary/5">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
+                        <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.pendingWithdrawals', 'Pending Withdrawals')}</p>
+                        <p className="text-xl font-semibold">{pendingWalletWithdrawalsCount}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalCredits', 'Wallet Credits')}</p>
+                        <p className="text-xl font-semibold text-emerald-700">₦{walletSummary.creditTotal.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalDebits', 'Wallet Debits')}</p>
+                        <p className="text-xl font-semibold text-amber-700">₦{walletSummary.debitTotal.toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-lg border border-border p-4 bg-muted/10">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalTransactions', 'Payment Transactions')}</p>
+                          <p className="font-semibold">{paymentSummary.totalCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.successful', 'Successful')}</p>
+                          <p className="font-semibold text-emerald-700">{paymentSummary.successfulCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.pending', 'Pending')}</p>
+                          <p className="font-semibold text-amber-700">{paymentSummary.pendingCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.failed', 'Failed')}</p>
+                          <p className="font-semibold text-destructive">{paymentSummary.failedCount}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <div className="grid lg:grid-cols-2 gap-6">
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{t('patientPortal.payments.paymentTransactions', 'Payment Transactions')}</CardTitle>
+                      <CardDescription>{t('patientPortal.payments.paymentTransactionsHint', 'Paystack and wallet-linked payment intents for your appointments.')}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {paymentTransactionsLoading ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.loading.transactions', 'Loading transactions...')}</p>
+                      ) : paymentTransactions.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noPaymentTransactions', 'No payment transactions yet.')}</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {paymentTransactions.map((payment) => (
+                            <div key={payment.id} className="rounded-lg border border-border p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <Badge className={getPaymentStatusBadgeClass(payment.status)}>
+                                    {getPaymentStatusLabel(payment.status)}
+                                  </Badge>
+                                  <Badge variant="outline">
+                                    {String(payment.provider || payment.payment_method || 'Unknown').toUpperCase()}
+                                  </Badge>
+                                </div>
+                                <p className="font-semibold">₦{Number(payment.amount || 0).toLocaleString()}</p>
+                              </div>
+                              <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                <p>{t('common.createdAt', 'Created')}: {formatDateTime(payment.created_at)}</p>
+                                {payment.verified_at ? <p>{t('common.verified', 'Verified')}: {formatDateTime(payment.verified_at)}</p> : null}
+                                {payment.payment_reference ? <p>{t('patientPortal.payments.reference', 'Reference')}: {payment.payment_reference}</p> : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{t('patientPortal.wallet.ledger', 'Wallet Ledger')}</CardTitle>
+                      <CardDescription>{t('patientPortal.wallet.ledgerHint', 'All wallet credits and debits linked to your account.')}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {walletTransactionsLoading ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.loading.walletTransactions', 'Loading wallet ledger...')}</p>
+                      ) : walletTransactions.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noWalletTransactions', 'No wallet ledger entries yet.')}</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {walletTransactions.map((tx) => {
+                            const isCredit = String(tx.direction || '').toLowerCase() === 'credit';
+                            return (
+                              <div key={tx.id} className="rounded-lg border border-border p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={isCredit ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
+                                      {isCredit ? t('patientPortal.wallet.credit', 'Credit') : t('patientPortal.wallet.debit', 'Debit')}
+                                    </Badge>
+                                    <span className="text-sm font-medium">{getWalletTransactionLabel(tx)}</span>
+                                  </div>
+                                  <p className={`font-semibold ${isCredit ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                    {isCredit ? '+' : '-'}₦{Number(tx.amount || 0).toLocaleString()}
+                                  </p>
+                                </div>
+                                <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                  <p>{t('common.createdAt', 'Created')}: {formatDateTime(tx.created_at)}</p>
+                                  {tx.narration ? <p>{tx.narration}</p> : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">{t('patientPortal.wallet.requestWithdrawal', 'Withdrawal Requests')}</CardTitle>
+                    <CardDescription>{t('patientPortal.wallet.withdrawalRequestsHint', 'Track payout processing status and transfer references.')}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {walletWithdrawalRequests.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noWithdrawalRequests', 'No withdrawal requests yet.')}</p>
+                    ) : (
+                      <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                        {walletWithdrawalRequests.map((request) => (
+                          <div key={request.id} className="rounded-lg border border-border p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <Badge className={getWithdrawalStatusBadgeClass(request.status)}>
+                                {getWithdrawalStatusLabel(request.status)}
+                              </Badge>
+                              <span className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                              <p>{t('common.createdAt', 'Requested')}: {formatDateTime(request.created_at)}</p>
+                              {request.sla_due_at ? <p>{t('patientPortal.wallet.expectedBy', 'Expected by')}: {formatDateTime(request.sla_due_at)}</p> : null}
+                              {request.completed_at ? <p>{t('common.completed', 'Completed')}: {formatDateTime(request.completed_at)}</p> : null}
+                              {request.payout_reference ? <p>{t('patientPortal.wallet.transferReference', 'Transfer ref')}: {request.payout_reference}</p> : null}
+                              {request.admin_note ? <p>{request.admin_note}</p> : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               {/* Appointments Tab */}
