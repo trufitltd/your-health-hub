@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -221,6 +221,8 @@ const DoctorPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
+  const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
   const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
@@ -284,6 +286,72 @@ const DoctorPortal = () => {
   
   useTrackUserPresence(user?.id, 'doctor');
   useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  const getMessageReadState = useCallback(() => {
+    if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
+    const storageKey = `doctor-messages-read-${user.id}`;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      );
+    } catch {
+      return {};
+    }
+  }, [user?.id]);
+
+  const refreshUnreadMessagesCount = useCallback(async () => {
+    if (!user?.id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const { data: sessions, error: sessionError } = await supabase
+      .from('consultation_sessions')
+      .select('id')
+      .eq('doctor_id', user.id);
+
+    if (sessionError || !sessions || sessions.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const sessionIds = sessions
+      .map((row) => row.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (sessionIds.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const readState = getMessageReadState();
+    const { data: messages, error: messageError } = await supabase
+      .from('consultation_messages')
+      .select('session_id, created_at, sender_role')
+      .in('session_id', sessionIds)
+      .eq('sender_role', 'patient')
+      .order('created_at', { ascending: true });
+
+    if (messageError || !messages) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const total = messages.reduce((count, row: any) => {
+      const sessionId = String(row.session_id || '');
+      const createdAt = String(row.created_at || '');
+      if (!sessionId || !createdAt) return count;
+      const lastReadAt = readState[sessionId];
+      if (lastReadAt && new Date(createdAt).getTime() <= new Date(lastReadAt).getTime()) return count;
+      return count + 1;
+    }, 0);
+
+    setUnreadMessagesCount(total);
+  }, [getMessageReadState, user?.id]);
 
   useEffect(() => {
     if (!user?.id || !reviewSeenStorageKey) return;
@@ -369,7 +437,6 @@ const DoctorPortal = () => {
           if (!message?.session_id || !message.sender_id) return;
           if (message.sender_id === user.id) return;
           if (message.sender_role !== 'patient') return;
-          if (activeTab === 'messages') return;
 
           let session = sessionParticipantsCacheRef.current.get(message.session_id);
           if (!session) {
@@ -387,7 +454,7 @@ const DoctorPortal = () => {
           }
 
           if (session.doctor_id !== user.id) return;
-          setUnreadMessagesCount((prev) => prev + 1);
+          refreshUnreadMessagesCount();
         }
       )
       .subscribe();
@@ -395,13 +462,19 @@ const DoctorPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, activeTab]);
+  }, [user?.id, refreshUnreadMessagesCount]);
 
   useEffect(() => {
-    if (activeTab === 'messages' && unreadMessagesCount > 0) {
-      setUnreadMessagesCount(0);
-    }
-  }, [activeTab, unreadMessagesCount]);
+    refreshUnreadMessagesCount();
+  }, [activeTab, messagesJumpToUnreadSignal, refreshUnreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'messages') return;
+    const timer = window.setInterval(() => {
+      refreshUnreadMessagesCount();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [activeTab, refreshUnreadMessagesCount]);
 
   useEffect(() => {
     if (activeTab !== 'reviews' || unreadReviewIds.length === 0) return;
@@ -1074,6 +1147,70 @@ const DoctorPortal = () => {
     setRescheduleDialogOpen(true);
   };
 
+  const openMessagesForAppointment = async (apt: any) => {
+    if (!user?.id) return;
+    const appointmentId = (apt as { id?: string | null }).id;
+    const patientId = (apt as { patient_id?: string | null }).patient_id;
+    if (!appointmentId || !patientId) {
+      toast({
+        title: t('doctorPortal.messaging.unavailableTitle', 'Messaging unavailable'),
+        description: t('doctorPortal.messaging.missingPatientContext', 'Patient details are missing for this appointment.'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const consultationTypeCandidate = String(
+      (apt as { consultation_type?: string | null }).consultation_type ||
+      ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
+      (apt as { consultationType?: string | null }).consultationType ||
+      (apt as { consultation_mode?: string | null }).consultation_mode ||
+      'video'
+    ).toLowerCase();
+    const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
+      ? consultationTypeCandidate
+      : 'video';
+
+    try {
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointmentId)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      let sessionId = existingSession?.id ?? null;
+      if (!sessionId) {
+        const { data: createdSession, error: createSessionError } = await supabase
+          .from('consultation_sessions')
+          .insert({
+            appointment_id: appointmentId,
+            patient_id: patientId,
+            doctor_id: user.id,
+            consultation_type: consultationType,
+          })
+          .select('id')
+          .single();
+
+        if (createSessionError) throw createSessionError;
+        sessionId = createdSession.id;
+      }
+
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(sessionId), 0);
+      setActiveTab('messages');
+      setSidebarOpen(false);
+    } catch (err) {
+      console.error('Failed to open appointment messages:', err);
+      toast({
+        title: t('doctorPortal.messaging.failedTitle', 'Unable to open messages'),
+        description: t('doctorPortal.messaging.failedDescription', 'Please try again in a moment.'),
+        variant: 'destructive',
+      });
+    }
+  };
+
   const submitReschedule = async () => {
     if (!rescheduleAppointmentId || !rescheduleAppointment) return;
     if (!rescheduleDate || !rescheduleTime) {
@@ -1707,6 +1844,20 @@ const DoctorPortal = () => {
                       variant="default"
                       size="sm"
                     />
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'completed') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        openMessagesForAppointment(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      {t('doctorPortal.actions.message', 'Message')}
+                    </Button>
                   )}
                   {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
                     (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') &&
@@ -2366,6 +2517,9 @@ const DoctorPortal = () => {
                     <button
                       key={item.id}
                       onClick={() => {
+                        if (item.id === 'messages' && unreadMessagesCount > 0) {
+                          setMessagesJumpToUnreadSignal(Date.now());
+                        }
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -2589,7 +2743,19 @@ const DoctorPortal = () => {
                                   <p className="text-xs text-muted-foreground">{formatClockTime(apt.time)}</p>
                                 </div>
                               </div>
-                              {getStatusBadge(apt.status)}
+                              <div className="flex items-center gap-2">
+                                {getStatusBadge(apt.status)}
+                                {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openMessagesForAppointment(apt)}
+                                  >
+                                    <MessageSquare className="w-4 h-4 mr-2" />
+                                    {t('doctorPortal.actions.message', 'Message')}
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                           ))
                         )}
@@ -2819,18 +2985,18 @@ const DoctorPortal = () => {
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
-                                  <div className="flex gap-2">
+                                  <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
                                     {apt.patient_id && (
-                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                      <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => handleViewPatientFolder(apt)}>
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
                                     {pendingReschedule && patientRequested ? (
                                       <>
-                                        <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
                                           Approve Reschedule
                                         </Button>
-                                        <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        <Button size="sm" variant="destructive" className="w-full sm:w-auto" onClick={() => handleDeclineRequest(apt)}>
                                           Decline Request
                                         </Button>
                                       </>
@@ -2838,10 +3004,10 @@ const DoctorPortal = () => {
                                       <Badge variant="secondary">Waiting for patient approval</Badge>
                                     ) : (
                                       <>
-                                        <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
                                           Approve
                                         </Button>
-                                        <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        <Button size="sm" variant="destructive" className="w-full sm:w-auto" onClick={() => handleDeclineRequest(apt)}>
                                           Cancel
                                         </Button>
                                       </>
@@ -2899,19 +3065,29 @@ const DoctorPortal = () => {
                                       )}
                                     </div>
                                   </div>
-                                  <div className="flex gap-2">
+                                  <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
                                       status={apt.status}
                                       variant="default"
                                       size="sm"
-                                      className="gradient-primary"
+                                      className="gradient-primary w-full sm:w-auto"
                                     />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="w-full sm:w-auto"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
+                                    </Button>
                                     {apt.patient_id && (
                                       <Button
                                         size="sm"
                                         variant="outline"
+                                        className="w-full sm:w-auto"
                                         onClick={() => handleViewPatientFolder(apt)}
                                       >
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
@@ -2921,6 +3097,7 @@ const DoctorPortal = () => {
                                       <Button
                                         size="sm"
                                         variant="outline"
+                                        className="w-full sm:w-auto"
                                         onClick={() => openRescheduleDialog(apt)}
                                       >
                                         Reschedule
@@ -2930,7 +3107,7 @@ const DoctorPortal = () => {
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        className="text-destructive border-destructive/30"
+                                        className="w-full text-destructive border-destructive/30 sm:w-auto"
                                         onClick={() => handleMarkNoShow(apt.id)}
                                       >
                                         Mark No Show
@@ -3080,11 +3257,21 @@ const DoctorPortal = () => {
                                       )}
                                     </div>
                                   </div>
-                                  {apt.patient_id && (
-                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
-                                  )}
+                                    {apt.patient_id && (
+                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                               ))
                             )}
@@ -3164,6 +3351,12 @@ const DoctorPortal = () => {
                                       variant="default"
                                       size="sm"
                                     />
+                                  )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'completed') && (
+                                    <Button size="sm" variant="outline" onClick={() => openMessagesForAppointment(apt)}>
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
+                                    </Button>
                                   )}
                                   {apt.patient_id && (
                                     <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
@@ -3275,9 +3468,11 @@ const DoctorPortal = () => {
                                   variant="ghost"
                                   className="w-full sm:w-auto"
                                   onClick={() => {
-                                    setActiveTab('messages');
-                                    setSidebarOpen(false);
+                                    if (patient.latestAppointment) {
+                                      openMessagesForAppointment(patient.latestAppointment);
+                                    }
                                   }}
+                                  disabled={!patient.latestAppointment || !['confirmed', 'completed'].includes(String((patient.latestAppointment as { status?: string }).status || ''))}
                                 >
                                   <MessageSquare className="w-4 h-4 mr-2" />
                                   {t('doctorPortal.actions.message', 'Message')}
@@ -3541,7 +3736,10 @@ const DoctorPortal = () => {
                   </TabsContent>
 
                   <TabsContent value="messages" className="space-y-6">
-                    <DoctorMessagesTab />
+                    <DoctorMessagesTab
+                      focusSessionId={messagesFocusSessionId}
+                      jumpToUnreadSignal={messagesJumpToUnreadSignal}
+                    />
                   </TabsContent>
 
                   <TabsContent value="settings" className="space-y-6">
