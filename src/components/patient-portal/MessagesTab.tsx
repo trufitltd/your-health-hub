@@ -16,7 +16,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
+import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
@@ -440,7 +440,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground truncate mb-1">
-                      {thread.specialty || 'Specialty unavailable'}
+                      {formatSpecialtyLabel(thread.specialty, 'Specialty unavailable')}
                     </p>
                     <Badge variant="outline" className="text-[10px]">
                       {thread.consultationType || 'Consultation'}
@@ -480,7 +480,7 @@ export function MessagesTab({ focusSessionId = null }: MessagesTabProps) {
               <div className="min-w-0">
                 <h3 className="font-semibold">{formatDoctorDisplayName(selectedThread.doctorName)}</h3>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <span>{selectedThread.specialty || 'Specialty unavailable'}</span>
+                  <span>{formatSpecialtyLabel(selectedThread.specialty, 'Specialty unavailable')}</span>
                   <span>•</span>
                   <span>
                     {formatDate(selectedThread.appointmentDate)}
