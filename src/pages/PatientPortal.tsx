@@ -55,6 +55,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
 import { PatientWalletService } from '@/services/PatientWalletService';
@@ -69,6 +70,8 @@ import {
 } from '@/services/marketplaceTypes';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
+import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
+import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 
 const formatDateKey = (date: Date) => {
@@ -153,6 +156,26 @@ const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: stri
 const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
   typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
 );
+
+const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
+  return rows.reduce((total, row) => {
+    const body = String(row.message || '');
+    if (!body) return total;
+    let count = 0;
+    for (const match of body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
+      const timestamp = `${match[1].replace(' ', 'T')}:00`;
+      const replyTimeMs = new Date(timestamp).getTime();
+      if (!Number.isNaN(replyTimeMs) && replyTimeMs > lastReadAtMs) {
+        count += 1;
+      }
+    }
+    return total + count;
+  }, 0);
+};
+
+const countAdminReplyMarkers = (body: string) => {
+  return Array.from(body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)).length;
+};
 
 interface PatientPrescription {
   id: string;
@@ -272,6 +295,7 @@ const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [unreadContactCount, setUnreadContactCount] = useState(0);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
@@ -285,6 +309,7 @@ const PatientPortal = () => {
   const [investigationDetailsOpen, setInvestigationDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
+  const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
@@ -559,6 +584,70 @@ const PatientPortal = () => {
     }
   }, [patientRegistration]);
   const navigate = useNavigate();
+  const contactReadStorageKey = user?.id ? `patient-contact-last-read-${user.id}` : null;
+
+  const { data: contactMessagesForUnread = [] } = useQuery({
+    queryKey: ['patient-contact-unread', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase.rpc('get_my_contact_messages', { limit_count: 200 });
+      if (error) {
+        console.error('Error fetching patient contact messages:', error);
+        return [];
+      }
+      return (data || []) as Array<{ message?: string | null }>;
+    },
+    enabled: !!user?.id,
+    refetchInterval: 15000,
+  });
+
+  useEffect(() => {
+    if (!contactReadStorageKey || typeof window === 'undefined') return;
+    if (activeTab === 'contact') {
+      window.localStorage.setItem(contactReadStorageKey, new Date().toISOString());
+      setUnreadContactCount(0);
+      return;
+    }
+    const lastReadRaw = window.localStorage.getItem(contactReadStorageKey);
+    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
+    const unread = countUnreadAdminReplies(contactMessagesForUnread, Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs);
+    setUnreadContactCount(unread);
+  }, [activeTab, contactMessagesForUnread, contactReadStorageKey]);
+
+  useEffect(() => {
+    if (!user?.id || !user.email) return;
+    const lowerEmail = user.email.toLowerCase();
+
+    const channel = supabase
+      .channel(`patient-contact-replies-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
+          const oldRow = payload.old as { message?: string | null } | null;
+          if (!newRow?.email) return;
+          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
+
+          const oldCount = countAdminReplyMarkers(String(oldRow?.message || ''));
+          const newCount = countAdminReplyMarkers(String(newRow.message || ''));
+          if (newCount <= oldCount) return;
+
+          playNotificationSound();
+          toast({
+            title: 'New message from MyE-Doctor',
+            description: 'You received a new support reply.',
+          });
+          queryClient.invalidateQueries({ queryKey: ['patient-contact-unread', user.id] });
+          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [playNotificationSound, queryClient, user?.email, user?.id]);
 
   // Fetch prescriptions from doctor_consultation_notes
   const { data: fetchedPrescriptions = [], isLoading: prescriptionsLoading } = useQuery({
@@ -3203,6 +3292,7 @@ const PatientPortal = () => {
                     },
                     { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
                     { id: 'payments', label: t('common.payments', 'Payments'), icon: Wallet },
+                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -4782,6 +4872,16 @@ const PatientPortal = () => {
                 </Card>
               </TabsContent>
 
+              <TabsContent value="contact" className="space-y-6">
+                <ContactMyEDoctorForm
+                  role="patient"
+                  userId={user?.id}
+                  fullName={patientRegistration?.full_name || user?.user_metadata?.full_name || ''}
+                  email={patientRegistration?.email || user?.email || ''}
+                  phone={patientRegistration?.phone_number || ''}
+                />
+              </TabsContent>
+
               {/* Settings Tab */}
               <TabsContent value="settings" className="space-y-6">
                 <Card>
@@ -5093,7 +5193,7 @@ const PatientPortal = () => {
                     <span className="font-medium">Doctor:</span> {selectedConsultation.doctor_name}
                   </div>
                   <div>
-                    <span className="font-medium">Specialty:</span> {selectedConsultation.specialty}
+                    <span className="font-medium">Specialty:</span> {formatSpecialtyLabel(selectedConsultation.specialty)}
                   </div>
                   <div>
                     <span className="font-medium">Date:</span> {formatDate(selectedConsultation.date)}
