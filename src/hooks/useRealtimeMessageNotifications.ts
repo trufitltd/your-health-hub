@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
+import { useNotificationSound } from '@/hooks/useNotificationSound';
 
 type PortalRole = 'patient' | 'doctor';
 
@@ -24,6 +25,7 @@ const truncate = (value: string, max = 90) => {
 
 export function useRealtimeMessageNotifications(userId?: string, role?: PortalRole) {
   const sessionCacheRef = useRef<Map<string, SessionParticipants>>(new Map());
+  const { playNotificationSound } = useNotificationSound();
 
   useEffect(() => {
     if (!userId || !role) return;
@@ -64,6 +66,7 @@ export function useRealtimeMessageNotifications(userId?: string, role?: PortalRo
           const sender = message.sender_name?.trim() || (role === 'patient' ? 'Doctor' : 'Patient');
           const body = message.content?.trim() || 'Sent you a new message.';
 
+          playNotificationSound();
           toast({
             title: `New message from ${sender}`,
             description: truncate(body),
@@ -75,6 +78,5 @@ export function useRealtimeMessageNotifications(userId?: string, role?: PortalRo
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [role, userId]);
+  }, [playNotificationSound, role, userId]);
 }
-

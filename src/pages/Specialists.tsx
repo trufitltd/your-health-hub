@@ -4,7 +4,7 @@ import { Layout } from '@/components/layout';
 import { Search, Star, Clock, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
+import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -585,7 +585,7 @@ export default function SpecialistsPage() {
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 )}
               >
-                {specialty.value === '__all__' ? specialty.label : translateSpecialty(specialty.label)}
+                {formatSpecialtyLabel(specialty)}
               </button>
             ))}
           </div>
@@ -629,14 +629,15 @@ export default function SpecialistsPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{doctor.name}</h3>
-                    <p className="text-sm text-primary">
+                    {/* <p className="text-sm text-primary">
                       {getLocalizedSpecialty(
                         doctor.registration,
                         doctor.specialty,
                         language,
                         t('specialists.defaults.generalPractice', 'General Practice')
                       )}
-                    </p>
+                    </p> */}
+                    <p className="text-sm text-primary">{formatSpecialtyLabel(doctor.specialty)}</p>
                     {doctor.experience && (
                       <p className="text-xs text-muted-foreground mt-1">
                         {t('specialists.card.experience', 'Experience')}: {doctor.experience} {t('specialists.card.years', 'years')}
