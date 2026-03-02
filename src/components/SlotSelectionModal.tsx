@@ -42,6 +42,14 @@ interface SlotSelectionModalProps {
   currentConsultationType?: 'chat' | 'voice' | 'video' | null;
   selectedConsultationType?: 'chat' | 'voice' | 'video';
   onConsultationTypeChange?: (type: 'chat' | 'voice' | 'video') => void;
+  reschedulePricingPreview?: {
+    proposedFinalPrice: number;
+    previewLoading: boolean;
+    alreadyPaidAmount: number;
+    upgradeAmount: number;
+    walletAppliedIfSelected: number;
+    paystackDueIfSelected: number;
+  } | null;
 }
 
 type BookedSlotRow = AppointmentIntervalRow & {
@@ -85,6 +93,7 @@ export function SlotSelectionModal({
   currentConsultationType = null,
   selectedConsultationType,
   onConsultationTypeChange,
+  reschedulePricingPreview = null,
 }: SlotSelectionModalProps) {
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -554,6 +563,31 @@ export function SlotSelectionModal({
                         <span className="font-medium">Mode:</span>
                         {selectedConsultationType.charAt(0).toUpperCase() + selectedConsultationType.slice(1)}
                       </div>
+                    )}
+                    {reschedulePricingPreview && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">New Price:</span>
+                          {reschedulePricingPreview.previewLoading
+                            ? 'Calculating...'
+                            : formatCurrency(reschedulePricingPreview.proposedFinalPrice)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Already Paid:</span>
+                          {formatCurrency(reschedulePricingPreview.alreadyPaidAmount)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Balance to Pay:</span>
+                          {formatCurrency(reschedulePricingPreview.upgradeAmount)}
+                        </div>
+                        {reschedulePricingPreview.upgradeAmount > 0 && (
+                          <div className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-[11px] text-primary">
+                            {reschedulePricingPreview.paystackDueIfSelected > 0
+                              ? `Wallet can apply ${formatCurrency(reschedulePricingPreview.walletAppliedIfSelected)} and remaining ${formatCurrency(reschedulePricingPreview.paystackDueIfSelected)} will continue via Paystack automatically.`
+                              : `Wallet can fully cover this upgrade amount.`}
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 )}
