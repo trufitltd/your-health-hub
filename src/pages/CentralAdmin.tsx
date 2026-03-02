@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
@@ -38,6 +38,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
+import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { formatSpecialtyLabel } from '@/lib/utils';
 
 interface Doctor {
   id: string;
@@ -67,6 +69,7 @@ const CentralAdmin = () => {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { playNotificationSound } = useNotificationSound();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -80,6 +83,10 @@ const CentralAdmin = () => {
   const [inboxPage, setInboxPage] = useState(1);
   const [inboxPageSize, setInboxPageSize] = useState(10);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [unreadInboxCount, setUnreadInboxCount] = useState(0);
+  const [replySubject, setReplySubject] = useState('');
+  const [replyBody, setReplyBody] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -100,6 +107,7 @@ const CentralAdmin = () => {
 
   const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
   const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
+  const inboxReadStorageKey = user?.id ? `admin-inbox-last-read-${user.id}` : null;
 
   useEffect(() => {
     setProfileFormData({
@@ -231,7 +239,7 @@ const CentralAdmin = () => {
   const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
     queryKey: ['admin-contact-messages'],
     queryFn: async () => {
-      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 20 });
+      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 200 });
       if (error) {
         console.error('Error fetching contact messages:', error);
         throw error;
@@ -241,6 +249,52 @@ const CentralAdmin = () => {
     enabled: !!user && isAdmin,
     refetchInterval: 30000,
   });
+
+  useEffect(() => {
+    if (!inboxReadStorageKey || typeof window === 'undefined') return;
+    if (activeTab === 'inbox') {
+      window.localStorage.setItem(inboxReadStorageKey, new Date().toISOString());
+      setUnreadInboxCount(0);
+      return;
+    }
+    const lastReadRaw = window.localStorage.getItem(inboxReadStorageKey);
+    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
+    const unread = (contactMessages as Array<{ created_at?: string | null }>).reduce((count, message) => {
+      const createdAt = String(message.created_at || '');
+      if (!createdAt) return count;
+      const createdAtMs = new Date(createdAt).getTime();
+      if (Number.isNaN(createdAtMs)) return count;
+      if (createdAtMs > (Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs)) return count + 1;
+      return count;
+    }, 0);
+    setUnreadInboxCount(unread);
+  }, [activeTab, contactMessages, inboxReadStorageKey]);
+
+  useEffect(() => {
+    if (!user?.id || !isAdmin) return;
+
+    const channel = supabase
+      .channel(`admin-contact-incoming-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const incoming = payload.new as { first_name?: string | null; last_name?: string | null; subject?: string | null } | null;
+          playNotificationSound();
+          queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
+          queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
+          toast({
+            title: 'New contact message',
+            description: `${incoming?.first_name || 'User'} ${incoming?.last_name || ''} • ${incoming?.subject || 'No subject'}`.trim(),
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isAdmin, playNotificationSound, queryClient, user?.id]);
 
   const inboxStartDate = useMemo(() => {
     if (inboxRange === 'all') return null;
@@ -272,13 +326,11 @@ const CentralAdmin = () => {
 
   // Check admin access - now after hooks
   if (!user) {
-    navigate('/admin/login');
-    return null;
+    return <Navigate to="/admin/login" replace />;
   }
 
   if (!isAdmin) {
-    navigate('/admin/login');
-    return null;
+    return <Navigate to="/admin/login" replace />;
   }
 
   // Calculate statistics
@@ -426,6 +478,93 @@ const CentralAdmin = () => {
   const inboxTotalCount = inboxRows.length > 0 ? Number(inboxRows[0].total_count || 0) : 0;
   const inboxTotalPages = inboxTotalCount > 0 ? Math.ceil(inboxTotalCount / inboxPageSize) : 1;
   const selectedMessage = inboxRows.find((row: any) => row.id === selectedMessageId) || null;
+  const formatInboxMessage = (value: unknown): string => {
+    if (typeof value === 'string') {
+      const normalized = value.replace(/\r\n/g, '\n').trim();
+      return normalized.length > 0 ? normalized : 'No message content provided.';
+    }
+    if (value === null || value === undefined) return 'No message content provided.';
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return 'Unable to display message content.';
+      }
+    }
+    return String(value);
+  };
+  const inferSenderRole = (subject: string | null | undefined, body: string | null | undefined) => {
+    const source = `${subject || ''}\n${body || ''}`.toLowerCase();
+    if (source.includes('sender role: doctor') || source.includes('[portal:doctor]')) return 'doctor';
+    if (source.includes('sender role: patient') || source.includes('[portal:patient]')) return 'patient';
+    return 'user';
+  };
+
+  useEffect(() => {
+    if (!selectedMessage) {
+      setReplySubject('');
+      setReplyBody('');
+      return;
+    }
+    const cleanSubject = String(selectedMessage.subject || '').trim();
+    const normalizedSubject = cleanSubject.toLowerCase().startsWith('re:')
+      ? cleanSubject
+      : `Re: ${cleanSubject || 'Your message to MyE-Doctor'}`;
+    setReplySubject(normalizedSubject);
+    setReplyBody('');
+  }, [selectedMessageId, selectedMessage?.subject]);
+
+  const handleSendInboxReply = async () => {
+    if (!selectedMessage) return;
+
+    const finalSubject = replySubject.trim();
+    const finalBody = replyBody.trim();
+    if (!finalSubject || !finalBody) {
+      toast({ title: 'Missing fields', description: 'Reply subject and message are required.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSendingReply(true);
+    try {
+      const replyPayload = `Subject: ${finalSubject}\n\n${finalBody}`;
+      const { error } = await supabase.rpc('admin_append_contact_reply', {
+        p_message_id: selectedMessage.id,
+        p_reply: replyPayload,
+      });
+      if (error) {
+        throw error;
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] }),
+      ]);
+
+      toast({ title: 'Reply sent', description: 'Reply added to the sender conversation thread.' });
+      setReplyBody('');
+    } catch (error) {
+      const errorCode = typeof error === 'object' && error && 'code' in error
+        ? String((error as { code?: string }).code || '')
+        : '';
+      const errorHint = typeof error === 'object' && error && 'hint' in error
+        ? String((error as { hint?: string }).hint || '')
+        : '';
+      const errorDetails = typeof error === 'object' && error && 'details' in error
+        ? String((error as { details?: string }).details || '')
+        : '';
+      const rawMessage = error instanceof Error
+        ? error.message
+        : (typeof error === 'object' && error && 'message' in error
+          ? String((error as { message?: string }).message || '')
+          : 'Failed to send reply');
+      const message = errorCode === 'PGRST202' || rawMessage.includes('admin_append_contact_reply')
+        ? 'Reply function is missing in database. Run db/37_add_contact_message_thread_rpcs.sql in Supabase SQL editor, then retry.'
+        : [rawMessage, errorHint, errorDetails].filter(Boolean).join(' | ');
+      toast({ title: 'Reply failed', description: message, variant: 'destructive' });
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
 
   // Filter doctors
   const filteredDoctors = doctors.filter(doctor => {
@@ -740,7 +879,7 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
-                    { id: 'inbox', label: 'Inbox', icon: Mail },
+                    { id: 'inbox', label: 'Inbox', icon: Mail, badge: unreadInboxCount > 0 ? (unreadInboxCount > 99 ? '99+' : unreadInboxCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                     { id: 'settings', label: 'Settings', icon: Settings },
@@ -762,8 +901,8 @@ const CentralAdmin = () => {
                       </div>
                       {item.badge && (
                         <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${activeTab === item.id
-                          ? 'bg-primary-foreground text-primary'
-                          : 'bg-accent text-accent-foreground'
+                          ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
+                          : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
                           }`}>
                           {item.badge}
                         </span>
@@ -920,7 +1059,9 @@ const CentralAdmin = () => {
                               </span>
                             </div>
                             <p className="text-sm font-medium mt-2">{message.subject}</p>
-                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2 [overflow-wrap:anywhere]">
+                              {formatInboxMessage(message.message)}
+                            </p>
                           </div>
                         ))
                       )}
@@ -1079,7 +1220,9 @@ const CentralAdmin = () => {
                                 </span>
                               </div>
                               <p className="text-sm font-medium mt-2">{message.subject}</p>
-                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2 [overflow-wrap:anywhere]">
+                                {formatInboxMessage(message.message)}
+                              </p>
                             </button>
                           ))
                         )}
@@ -1123,6 +1266,12 @@ const CentralAdmin = () => {
                                 <p className="text-sm">{selectedMessage.subject}</p>
                               </div>
                               <div>
+                                <p className="text-sm font-semibold">Sender Type</p>
+                                <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                                  {inferSenderRole(selectedMessage.subject, selectedMessage.message)}
+                                </p>
+                              </div>
+                              <div>
                                 <p className="text-sm font-semibold">Received</p>
                                 <p className="text-xs text-muted-foreground">
                                   {selectedMessage.created_at ? new Date(selectedMessage.created_at).toLocaleString() : ''}
@@ -1130,9 +1279,31 @@ const CentralAdmin = () => {
                               </div>
                               <div>
                                 <p className="text-sm font-semibold">Message</p>
-                                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-                                  {selectedMessage.message}
+                                <p className="text-sm text-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">
+                                  {formatInboxMessage(selectedMessage.message)}
                                 </p>
+                              </div>
+                              <div className="pt-2 border-t border-border space-y-2">
+                                <p className="text-sm font-semibold">Reply to sender</p>
+                                <Input
+                                  value={replySubject}
+                                  onChange={(e) => setReplySubject(e.target.value)}
+                                  placeholder="Reply subject"
+                                />
+                                <Textarea
+                                  value={replyBody}
+                                  onChange={(e) => setReplyBody(e.target.value)}
+                                  placeholder="Write your reply..."
+                                  className="min-h-[120px]"
+                                />
+                                <Button
+                                  size="sm"
+                                  onClick={handleSendInboxReply}
+                                  disabled={isSendingReply || !selectedMessage?.email}
+                                  className="w-full"
+                                >
+                                  {isSendingReply ? 'Sending reply...' : 'Send Reply'}
+                                </Button>
                               </div>
                             </div>
                           )}
@@ -1189,7 +1360,7 @@ const CentralAdmin = () => {
                               </Avatar>
                               <div>
                                 <p className="font-semibold">Dr. {doctor.full_name}</p>
-                                <p className="text-sm text-muted-foreground">{doctor.specialty}</p>
+                                <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 <p className="text-xs text-muted-foreground">{doctor.email}</p>
                               </div>
                             </div>
@@ -1286,7 +1457,7 @@ const CentralAdmin = () => {
                                   </Avatar>
                                   <div>
                                     <p className="font-semibold">Dr. {doctor.full_name}</p>
-                                    <p className="text-sm text-muted-foreground">{doctor.specialty} • License: {doctor.license_number}</p>
+                                    <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
                                   </div>
                                 </div>
                                 <Badge className="bg-warning/10 text-warning border-warning/20">Pending Review</Badge>
@@ -1371,7 +1542,7 @@ const CentralAdmin = () => {
                                 </Avatar>
                                 <div>
                                   <p className="font-semibold">Dr. {doctor.full_name}</p>
-                                  <p className="text-sm text-muted-foreground">{doctor.specialty}</p>
+                                  <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 </div>
                               </div>
                               {getStatusBadge(doctor.verification_status || 'pending')}
@@ -1611,7 +1782,7 @@ const CentralAdmin = () => {
                   </Avatar>
                   <div>
                     <p className="font-semibold text-xl">Dr. {selectedDoctor.full_name}</p>
-                    <p className="text-sm text-muted-foreground">{selectedDoctor.specialty}</p>
+                    <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
                     {getStatusBadge(selectedDoctor.verification_status || 'pending')}
                   </div>
                 </div>
@@ -1673,7 +1844,7 @@ const CentralAdmin = () => {
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Specialty</p>
-                    <p className="font-medium">{selectedDoctor.specialty}</p>
+                    <p className="font-medium">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Hospital Affiliation</p>

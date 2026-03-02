@@ -525,6 +525,8 @@ export default function AuthPage() {
           
           if (doctorReg) {
             userRole = 'doctor';
+            // Backfill default availability for existing doctors who have no schedules yet.
+            await createDefaultSchedule(data.user.id);
           }
         }
         localStorage.setItem('userRole', userRole);
