@@ -24,6 +24,9 @@ export interface ScheduleInput {
 }
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DEFAULT_SCHEDULE_START = '09:00';
+const DEFAULT_SCHEDULE_END = '23:00';
+const DEFAULT_SCHEDULE_DAYS = [1, 2, 3, 4, 5, 6]; // Monday-Saturday
 
 /**
  * Get all schedules for a doctor
@@ -151,8 +154,8 @@ export const toggleDayAvailability = async (
       // Create a default single slot for the day
       const created = await upsertSchedule(doctorId, {
         day_of_week: dayOfWeek,
-        start_time: '09:00',
-        end_time: '17:00',
+        start_time: DEFAULT_SCHEDULE_START,
+        end_time: DEFAULT_SCHEDULE_END,
         is_available: isAvailable,
       });
       return created || null;
@@ -212,26 +215,15 @@ export const getFormattedSchedule = async (doctorId: string) => {
 };
 
 /**
- * Create default schedule for new doctor (Monday-Friday, 9 AM - 5 PM)
+ * Create default schedule for a doctor (Monday-Saturday, 9 AM - 11 PM)
  */
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
-    const defaultSchedules = [
-      { day_of_week: 0, start_time: '09:00', end_time: '17:00' }, // Sunday
-      { day_of_week: 1, start_time: '09:00', end_time: '17:00' }, // Monday
-      { day_of_week: 2, start_time: '09:00', end_time: '17:00' }, // Tuesday
-      { day_of_week: 3, start_time: '09:00', end_time: '17:00' }, // Wednesday
-      { day_of_week: 4, start_time: '09:00', end_time: '17:00' }, // Thursday
-      { day_of_week: 5, start_time: '09:00', end_time: '17:00' }, // Friday
-      { day_of_week: 6, start_time: '09:00', end_time: '17:00' }, // Saturday
-    ];
-
-    // Direct insert without checking for existing schedules
-    const scheduleData = defaultSchedules.map(schedule => ({
+    const scheduleData = DEFAULT_SCHEDULE_DAYS.map((day_of_week) => ({
       doctor_id: doctorId,
-      day_of_week: schedule.day_of_week,
-      start_time: schedule.start_time,
-      end_time: schedule.end_time,
+      day_of_week,
+      start_time: DEFAULT_SCHEDULE_START,
+      end_time: DEFAULT_SCHEDULE_END,
       slot_duration_minutes: 30,
       max_patients_per_slot: 1,
       is_available: true,
@@ -239,7 +231,10 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
 
     const { data, error } = await supabase
       .from('doctor_schedules')
-      .insert(scheduleData)
+      .upsert(scheduleData, {
+        onConflict: 'doctor_id,day_of_week,start_time,end_time',
+        ignoreDuplicates: true,
+      })
       .select();
 
     if (error) {

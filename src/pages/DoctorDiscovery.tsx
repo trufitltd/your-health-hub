@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { formatSpecialtyLabel } from '@/lib/utils';
 import {
   Star, Search, Filter, Clock, MapPin, Award, Heart,
   ChevronRight, Loader
@@ -507,7 +508,7 @@ export default function DoctorDiscovery() {
                   >
                     <option value="">All Specialties</option>
                     {specialties.map(specialty => (
-                      <option key={specialty} value={specialty}>{specialty}</option>
+                      <option key={specialty} value={specialty}>{formatSpecialtyLabel(specialty)}</option>
                     ))}
                   </select>
 
@@ -665,7 +666,7 @@ export default function DoctorDiscovery() {
                           </div>
 
                           <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
-                          <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
+                          <p className="text-sm text-primary font-medium mb-2">{formatSpecialtyLabel(doctor.specialty)}</p>
                           {doctor.bio && (
                             <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{doctor.bio}</p>
                           )}
@@ -750,7 +751,7 @@ export default function DoctorDiscovery() {
                         <h2 className="text-2xl font-bold">Dr. {selectedDoctor.full_name}</h2>
                         <Badge variant="outline" className="text-xs">{getStatusColor(selectedDoctor.online_status).text}</Badge>
                       </div>
-                      <p className="text-lg text-primary font-medium mb-3">{selectedDoctor.specialty}</p>
+                      <p className="text-lg text-primary font-medium mb-3">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
 
                       <div className="flex items-center gap-4 mb-4">
                         {selectedDoctor.rating !== undefined && (
@@ -792,7 +793,7 @@ export default function DoctorDiscovery() {
                   <div>
                     <h3 className="font-semibold mb-3">Professional Biography</h3>
                     <p className="text-muted-foreground leading-relaxed">
-                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
+                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${formatSpecialtyLabel(selectedDoctor.specialty)} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
                     </p>
                   </div>
 

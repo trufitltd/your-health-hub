@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getDoctorSchedules,
@@ -18,6 +18,7 @@ import { supabase } from '@/integrations/supabase/client';
  */
 export const useSchedules = (doctorId: string | undefined) => {
   const queryClient = useQueryClient();
+  const autoSeedAttemptedRef = useRef<Set<string>>(new Set());
 
   // Real-time subscription for schedule changes
   useEffect(() => {
@@ -60,6 +61,24 @@ export const useSchedules = (doctorId: string | undefined) => {
     enabled: !!doctorId,
     staleTime: 5 * 60 * 1000,
   });
+
+  // Backfill defaults for existing doctors who have never configured availability.
+  useEffect(() => {
+    if (!doctorId || !schedulesQuery.isSuccess) return;
+    if ((schedulesQuery.data || []).length > 0) return;
+    if (autoSeedAttemptedRef.current.has(doctorId)) return;
+    autoSeedAttemptedRef.current.add(doctorId);
+
+    createDefaultSchedule(doctorId)
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['schedules', doctorId] });
+        queryClient.invalidateQueries({ queryKey: ['schedules-formatted', doctorId] });
+        queryClient.invalidateQueries({ queryKey: ['available-slots'] });
+      })
+      .catch((error) => {
+        console.error('Error auto-seeding default schedule:', error);
+      });
+  }, [doctorId, schedulesQuery.data, schedulesQuery.isSuccess, queryClient]);
 
   // Mutation for upserting schedule
   const upsertMutation = useMutation({
@@ -148,7 +167,7 @@ export const useSchedules = (doctorId: string | undefined) => {
       queryClient.invalidateQueries({ queryKey: ['available-slots'] });
       toast({
         title: 'Success',
-        description: 'Default schedule created (Mon-Fri, 9 AM - 5 PM)',
+        description: 'Default schedule created (Mon-Sat, 9 AM - 11 PM)',
       });
     },
     onError: (error) => {
