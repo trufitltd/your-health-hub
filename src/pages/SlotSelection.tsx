@@ -14,6 +14,7 @@ import { generateTimeSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
 import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
+import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import { AvailabilityService } from '@/services/AvailabilityService';
@@ -562,7 +563,7 @@ export default function SlotSelection() {
                     </Avatar>
                     <div className="flex-1">
                       <h1 className="text-2xl font-bold">{state.doctorName}</h1>
-                      <p className="text-muted-foreground">{state.specialty}</p>
+                      <p className="text-muted-foreground">{formatSpecialtyLabel(state.specialty)}</p>
                     </div>
                     <Badge className="bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
                   </div>
