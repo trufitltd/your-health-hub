@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Star, Trash2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useLanguage } from '@/contexts/LanguageContext';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,6 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useState } from 'react';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 
 interface PatientWithStats {
   id: string;
@@ -29,6 +31,7 @@ interface PatientWithStats {
 }
 
 export function PatientsTable() {
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
   const deletePatient = useMutation({
@@ -87,9 +90,15 @@ export function PatientsTable() {
 
           console.log(`Patient ${patient.full_name} appointments:`, appointments);
 
+          const normalizedAppointments = (appointments || []).map((appointment) => ({
+            ...appointment,
+            status: normalizeAppointmentStatus(appointment.status),
+          }));
           const total = appointments?.length || 0;
-          const completed = appointments?.filter(a => a.status === 'completed').length || 0;
-          const pending = appointments?.filter(a => a.status === 'pending' || a.status === 'confirmed' || a.status === 'requested').length || 0;
+          const completed = normalizedAppointments.filter((a) => a.status === 'completed').length;
+          const pending = normalizedAppointments.filter((a) =>
+            a.status === 'pending_payment' || a.status === 'pending_approval' || a.status === 'confirmed' || a.status === 'in_progress'
+          ).length;
           const ratings = appointments?.filter(a => a.rating && a.rating > 0).map(a => a.rating!) || [];
           const avgRating = ratings.length > 0 
             ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length 
@@ -167,7 +176,7 @@ export function PatientsTable() {
                         <p className="text-lg font-bold">{patient.average_rating.toFixed(1)}</p>
                       </>
                     ) : (
-                      <p className="text-sm text-muted-foreground">N/A</p>
+                      <p className="text-sm text-muted-foreground">{t('specialists.defaults.notAvailable', 'N/A')}</p>
                     )}
                   </div>
                 </div>

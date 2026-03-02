@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -35,7 +35,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { useAuth } from '@/hooks/useAuth';
-import { useAppointments } from '@/hooks/useAppointments';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from '@/components/ui/use-toast';
@@ -52,11 +51,91 @@ import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotif
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { createDefaultSchedule } from '@/services/scheduleService';
+import { SUPPORTED_LANGUAGES, useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
+import {
+  formatAppointmentStatusLabel,
+  normalizeAppointmentStatus,
+  normalizeRescheduleRequestStatus,
+  type AppointmentStatus,
+} from '@/services/marketplaceTypes';
+import { WalletService } from '@/services/WalletService';
+import { PatientWalletService } from '@/services/PatientWalletService';
+import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
+import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import { formatSpecialtyLabel } from '@/lib/utils';
+import { useLocaleFormatter } from '@/lib/locale';
+import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
+
+const PROFILE_BIO_TRANSLATION_LANGUAGES = [
+  { code: 'ha', label: 'Hausa' },
+  { code: 'ig', label: 'Igbo' },
+  { code: 'yo', label: 'Yoruba' },
+  { code: 'sw', label: 'Swahili' },
+  { code: 'ar', label: 'Arabic' },
+  { code: 'fr', label: 'French' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'zh', label: 'Chinese (Mandarin)' },
+  { code: 'de', label: 'German' },
+] as const;
+
+const PROFILE_BIO_LANGUAGE_LABELS: Record<string, string> = PROFILE_BIO_TRANSLATION_LANGUAGES.reduce(
+  (acc, languageOption) => {
+    acc[languageOption.code] = languageOption.label;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
+const CONSULTATION_LANGUAGE_VALUES = [
+  'english',
+  'hausa',
+  'igbo',
+  'yoruba',
+  'arabic',
+  'swahili',
+  'fulfulde',
+  'tiv',
+  'pidgin_english',
+  'french',
+  'spanish',
+  'portuguese',
+] as const;
+
+const normalizeConsultationLanguage = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+};
+
+const normalizeBioLanguageCode = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[^a-z]/g, '');
+};
+
+const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
+  en: { key: 'auth.values.languages.english', fallback: 'English' },
+  ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
+  ig: { key: 'auth.values.languages.igbo', fallback: 'Igbo' },
+  yo: { key: 'auth.values.languages.yoruba', fallback: 'Yoruba' },
+  sw: { key: 'auth.values.languages.swahili', fallback: 'Swahili' },
+  ar: { key: 'auth.values.languages.arabic', fallback: 'Arabic' },
+  fr: { key: 'auth.values.languages.french', fallback: 'French' },
+  es: { key: 'auth.values.languages.spanish', fallback: 'Spanish' },
+  pt: { key: 'auth.values.languages.portuguese', fallback: 'Portuguese' },
+  nl: { key: 'common.language.dutch', fallback: 'Dutch' },
+  zh: { key: 'common.language.chinese', fallback: 'Chinese' },
+  de: { key: 'common.language.german', fallback: 'German' },
+};
+
+const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
+  typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
+);
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -66,9 +145,14 @@ const formatDateKey = (date: Date) => {
 };
 
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
-  pending: {
+  pending_payment: {
     dot: '#d97706',
     bg: '#d97706',
+    text: '#ffffff'
+  },
+  pending_approval: {
+    dot: '#b45309',
+    bg: '#b45309',
     text: '#ffffff'
   },
   confirmed: {
@@ -76,19 +160,24 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     bg: '#0f8f76',
     text: '#ffffff'
   },
+  in_progress: {
+    dot: '#2563eb',
+    bg: '#2563eb',
+    text: '#ffffff'
+  },
   completed: {
     dot: '#16a34a',
     bg: '#16a34a',
     text: '#ffffff'
   },
-  rejected: {
-    dot: '#dc2626',
-    bg: '#dc2626',
-    text: '#ffffff'
-  },
   cancelled: {
     dot: '#6b7280',
     bg: '#6b7280',
+    text: '#ffffff'
+  },
+  no_show: {
+    dot: '#dc2626',
+    bg: '#dc2626',
     text: '#ffffff'
   },
   default: {
@@ -97,6 +186,19 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     text: '#ffffff'
   }
 } as const;
+
+const PAST_CONFIRMED_CALENDAR_STYLE = {
+  dot: '#d97706',
+  bg: '#f59e0b',
+  text: '#ffffff',
+} as const;
+
+const APPROVED_BANNER_WINDOW_DAYS = 7;
+const APPROVED_BANNER_STORAGE_PREFIX = 'doctor-approved-banner-dismissed';
+
+type WalletTransactionRow = {
+  status: string | null;
+};
 
 const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
   return rows.reduce((total, row) => {
@@ -131,9 +233,13 @@ const DoctorPortal = () => {
     created_at: string;
     doctor_id: string | null;
     diagnosis: string | null;
+    diagnosis_translations?: Record<string, string> | null;
     treatment_plan: string | null;
+    treatment_plan_translations?: Record<string, string> | null;
     prescriptions: string | null;
+    prescriptions_translations?: Record<string, string> | null;
     follow_up_notes: string | null;
+    follow_up_notes_translations?: Record<string, string> | null;
   }>>([]);
   const [patientHealthRecords, setPatientHealthRecords] = useState<Array<{
     id: string;
@@ -145,8 +251,12 @@ const DoctorPortal = () => {
     notes: string | null;
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'upcoming' | 'completed' | 'rejected' | 'all'>('pending');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all' | 'closed'>('confirmed');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [isMobileAppointmentsLayout, setIsMobileAppointmentsLayout] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
@@ -154,14 +264,48 @@ const DoctorPortal = () => {
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadContactCount, setUnreadContactCount] = useState(0);
+  const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
+  const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
+  const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
+  const [withdrawalAmount, setWithdrawalAmount] = useState('');
+  const [withdrawalNarration, setWithdrawalNarration] = useState('');
+  const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
+  const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleTime, setRescheduleTime] = useState('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [isApprovedBannerDismissed, setIsApprovedBannerDismissed] = useState(false);
+  const appliedPreferredLanguageRef = useRef(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
   const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
+  const { t, language, setLanguage } = useLanguage();
+  const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const contactReadStorageKey = user?.id ? `doctor-contact-last-read-${user.id}` : null;
+  const consultationLanguageOptions = useMemo(() => {
+    const fallbackLabels: Record<string, string> = {
+      pidgin_english: 'Pidgin English',
+    };
+
+    return CONSULTATION_LANGUAGE_VALUES.map((value) => ({
+      value,
+      label: t(
+        `auth.values.languages.${value}`,
+        fallbackLabels[value]
+          || value
+            .split('_')
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(' ')
+      ),
+    }));
+  }, [t]);
+  const getBioLanguageLabel = (code: string) =>
+    PROFILE_BIO_LANGUAGE_LABELS[code]
+    || code.toUpperCase();
   const unreadReviewsCount = unreadReviewIds.length;
   const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
 
@@ -255,6 +399,72 @@ const DoctorPortal = () => {
   
   useTrackUserPresence(user?.id, 'doctor');
   useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  const getMessageReadState = useCallback(() => {
+    if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
+    const storageKey = `doctor-messages-read-${user.id}`;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      );
+    } catch {
+      return {};
+    }
+  }, [user?.id]);
+
+  const refreshUnreadMessagesCount = useCallback(async () => {
+    if (!user?.id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const { data: sessions, error: sessionError } = await supabase
+      .from('consultation_sessions')
+      .select('id')
+      .eq('doctor_id', user.id);
+
+    if (sessionError || !sessions || sessions.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const sessionIds = sessions
+      .map((row) => row.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (sessionIds.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const readState = getMessageReadState();
+    const { data: messages, error: messageError } = await supabase
+      .from('consultation_messages')
+      .select('session_id, created_at, sender_role')
+      .in('session_id', sessionIds)
+      .eq('sender_role', 'patient')
+      .order('created_at', { ascending: true });
+
+    if (messageError || !messages) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const total = messages.reduce((count, row: any) => {
+      const sessionId = String(row.session_id || '');
+      const createdAt = String(row.created_at || '');
+      if (!sessionId || !createdAt) return count;
+      const lastReadAt = readState[sessionId];
+      if (lastReadAt && new Date(createdAt).getTime() <= new Date(lastReadAt).getTime()) return count;
+      return count + 1;
+    }, 0);
+
+    setUnreadMessagesCount(total);
+  }, [getMessageReadState, user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -365,7 +575,6 @@ const DoctorPortal = () => {
           if (!message?.session_id || !message.sender_id) return;
           if (message.sender_id === user.id) return;
           if (message.sender_role !== 'patient') return;
-          if (activeTab === 'messages') return;
 
           let session = sessionParticipantsCacheRef.current.get(message.session_id);
           if (!session) {
@@ -383,7 +592,7 @@ const DoctorPortal = () => {
           }
 
           if (session.doctor_id !== user.id) return;
-          setUnreadMessagesCount((prev) => prev + 1);
+          refreshUnreadMessagesCount();
         }
       )
       .subscribe();
@@ -391,13 +600,19 @@ const DoctorPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, activeTab]);
+  }, [user?.id, refreshUnreadMessagesCount]);
 
   useEffect(() => {
-    if (activeTab === 'messages' && unreadMessagesCount > 0) {
-      setUnreadMessagesCount(0);
-    }
-  }, [activeTab, unreadMessagesCount]);
+    refreshUnreadMessagesCount();
+  }, [activeTab, messagesJumpToUnreadSignal, refreshUnreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'messages') return;
+    const timer = window.setInterval(() => {
+      refreshUnreadMessagesCount();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [activeTab, refreshUnreadMessagesCount]);
 
   useEffect(() => {
     if (activeTab !== 'reviews' || unreadReviewIds.length === 0) return;
@@ -418,6 +633,59 @@ const DoctorPortal = () => {
 
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
+  const approvedBannerStorageKey = useMemo(() => {
+    if (!user?.id || !doctorRegistration) return null;
+    const approvalMarker = String(
+      (doctorRegistration as { verified_at?: string | null }).verified_at
+      || (doctorRegistration as { created_at?: string | null }).created_at
+      || 'unknown',
+    );
+    return `${APPROVED_BANNER_STORAGE_PREFIX}:${user.id}:${approvalMarker}`;
+  }, [
+    user?.id,
+    doctorRegistration,
+    (doctorRegistration as { verified_at?: string | null } | null)?.verified_at,
+    (doctorRegistration as { created_at?: string | null } | null)?.created_at,
+  ]);
+
+  useEffect(() => {
+    if (!approvedBannerStorageKey || typeof window === 'undefined') {
+      setIsApprovedBannerDismissed(false);
+      return;
+    }
+
+    try {
+      setIsApprovedBannerDismissed(window.localStorage.getItem(approvedBannerStorageKey) === '1');
+    } catch {
+      setIsApprovedBannerDismissed(false);
+    }
+  }, [approvedBannerStorageKey]);
+
+  const shouldShowApprovedBanner = useMemo(() => {
+    if (!doctorRegistration || doctorRegistration.verification_status !== 'approved') return false;
+    if (isApprovedBannerDismissed) return false;
+
+    const referenceTimestamp = String(
+      (doctorRegistration as { verified_at?: string | null }).verified_at
+      || (doctorRegistration as { created_at?: string | null }).created_at
+      || '',
+    );
+    const parsed = Date.parse(referenceTimestamp);
+    if (Number.isNaN(parsed)) return true;
+
+    const ageMs = Date.now() - parsed;
+    return ageMs <= APPROVED_BANNER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  }, [doctorRegistration, isApprovedBannerDismissed]);
+
+  const dismissApprovedBanner = useCallback(() => {
+    setIsApprovedBannerDismissed(true);
+    if (!approvedBannerStorageKey || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(approvedBannerStorageKey, '1');
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [approvedBannerStorageKey]);
   
   // Fetch doctor availability status
   const { data: doctorAvailability } = useQuery({
@@ -495,6 +763,24 @@ const DoctorPortal = () => {
   
   // Fetch doctor earnings
   const { data: earningsData, isLoading: earningsLoading } = useDoctorEarnings(user?.id);
+  const { data: doctorWallet, isLoading: walletLoading } = useQuery({
+    queryKey: ['doctor-wallet', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      return WalletService.getDoctorWallet(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: walletTransactions = [], isLoading: walletTransactionsLoading } = useQuery({
+    queryKey: ['doctor-wallet-transactions', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      return WalletService.getWalletTransactions(user.id);
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -506,11 +792,33 @@ const DoctorPortal = () => {
     specialty: '',
     experience: '',
     bio: '',
+    preferredLanguage: language as AppLanguage,
   });
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
   });
+  const [bioTranslations, setBioTranslations] = useState<Record<string, string>>({});
+  const [specialtyTranslations, setSpecialtyTranslations] = useState<Record<string, string>>({});
+  const [newBioLanguageCode, setNewBioLanguageCode] = useState('');
+  const [selectedConsultationLanguages, setSelectedConsultationLanguages] = useState<string[]>([]);
+  const availableBioTranslationLanguageOptions = useMemo(
+    () =>
+      PROFILE_BIO_TRANSLATION_LANGUAGES.filter(
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(bioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(specialtyTranslations, languageOption.code)
+      ),
+    [bioTranslations, specialtyTranslations]
+  );
+  const profileTranslationLanguageCodes = useMemo(
+    () =>
+      Array.from(new Set([
+        ...Object.keys(bioTranslations),
+        ...Object.keys(specialtyTranslations),
+      ])).sort((codeA, codeB) => codeA.localeCompare(codeB)),
+    [bioTranslations, specialtyTranslations]
+  );
 
   const patientFolderFieldOrder = [
     'patient_type',
@@ -530,7 +838,27 @@ const DoctorPortal = () => {
     'previous_diagnoses',
   ];
 
+  const folderLanguageText = CLERKING_PANEL_TEXT[language] ?? CLERKING_PANEL_TEXT.en;
+  const folderMetaTextByLanguage: Record<AppLanguage, { date: string; time: string; lastUpdated: string; accessNotice: string }> = {
+    en: { date: 'Date', time: 'Time', lastUpdated: 'Last Updated', accessNotice: 'Folder access is limited to patients you have consulted with.' },
+    ha: { date: 'Kwana', time: 'Lokaci', lastUpdated: 'Sabuntawa ta ƙarshe', accessNotice: 'Samun damar jaka yana iyakance ga majiyyatan da ka yi shawara da su.' },
+    ig: { date: 'Ụbọchị', time: 'Oge', lastUpdated: 'Emelitere ikpeazụ', accessNotice: 'Nweta folda a bụ naanị maka ndị ọrịa ị lere.' },
+    yo: { date: 'Ọjọ́', time: 'Àkókò', lastUpdated: 'Ìmúdójúìwọ̀n tó kẹ́yìn', accessNotice: 'Ìwọlé sí fọ́ldà yìí jẹ́ fún àwọn aláìsàn tí o ti bá ṣe ìmọ̀ràn nìkan.' },
+    sw: { date: 'Tarehe', time: 'Muda', lastUpdated: 'Ilisasishwa mwisho', accessNotice: 'Ufikiaji wa folda ni kwa wagonjwa uliowahi kuwashauri pekee.' },
+    ar: { date: 'التاريخ', time: 'الوقت', lastUpdated: 'آخر تحديث', accessNotice: 'الوصول إلى الملف يقتصر على المرضى الذين قمت باستشارتهم.' },
+    fr: { date: 'Date', time: 'Heure', lastUpdated: 'Dernière mise à jour', accessNotice: 'L’accès au dossier est limité aux patients que vous avez consultés.' },
+    es: { date: 'Fecha', time: 'Hora', lastUpdated: 'Última actualización', accessNotice: 'El acceso al expediente está limitado a pacientes que has consultado.' },
+    pt: { date: 'Data', time: 'Hora', lastUpdated: 'Última atualização', accessNotice: 'O acesso ao prontuário é limitado aos pacientes que você consultou.' },
+    nl: { date: 'Datum', time: 'Tijd', lastUpdated: 'Laatst bijgewerkt', accessNotice: 'Toegang tot het dossier is beperkt tot patiënten die u heeft geconsulteerd.' },
+    zh: { date: '日期', time: '时间', lastUpdated: '最后更新', accessNotice: '仅限您已接诊过的患者可查看该档案。' },
+    de: { date: 'Datum', time: 'Uhrzeit', lastUpdated: 'Zuletzt aktualisiert', accessNotice: 'Der Zugriff auf die Akte ist auf Patienten beschränkt, die Sie konsultiert haben.' },
+  };
+  const folderMetaText = folderMetaTextByLanguage[language] ?? folderMetaTextByLanguage.en;
+
   const formatFolderFieldLabel = (field: string) =>
+    (
+      folderLanguageText.fields as Record<string, { label?: string }>
+    )[field]?.label ||
     field
       .split('_')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -554,7 +882,7 @@ const DoctorPortal = () => {
   const formatEntryTimestamp = (rawTimestamp: string): string => {
     const date = new Date(rawTimestamp.trim());
     if (Number.isNaN(date.getTime())) return rawTimestamp.trim();
-    return date.toLocaleString();
+    return formatDateTime(date);
   };
 
   const formatFolderEntryText = (value: unknown, fallback: string): string => {
@@ -590,6 +918,24 @@ const DoctorPortal = () => {
     return dedupedLines.join('\n').trim();
   };
 
+  const getLocalizedFieldText = (
+    rawValue: unknown,
+    rawTranslations: unknown,
+    currentLanguage: AppLanguage
+  ): string => {
+    const base = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!rawTranslations || typeof rawTranslations !== 'object') return base;
+
+    const translations = rawTranslations as Record<string, unknown>;
+    const localized = translations[currentLanguage];
+    if (typeof localized === 'string' && localized.trim()) return localized.trim();
+
+    const english = translations.en;
+    if (typeof english === 'string' && english.trim()) return english.trim();
+
+    return base;
+  };
+
   const handleViewPatientFolder = async (apt: any) => {
     setSelectedAppointmentForFolder(apt);
     setViewFolderOpen(true);
@@ -599,9 +945,11 @@ const DoctorPortal = () => {
     setPatientHealthRecords([]);
 
     try {
+      if (!user?.id) throw new Error('Doctor must be authenticated to load patient folder');
+
       const [
         { data: folder, error: folderError },
-        { data: notes, error: notesError },
+        notesResult,
         { data: healthRecords, error: healthRecordsError }
       ] = await Promise.all([
         supabase
@@ -609,13 +957,7 @@ const DoctorPortal = () => {
           .select('*')
           .eq('patient_id', apt.patient_id)
           .maybeSingle(),
-        supabase
-          .from('doctor_consultation_notes')
-          .select('id, created_at, doctor_id, diagnosis, treatment_plan, prescriptions, follow_up_notes')
-          .eq('patient_id', apt.patient_id)
-          .eq('doctor_id', user?.id)
-          .order('created_at', { ascending: false })
-          .limit(10),
+        fetchDoctorConsultationNotesForFolder(apt.patient_id, user.id, 10),
         supabase
           .from('health_records')
           .select('id, file_name, file_url, file_type, file_size, uploaded_at, notes')
@@ -624,18 +966,27 @@ const DoctorPortal = () => {
       ]);
 
       if (folderError) throw folderError;
-      if (notesError) throw notesError;
+      if (notesResult.error) throw notesResult.error;
       if (healthRecordsError) throw healthRecordsError;
+      if (notesResult.missingTranslationColumns) {
+        console.warn(
+          'doctor_consultation_notes translation columns are missing. Falling back to legacy note fields.'
+        );
+      }
 
       setPatientFolder((folder as Record<string, any> | null) ?? null);
-      const typedNotes = ((notes as any) ?? []) as Array<{
+      const typedNotes = (notesResult.data ?? []) as Array<{
         id: string;
         created_at: string;
         doctor_id: string | null;
         diagnosis: string | null;
+        diagnosis_translations?: Record<string, string> | null;
         treatment_plan: string | null;
+        treatment_plan_translations?: Record<string, string> | null;
         prescriptions: string | null;
+        prescriptions_translations?: Record<string, string> | null;
         follow_up_notes: string | null;
+        follow_up_notes_translations?: Record<string, string> | null;
       }>;
       setPatientFolderNotes(typedNotes);
       setPatientHealthRecords((healthRecords as any) ?? []);
@@ -707,6 +1058,45 @@ const DoctorPortal = () => {
   // Initialize form data when doctorRegistration loads
   useEffect(() => {
     if (doctorRegistration) {
+      const nextBioTranslations: Record<string, string> = {};
+      const nextSpecialtyTranslations: Record<string, string> = {};
+      const rawBioTranslations = doctorRegistration.bio_translations;
+      const rawSpecialtyTranslations = (doctorRegistration as { specialty_translations?: unknown }).specialty_translations;
+
+      if (rawBioTranslations && typeof rawBioTranslations === 'object') {
+        Object.entries(rawBioTranslations as Record<string, unknown>).forEach(([code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return;
+          if (typeof value !== 'string') return;
+          const trimmedValue = value.trim();
+          if (!trimmedValue) return;
+          nextBioTranslations[normalizedCode] = trimmedValue;
+        });
+      }
+
+      if (rawSpecialtyTranslations && typeof rawSpecialtyTranslations === 'object') {
+        Object.entries(rawSpecialtyTranslations as Record<string, unknown>).forEach(([code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return;
+          if (typeof value !== 'string') return;
+          const trimmedValue = value.trim();
+          if (!trimmedValue) return;
+          nextSpecialtyTranslations[normalizedCode] = trimmedValue;
+        });
+      }
+
+      PROFILE_BIO_TRANSLATION_LANGUAGES.forEach((languageOption) => {
+        const normalizedCode = normalizeBioLanguageCode(languageOption.code);
+        if (!normalizedCode || normalizedCode === 'en') return;
+        if (nextBioTranslations[normalizedCode]) return;
+        const legacyBioColumnKey = `bio_${normalizedCode}` as keyof typeof doctorRegistration;
+        const legacyValue = doctorRegistration[legacyBioColumnKey];
+        if (typeof legacyValue !== 'string') return;
+        const trimmedValue = legacyValue.trim();
+        if (!trimmedValue) return;
+        nextBioTranslations[normalizedCode] = trimmedValue;
+      });
+
       setProfileFormData({
         fullName: doctorRegistration.full_name || '',
         email: doctorRegistration.email || '',
@@ -714,9 +1104,38 @@ const DoctorPortal = () => {
         specialty: doctorRegistration.specialty || '',
         experience: doctorRegistration.experience || '',
         bio: doctorRegistration.bio || '',
+        preferredLanguage: isSupportedAppLanguage((doctorRegistration as { preferred_language?: unknown })?.preferred_language)
+          ? ((doctorRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
+          : language,
       });
+      setBioTranslations(nextBioTranslations);
+      setSpecialtyTranslations(nextSpecialtyTranslations);
+      const initialAddLanguage =
+        PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+          (languageOption) =>
+            !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+            && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+        )?.code || '';
+      setNewBioLanguageCode(initialAddLanguage);
+      const existingConsultationLanguages = Array.isArray(doctorRegistration.preferred_consultation_languages)
+        ? doctorRegistration.preferred_consultation_languages
+          .map((item: string) => normalizeConsultationLanguage(item))
+          .filter(Boolean)
+        : [];
+      setSelectedConsultationLanguages(existingConsultationLanguages);
     }
   }, [doctorRegistration]);
+
+  useEffect(() => {
+    if (appliedPreferredLanguageRef.current) return;
+    if (!doctorRegistration) return;
+    appliedPreferredLanguageRef.current = true;
+
+    const preferredLanguage = (doctorRegistration as { preferred_language?: unknown })?.preferred_language;
+    if (isSupportedAppLanguage(preferredLanguage) && preferredLanguage !== language) {
+      setLanguage(preferredLanguage);
+    }
+  }, [doctorRegistration, language, setLanguage]);
 
   // Real-time subscription for doctor appointments
   useEffect(() => {
@@ -765,7 +1184,14 @@ const DoctorPortal = () => {
       const patientIds = appointments.map(apt => apt.patient_id).filter(Boolean);
       console.log('Patient IDs:', patientIds);
       
-      if (patientIds.length === 0) return appointments.map(apt => ({ ...apt, patient_age: null }));
+      if (patientIds.length === 0) {
+        return appointments.map((apt: any) => ({
+          ...apt,
+          status: normalizeAppointmentStatus(apt.status),
+          reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+          patient_age: null,
+        }));
+      }
       
       const { data: patientData, error: patientError } = await supabase
         .from('patient_registrations')
@@ -776,8 +1202,10 @@ const DoctorPortal = () => {
       
       // Merge the data
       const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
-      return appointments.map(apt => ({
+      return appointments.map((apt: any) => ({
         ...apt,
+        status: normalizeAppointmentStatus(apt.status),
+        reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
         patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
         patient_profile_picture: patientDataMap.get(apt.patient_id)?.profile_picture_url || null
@@ -786,58 +1214,325 @@ const DoctorPortal = () => {
     enabled: !!user?.id,
   });
 
-  const handleAcceptRequest = async (appointmentId: string) => {
+  const handleDeclineRequest = async (appointmentOrId: string | any) => {
+    const appointmentId = typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id;
+    const appointment =
+      (typeof appointmentOrId === 'string'
+        ? doctorVisibleAppointments.find((apt) => apt.id === appointmentOrId)
+        : appointmentOrId) || null;
+    const pendingReschedule = appointment ? isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null }) : false;
+
+    if (!appointmentId) return;
+
     try {
-      console.log('Accepting appointment:', appointmentId, 'User ID:', user?.id);
-      const { data, error } = await supabase
-        .from('appointments')
-        .update({ status: 'confirmed' })
-        .eq('id', appointmentId);
-      
-      if (error) {
-        console.error('Error accepting appointment:', error);
-        throw error;
+      if (pendingReschedule) {
+        const response = await AppointmentRescheduleService.respondToReschedule({
+          appointmentId,
+          action: 'decline',
+        });
+        const refunded = Number(response.refunded_upgrade_amount || 0);
+        toast({
+          title: 'Reschedule declined',
+          description: refunded > 0
+            ? `The current appointment remains unchanged. Refunded ₦${refunded.toLocaleString()} to patient wallet.`
+            : 'The current appointment remains unchanged.',
+        });
+        refetch();
+        return;
       }
-      
-      console.log('Appointment accepted successfully:', data);
-      toast({ title: 'Accepted', description: 'Appointment has been confirmed.' });
+
+      console.log('Cancelling appointment:', appointmentId, 'User ID:', user?.id);
+      const result = await PatientWalletService.cancelAppointmentWithRefund(appointmentId, 'Doctor cancelled appointment');
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Appointment cancelled',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to the patient wallet.`
+          : 'Appointment has been cancelled.',
+      });
       refetch();
     } catch (error) {
-      console.error('Failed to accept appointment:', error);
-      toast({ title: 'Error', description: 'Failed to accept appointment.' });
+      console.error('Failed to cancel appointment:', error);
+      toast({ title: 'Error', description: 'Failed to cancel appointment.' });
     }
   };
 
-  const handleDeclineRequest = async (appointmentId: string) => {
+  const handleApproveRequest = async (appointmentOrId: string | any) => {
+    if (!user?.id) return;
+    const appointmentId = typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id;
+    const appointment =
+      (typeof appointmentOrId === 'string'
+        ? doctorVisibleAppointments.find((apt) => apt.id === appointmentOrId)
+        : appointmentOrId) || null;
+    const pendingReschedule = appointment ? isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null }) : false;
+
+    if (!appointmentId) return;
+
     try {
-      console.log('Declining appointment:', appointmentId, 'User ID:', user?.id);
-      const { data, error } = await supabase
-        .from('appointments')
-        .update({ status: 'rejected' })
-        .eq('id', appointmentId);
-      
-      if (error) {
-        console.error('Error declining appointment:', error);
-        throw error;
+      if (pendingReschedule) {
+        const result = await AppointmentRescheduleService.respondToReschedule({
+          appointmentId,
+          action: 'approve',
+        });
+        const charged = Number(result.charged_upgrade_amount || 0);
+        toast({
+          title: 'Reschedule approved',
+          description: charged > 0
+            ? `Appointment updated. ₦${charged.toLocaleString()} charged from patient wallet.`
+            : 'Appointment updated to the proposed slot.',
+        });
+        refetch();
+        return;
       }
-      
-      console.log('Appointment declined successfully:', data);
-      toast({ title: 'Declined', description: 'Appointment has been declined.' });
+
+      const { error } = await supabase
+        .from('appointments')
+        .update({ status: 'confirmed' })
+        .eq('id', appointmentId)
+        .eq('doctor_id', user.id)
+        .eq('status', 'pending_approval');
+
+      if (error) throw error;
+
+      toast({
+        title: 'Appointment confirmed',
+        description: 'The appointment has been approved and moved to confirmed.',
+      });
       refetch();
     } catch (error) {
-      console.error('Failed to decline appointment:', error);
-      toast({ title: 'Error', description: 'Failed to decline appointment.' });
+      console.error('Failed to approve appointment:', error);
+      toast({ title: 'Error', description: 'Failed to approve appointment.' });
+    }
+  };
+
+  const handleMarkNoShow = async (appointmentId: string) => {
+    try {
+      const result = await PatientWalletService.markAppointmentNoShow(appointmentId, 'Doctor marked patient as no-show');
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Marked as no-show',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to the patient wallet.`
+          : 'Appointment has been marked as no-show.',
+      });
+      refetch();
+    } catch (error) {
+      console.error('Failed to mark no-show:', error);
+      toast({ title: 'Error', description: 'Failed to mark appointment as no-show.' });
+    }
+  };
+
+  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
+    getAppointmentDateTime(apt).getTime() <= Date.now();
+  const isPendingRescheduleRequest = (apt: { reschedule_request_status?: string | null }) =>
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isPatientRequestedReschedule = (apt: { reschedule_requested_by?: string | null }) =>
+    (apt.reschedule_requested_by || '').trim().toLowerCase() === 'patient';
+  const isDoctorRequestedReschedule = (apt: { reschedule_requested_by?: string | null }) =>
+    (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
+  const getCalendarAppointmentDate = (apt: {
+    date: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_date || apt.date)
+      : apt.date
+  );
+  const getCalendarAppointmentTime = (apt: {
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_time || apt.time)
+      : apt.time
+  );
+  const getCalendarDisplayStatus = useCallback((apt: {
+    status: string;
+    reschedule_request_status?: string | null;
+  }) => (
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending' ? 'pending_approval' : apt.status
+  ), []);
+  const hasEffectiveAppointmentTimePassed = (apt: {
+    date: string;
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => {
+    const dateValue = getCalendarAppointmentDate(apt);
+    const timeValue = getCalendarAppointmentTime(apt);
+    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    if (!Number.isNaN(effectiveDateTime.getTime())) {
+      return effectiveDateTime.getTime() <= Date.now();
+    }
+    return hasAppointmentTimePassed(apt);
+  };
+  const toTimeInputValue = (value: string) => {
+    const trimmed = value.trim();
+    if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+    if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed.slice(0, 5);
+
+    const twelveHour = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHour) {
+      const hourValue = parseInt(twelveHour[1], 10);
+      const minuteValue = twelveHour[2];
+      const period = twelveHour[3].toUpperCase();
+      const normalizedHour = period === 'PM' ? (hourValue % 12) + 12 : hourValue % 12;
+      return `${String(normalizedHour).padStart(2, '0')}:${minuteValue}`;
+    }
+
+    return '';
+  };
+
+  const doctorVisibleAppointments = useMemo(
+    () => (fetchedAppointments || []).filter((apt) => apt.status !== 'pending_payment'),
+    [fetchedAppointments],
+  );
+  const rescheduleAppointment = useMemo(
+    () => doctorVisibleAppointments.find((apt) => apt.id === rescheduleAppointmentId) || null,
+    [doctorVisibleAppointments, rescheduleAppointmentId],
+  );
+
+  const openRescheduleDialog = (appointment: any) => {
+    if (isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null })) {
+      toast({
+        title: 'Request already pending',
+        description: 'A reschedule request is already awaiting a response.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setRescheduleAppointmentId(appointment.id || null);
+    setRescheduleDate(appointment.date || '');
+    setRescheduleTime(toTimeInputValue(String(appointment.time || '')));
+    setRescheduleDialogOpen(true);
+  };
+
+  const openMessagesForAppointment = async (apt: any) => {
+    if (!user?.id) return;
+    const appointmentId = (apt as { id?: string | null }).id;
+    const patientId = (apt as { patient_id?: string | null }).patient_id;
+    if (!appointmentId || !patientId) {
+      toast({
+        title: t('doctorPortal.messaging.unavailableTitle', 'Messaging unavailable'),
+        description: t('doctorPortal.messaging.missingPatientContext', 'Patient details are missing for this appointment.'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const consultationTypeCandidate = String(
+      (apt as { consultation_type?: string | null }).consultation_type ||
+      ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
+      (apt as { consultationType?: string | null }).consultationType ||
+      (apt as { consultation_mode?: string | null }).consultation_mode ||
+      'video'
+    ).toLowerCase();
+    const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
+      ? consultationTypeCandidate
+      : 'video';
+
+    try {
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointmentId)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      let sessionId = existingSession?.id ?? null;
+      if (!sessionId) {
+        const { data: createdSession, error: createSessionError } = await supabase
+          .from('consultation_sessions')
+          .insert({
+            appointment_id: appointmentId,
+            patient_id: patientId,
+            doctor_id: user.id,
+            consultation_type: consultationType,
+          })
+          .select('id')
+          .single();
+
+        if (createSessionError) throw createSessionError;
+        sessionId = createdSession.id;
+      }
+
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(sessionId), 0);
+      setActiveTab('messages');
+      setSidebarOpen(false);
+    } catch (err) {
+      console.error('Failed to open appointment messages:', err);
+      toast({
+        title: t('doctorPortal.messaging.failedTitle', 'Unable to open messages'),
+        description: t('doctorPortal.messaging.failedDescription', 'Please try again in a moment.'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const submitReschedule = async () => {
+    if (!rescheduleAppointmentId || !rescheduleAppointment) return;
+    if (!rescheduleDate || !rescheduleTime) {
+      toast({
+        title: 'Missing fields',
+        description: 'Select both date and time for rescheduling.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const normalizedTime = /^\d{2}:\d{2}$/.test(rescheduleTime) ? `${rescheduleTime}:00` : rescheduleTime;
+    const targetDateTime = new Date(`${rescheduleDate}T${normalizedTime}`);
+    if (Number.isNaN(targetDateTime.getTime()) || targetDateTime.getTime() <= Date.now()) {
+      toast({
+        title: 'Invalid date/time',
+        description: 'Choose a future appointment time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsRescheduling(true);
+    try {
+      await AppointmentRescheduleService.requestReschedule({
+        appointmentId: rescheduleAppointmentId,
+        proposedDate: rescheduleDate,
+        proposedTime: normalizedTime,
+        proposedDurationMinutes: Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30),
+        proposedFinalPrice: Number((rescheduleAppointment as { final_price?: number | null }).final_price || 0),
+      });
+
+      toast({
+        title: 'Reschedule requested',
+        description: 'Patient approval is required before this new slot is applied.',
+      });
+      setRescheduleDialogOpen(false);
+      setRescheduleAppointmentId(null);
+      refetch();
+    } catch (error) {
+      console.error('Failed to reschedule appointment:', error);
+      toast({
+        title: 'Reschedule failed',
+        description: 'Could not reschedule this appointment. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRescheduling(false);
     }
   };
 
   // Calculate upcoming appointments (next 24 hours) and next appointment
-  const today = new Date().toISOString().split('T')[0];
   const now = new Date();
   const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   
-  const upcomingSchedule = (fetchedAppointments || []).filter(apt => {
+  const upcomingSchedule = doctorVisibleAppointments.filter(apt => {
     const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-    return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'pending');
+    return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'in_progress');
   }).sort((a, b) => {
     const dateA = new Date(`${a.date}T${a.time}`);
     const dateB = new Date(`${b.date}T${b.time}`);
@@ -845,10 +1540,10 @@ const DoctorPortal = () => {
   });
   
   // Find next appointment
-  const upcomingAppointments = (fetchedAppointments || [])
+  const upcomingAppointments = doctorVisibleAppointments
     .filter(apt => {
       const aptDate = new Date(`${apt.date}T${apt.time}`);
-      return aptDate > now && (apt.status === 'confirmed' || apt.status === 'pending');
+      return aptDate > now && (apt.status === 'confirmed' || apt.status === 'in_progress');
     })
     .sort((a, b) => {
       const dateA = new Date(`${a.date}T${a.time}`);
@@ -862,29 +1557,56 @@ const DoctorPortal = () => {
     const aptTime = new Date(`${nextAppointment.date}T${nextAppointment.time}`);
     const diffMs = aptTime.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
-    
-    if (diffMins < 60) return `${diffMins} min`;
+
+    const minsLabel = t('common.timeUnit.minuteShort', 'min');
+    const hoursLabel = t('common.timeUnit.hourShort', 'h');
+    const minutesShortLabel = t('common.timeUnit.minutesShort', 'm');
+
+    if (diffMins < 60) return `${formatNumber(diffMins)} ${minsLabel}`;
     const hours = Math.floor(diffMins / 60);
     const mins = diffMins % 60;
-    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    return mins > 0
+      ? `${formatNumber(hours)}${hoursLabel} ${formatNumber(mins)}${minutesShortLabel}`
+      : `${formatNumber(hours)}${hoursLabel}`;
   };
 
-  // Filter pending requests for the current doctor
-  const pendingRequests = (fetchedAppointments || []).filter(apt => {
-    console.log('Checking appointment:', apt.id, 'Status:', apt.status);
-    return apt.status === 'pending' || apt.status === 'requested' || apt.status === 'awaiting_approval';
+  // Pending doctor-approval queue (only paid appointments).
+  const pendingRequests = doctorVisibleAppointments.filter(apt => {
+    const isPending = apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+    if (!isPending) return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }
+    return true;
     }).map(apt => ({
     id: apt.id,
+    appointment: apt,
     patient: apt.patient_name || 'Unknown Patient',
     age: apt.patient_age || 'N/A',
-    requestedDate: apt.date,
-    requestedTime: apt.time,
-    reason: apt.notes || 'No reason provided',
+    requestedDate: getCalendarAppointmentDate(apt as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }),
+    requestedTime: getCalendarAppointmentTime(apt as {
+      time: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_time?: string | null;
+    }),
+    reason: (apt as { reschedule_request_note?: string | null }).reschedule_request_note || apt.notes || 'No reason provided',
+    isReschedulePending: isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+    requestedBy: (apt as { reschedule_requested_by?: string | null }).reschedule_requested_by || null,
+    proposedDate: (apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || null,
+    proposedTime: (apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || null,
     priority: 'normal',
   }));
   
-  console.log('Final pending requests:', pendingRequests);
-
   // Move stats calculation after pendingRequests
   const stats = {
     totalPatients: doctorStats?.totalPatients || 0,
@@ -893,48 +1615,127 @@ const DoctorPortal = () => {
     earnings: earningsData?.thisMonthEarnings || 0,
     rating: doctorStats?.rating || 0,
   };
+  const confirmedCount = doctorVisibleAppointments.filter((apt) => {
+    if (apt.status !== 'confirmed') return false;
+    if ((apt as any).date && (apt as any).time) return !hasAppointmentTimePassed(apt as { date: string; time: string });
+    return true;
+  }).length;
+  const closedCount = doctorVisibleAppointments.filter((apt) =>
+    (apt.status === 'cancelled' || apt.status === 'no_show') &&
+    !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+  ).length;
+  const walletAvailableBalance = Number(doctorWallet?.available_balance || 0);
+  const walletPendingBalance = Number(doctorWallet?.pending_balance || 0);
+  const pendingWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'pending').length;
+  const availableWalletEntries = (walletTransactions as WalletTransactionRow[]).filter((tx) => tx.status === 'available').length;
+  const withdrawalAmountNumber = Number(withdrawalAmount || 0);
+  const canRequestWithdrawal =
+    withdrawalAmountNumber > 0 &&
+    withdrawalAmountNumber <= walletAvailableBalance;
 
   const filteredAppointmentsByStatus = useMemo(() => {
-    if (!fetchedAppointments) return [];
-    const now = new Date();
+    if (!doctorVisibleAppointments) return [];
     
     let filtered;
     switch (appointmentStatusFilter) {
-      case 'pending':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'pending');
+      case 'pending_approval':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) => apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
-      case 'upcoming':
-        filtered = fetchedAppointments.filter(apt => {
-          const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-          return aptDateTime > now && apt.status === 'confirmed';
-        });
+      case 'confirmed':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) =>
+            (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'in_progress':
+        filtered = doctorVisibleAppointments.filter((apt) => apt.status === 'in_progress');
         break;
       case 'completed':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'completed');
+        filtered = doctorVisibleAppointments.filter(apt => apt.status === 'completed');
         break;
-      case 'rejected':
-        filtered = fetchedAppointments.filter(apt => apt.status === 'rejected');
+      case 'cancelled':
+        filtered = doctorVisibleAppointments.filter(apt => apt.status === 'cancelled');
+        break;
+      case 'no_show':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) => apt.status === 'no_show' && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'closed':
+        filtered = doctorVisibleAppointments.filter(
+          (apt) =>
+            (apt.status === 'cancelled' || apt.status === 'no_show') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'all':
       default:
-        filtered = fetchedAppointments;
+        filtered = doctorVisibleAppointments;
     }
     
-    // Sort: pending by created_at desc, upcoming by date asc, completed by date desc
+    // Sort: approval queue by created_at desc, active by date asc, others by latest first.
     return filtered.sort((a, b) => {
-      if (appointmentStatusFilter === 'pending') {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      } else if (appointmentStatusFilter === 'upcoming') {
+      if (appointmentStatusFilter === 'pending_approval') {
+        const aRescheduleAt = (a as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const bRescheduleAt = (b as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const aTs = new Date(aRescheduleAt || a.created_at).getTime();
+        const bTs = new Date(bRescheduleAt || b.created_at).getTime();
+        return bTs - aTs;
+      }
+
+      if (appointmentStatusFilter === 'confirmed') {
+        const nowTs = Date.now();
+        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const aIsPast = dateTimeA < nowTs;
+        const bIsPast = dateTimeB < nowTs;
+
+        if (aIsPast !== bIsPast) {
+          return aIsPast ? 1 : -1;
+        }
+
+        return aIsPast ? (dateTimeB - dateTimeA) : (dateTimeA - dateTimeB);
+      }
+
+      if (appointmentStatusFilter === 'in_progress') {
         const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
         const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
         return dateTimeA - dateTimeB;
-      } else {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
-        return dateTimeB - dateTimeA;
       }
+
+      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      return dateTimeB - dateTimeA;
     });
-  }, [fetchedAppointments, appointmentStatusFilter]);
+  }, [doctorVisibleAppointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobileAppointmentsLayout(event.matches);
+    };
+
+    setIsMobileAppointmentsLayout(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (appointmentStatusFilter === 'in_progress') {
+      setAppointmentStatusFilter('confirmed');
+    }
+  }, [appointmentStatusFilter]);
 
   useEffect(() => {
     if (appointmentViewMode !== 'calendar') return;
@@ -944,15 +1745,24 @@ const DoctorPortal = () => {
       return;
     }
 
-    setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
+    setSelectedCalendarDate(getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }));
   }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
 
   const appointmentsByDate = useMemo(() => {
     return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
-      if (!acc[apt.date]) {
-        acc[apt.date] = [];
+      const dateKey = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
       }
-      acc[apt.date].push(apt);
+      acc[dateKey].push(apt);
       return acc;
     }, {});
   }, [filteredAppointmentsByStatus]);
@@ -960,17 +1770,44 @@ const DoctorPortal = () => {
   const calendarStatusLegend = useMemo(() => {
     const seen = new Set<string>();
     return filteredAppointmentsByStatus
-      .filter((apt) => {
-        if (seen.has(apt.status)) return false;
-        seen.add(apt.status);
+      .map((apt) => getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      }))
+      .filter((status) => {
+        if (seen.has(status)) return false;
+        seen.add(status);
         return true;
       })
-      .map((apt) => apt.status);
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, getCalendarDisplayStatus]);
+  const hasPastConfirmedInCalendar = useMemo(
+    () => appointmentStatusFilter === 'confirmed' && filteredAppointmentsByStatus.some(
+      (apt) => apt.status === 'confirmed'
+        && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })
+        && hasAppointmentTimePassed(apt),
+    ),
+    [filteredAppointmentsByStatus, appointmentStatusFilter],
+  );
+  const hasPendingRescheduleInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
+    [filteredAppointmentsByStatus],
+  );
 
   const calendarDialogDayAppointments = useMemo(() => {
     if (!calendarDialogDate) return [];
-    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => {
+      const timeA = getCalendarAppointmentTime(a as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const timeB = getCalendarAppointmentTime(b as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      return timeA.localeCompare(timeB);
+    });
   }, [appointmentsByDate, calendarDialogDate]);
 
   const calendarFocusedAppointment = useMemo(() => {
@@ -997,24 +1834,56 @@ const DoctorPortal = () => {
 
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
-      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+      const displayStatus = getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      });
+      const isPastConfirmed = appointmentStatusFilter === 'confirmed'
+        && apt.status === 'confirmed'
+        && !pendingReschedule
+        && hasAppointmentTimePassed(apt);
+      const eventDate = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      const eventTime = getCalendarAppointmentTime(apt as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const styles = pendingReschedule
+        ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
+        : isPastConfirmed
+        ? PAST_CONFIRMED_CALENDAR_STYLE
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[displayStatus as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       return {
         id: apt.id,
         title: apt.patient_name || 'Unknown Patient',
-        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        start: `${eventDate}T${normalizeTime(eventTime)}`,
         allDay: false,
         backgroundColor: styles.bg,
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
-          status: apt.status,
-          appointmentDate: apt.date
+          status: displayStatus,
+          sourceStatus: apt.status,
+          appointmentDate: eventDate,
+          isPastConfirmed,
+          isPendingReschedule: pendingReschedule,
         }
       };
     });
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, appointmentStatusFilter, getCalendarDisplayStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+  const calendarRenderKey = `${appointmentStatusFilter}-${isMobileAppointmentsLayout ? 'mobile' : 'desktop'}-${filteredAppointmentsByStatus[0]
+    ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    })
+    : 'empty'}`;
 
   const handleCalendarDayClick = (dateStr: string) => {
     const dayKey = dateStr.slice(0, 10);
@@ -1034,7 +1903,7 @@ const DoctorPortal = () => {
   };
 
   const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
-    const dateLabel = arg.date.toLocaleDateString('en-US', {
+    const dateLabel = formatDate(arg.date, {
       weekday: 'long',
       month: 'long',
       day: 'numeric',
@@ -1046,11 +1915,22 @@ const DoctorPortal = () => {
 
   const handleCalendarEventMount = (arg: EventMountArg) => {
     const eventTime = arg.event.start
-      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      ? formatTime(arg.event.start, { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
-    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    const isPastConfirmed = Boolean(arg.event.extendedProps.isPastConfirmed);
+    const isPendingReschedule = Boolean(arg.event.extendedProps.isPendingReschedule);
+    const eventStatusLabel = eventStatus ? formatAppointmentStatusLabel(eventStatus) : 'Appointment';
+    const pendingRescheduleSuffix = t('doctorPortal.calendar.reschedulePendingSuffix', ' (Reschedule Pending)');
+    const timePassedSuffix = t('doctorPortal.calendar.timePassedSuffix', ' (Time Passed)');
+    arg.el.setAttribute(
+      'title',
+      `${arg.event.title} • ${eventTime} • ${eventStatusLabel}${isPendingReschedule ? pendingRescheduleSuffix : ''}${isPastConfirmed ? timePassedSuffix : ''}`,
+    );
+    if (isPastConfirmed) {
+      arg.el.style.boxShadow = 'inset 0 0 0 1px rgba(120, 53, 15, 0.35)';
+      arg.el.style.opacity = '0.9';
+    }
     arg.el.style.cursor = 'pointer';
   };
 
@@ -1068,7 +1948,7 @@ const DoctorPortal = () => {
     }
 
     const calendarDialogDateLabel = calendarDialogDate
-      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+      ? formatDate(new Date(`${calendarDialogDate}T00:00:00`), {
         weekday: 'long',
         month: 'long',
         day: 'numeric',
@@ -1085,10 +1965,22 @@ const DoctorPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span className="capitalize">{status}</span>
+                  <span>{formatAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
+            {hasPastConfirmedInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PAST_CONFIRMED_CALENDAR_STYLE.dot }} />
+                <span>{t('doctorPortal.calendar.confirmedTimePassed', 'Confirmed (Time Passed)')}</span>
+              </div>
+            )}
+            {hasPendingRescheduleInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#2563eb' }} />
+                <span>{t('doctorPortal.calendar.reschedulePending', 'Reschedule Pending')}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -1097,21 +1989,37 @@ const DoctorPortal = () => {
             key={calendarRenderKey}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
-            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            initialDate={selectedCalendarDate || (
+              filteredAppointmentsByStatus[0]
+                ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+                  date: string;
+                  reschedule_request_status?: string | null;
+                  reschedule_proposed_date?: string | null;
+                })
+                : undefined
+            )}
             headerToolbar={{
               left: 'prev,next today',
               center: 'title',
               right: 'dayGridMonth,timeGridWeek,timeGridDay'
             }}
+            buttonText={{
+              today: t('common.today', 'Today'),
+              month: t('patientPortal.calendar.monthShort', 'Month'),
+              week: t('patientPortal.calendar.weekShort', 'Week'),
+              day: t('patientPortal.calendar.dayShort', 'Day'),
+            }}
             events={fullCalendarEvents}
-            dayMaxEvents={2}
+            dayMaxEvents={isMobileAppointmentsLayout ? 2 : 3}
             eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
             slotMinTime="06:00:00"
             slotMaxTime="23:00:00"
             slotDuration="00:30:00"
             allDaySlot={false}
             nowIndicator
+            stickyHeaderDates
             height="auto"
+            expandRows
             dayCellDidMount={handleCalendarDayCellMount}
             eventDidMount={handleCalendarEventMount}
             dateClick={(arg: DateClickArg) => {
@@ -1127,28 +2035,44 @@ const DoctorPortal = () => {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>
-                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+                {calendarDialogDateLabel
+                  ? `${t('common.appointments', 'Appointments')} ${calendarDialogDateLabel}`
+                  : t('common.appointments', 'Appointments')}
               </DialogTitle>
               <DialogDescription>
-                Review appointments for the selected day.
+                {t('doctorPortal.calendar.reviewAppointmentsForDay', 'Review appointments for the selected day.')}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {calendarDialogDayAppointments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('doctorPortal.empty.noAppointmentsFound', 'No appointments found')}
+                </p>
               ) : (
                 calendarDialogDayAppointments.map((apt) => (
                   <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{apt.time}</span>
+                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
                         {getStatusBadge(apt.status)}
+                        {getRescheduleRequestBadge(apt as {
+                          reschedule_request_status?: string | null;
+                          reschedule_requested_by?: string | null;
+                        })}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
-                        {apt.patient_name || 'Unknown Patient'}
+                        {apt.patient_name || t('doctorPortal.defaults.unknownPatient', 'Unknown Patient')}
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
+                      {isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) && (
+                        <p className="text-xs text-blue-700 mt-1 truncate">
+                          {t('doctorPortal.calendar.proposedSlotPrefix', 'Proposed')}:{' '}
+                          {new Date(
+                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                          ).toLocaleDateString()} {t('common.at', 'at')} {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('doctorPortal.notes.none', 'No notes')}</p>
                     </div>
                     <Button
                       size="sm"
@@ -1159,7 +2083,7 @@ const DoctorPortal = () => {
                         setCalendarEventDialogOpen(true);
                       }}
                     >
-                      View
+                      {t('common.view', 'View')}
                     </Button>
                   </div>
                 ))
@@ -1177,22 +2101,42 @@ const DoctorPortal = () => {
         >
           <DialogContent className="max-w-xl">
             <DialogHeader>
-              <DialogTitle>Appointment Details</DialogTitle>
-              <DialogDescription>Manage the selected appointment.</DialogDescription>
+              <DialogTitle>{t('common.appointments', 'Appointments')}</DialogTitle>
+              <DialogDescription>{t('doctorPortal.calendar.manageSelectedAppointment', 'Manage the selected appointment.')}</DialogDescription>
             </DialogHeader>
             {calendarFocusedAppointment && (
               <div className="space-y-4">
                 <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
                   <p className="text-sm font-semibold">
-                    {calendarFocusedAppointment.patient_name || 'Unknown Patient'}
+                    {calendarFocusedAppointment.patient_name || t('doctorPortal.defaults.unknownPatient', 'Unknown Patient')}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>{formatDate(calendarFocusedAppointment.date)}</span>
                     <span>•</span>
-                    <span>{calendarFocusedAppointment.time}</span>
+                    <span>{formatClockTime(calendarFocusedAppointment.time)}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
-                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
+                  {getRescheduleRequestBadge(calendarFocusedAppointment as {
+                    reschedule_request_status?: string | null;
+                    reschedule_requested_by?: string | null;
+                  })}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50/60 p-2 text-xs text-blue-900">
+                      <p className="font-medium">{t('doctorPortal.calendar.proposedSlot', 'Proposed Slot')}</p>
+                      <p>
+                        {new Date(
+                          String((calendarFocusedAppointment as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || calendarFocusedAppointment.date)
+                        ).toLocaleDateString()}{' '}
+                        {t('common.at', 'at')} {(calendarFocusedAppointment as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || calendarFocusedAppointment.time}
+                      </p>
+                    </div>
+                  )}
+                  {calendarFocusedAppointment.status === 'confirmed' && hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    <p className="text-xs font-medium text-amber-700">
+                      {t('doctorPortal.calendar.appointmentTimePassedHint', 'Appointment time passed. Keep this in confirmed until you mark no-show or complete follow-up.')}
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || t('doctorPortal.notes.noneProvided', 'No notes provided.')}</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
@@ -1205,10 +2149,11 @@ const DoctorPortal = () => {
                         setCalendarEventDialogOpen(false);
                       }}
                     >
-                      View Folder
+                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
                     </Button>
                   )}
-                  {calendarFocusedAppointment.status === 'confirmed' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') && (
                     <JoinConsultationButton
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={calendarFocusedAppointment.patient_name || ''}
@@ -1217,30 +2162,98 @@ const DoctorPortal = () => {
                       size="sm"
                     />
                   )}
-                  {calendarFocusedAppointment.status === 'pending' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'completed') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        openMessagesForAppointment(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      {t('doctorPortal.actions.message', 'Message')}
+                    </Button>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') &&
+                    hasAppointmentTimePassed(calendarFocusedAppointment) && (
                     <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          openRescheduleDialog(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.reschedule', 'Reschedule')}
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
                         className="text-destructive border-destructive/30"
                         onClick={() => {
-                          handleDeclineRequest(calendarFocusedAppointment.id);
+                          handleMarkNoShow(calendarFocusedAppointment.id);
                           setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Decline
+                        {t('doctorPortal.actions.markNoShow', 'Mark No Show')}
+                      </Button>
+                    </>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    calendarFocusedAppointment.status === 'pending_approval' && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          handleApproveRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.approve', 'Approve')}
                       </Button>
                       <Button
                         size="sm"
-                        className="bg-success hover:bg-success/90"
+                        variant="destructive"
                         onClick={() => {
-                          handleAcceptRequest(calendarFocusedAppointment.id);
+                          handleDeclineRequest(calendarFocusedAppointment);
                           setCalendarEventDialogOpen(false);
                         }}
                       >
-                        Accept
+                        {t('common.cancel', 'Cancel')}
                       </Button>
                     </>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isPatientRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          handleApproveRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.approveReschedule', 'Approve Reschedule')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          handleDeclineRequest(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        {t('doctorPortal.actions.declineRequest', 'Decline Request')}
+                      </Button>
+                    </>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isDoctorRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
+                    <Badge variant="secondary">{t('doctorPortal.badges.waitingPatientApproval', 'Waiting for patient approval')}</Badge>
                   )}
                 </div>
               </div>
@@ -1255,13 +2268,13 @@ const DoctorPortal = () => {
   const patientsList = useMemo(() => {
     const patientsMap = new Map<string, any>();
     
-    (fetchedAppointments || []).forEach(apt => {
+    doctorVisibleAppointments.forEach(apt => {
       if (apt.patient_id && apt.patient_name) {
         if (!patientsMap.has(apt.patient_id)) {
           patientsMap.set(apt.patient_id, {
             id: apt.patient_id,
             name: apt.patient_name,
-            age: apt.patient_age || 'N/A',
+            age: apt.patient_age || t('specialists.defaults.notAvailable', 'N/A'),
             lastVisit: apt.date,
             appointments: [],
             latestAppointment: null as any
@@ -1298,7 +2311,7 @@ const DoctorPortal = () => {
 	    });
 
     return Array.from(patientsMap.values());
-  }, [fetchedAppointments]);
+  }, [doctorVisibleAppointments]);
 
   const displayName = doctorRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? 'Doctor';
   const profilePicture = doctorRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? '';
@@ -1353,32 +2366,164 @@ const DoctorPortal = () => {
     }
   };
 
+  const handleAddBioTranslation = () => {
+    const normalizedCode = normalizeBioLanguageCode(newBioLanguageCode);
+    if (
+      !normalizedCode
+      || Object.prototype.hasOwnProperty.call(bioTranslations, normalizedCode)
+      || Object.prototype.hasOwnProperty.call(specialtyTranslations, normalizedCode)
+    ) return;
+
+    const nextBioTranslations = {
+      ...bioTranslations,
+      [normalizedCode]: '',
+    };
+    const nextSpecialtyTranslations = {
+      ...specialtyTranslations,
+      [normalizedCode]: '',
+    };
+    const nextAvailableCode =
+      PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+      )?.code || '';
+
+    setBioTranslations(nextBioTranslations);
+    setSpecialtyTranslations(nextSpecialtyTranslations);
+    setNewBioLanguageCode(nextAvailableCode);
+  };
+
+  const handleRemoveBioTranslation = (languageCode: string) => {
+    const nextBioTranslations = { ...bioTranslations };
+    const nextSpecialtyTranslations = { ...specialtyTranslations };
+    delete nextBioTranslations[languageCode];
+    delete nextSpecialtyTranslations[languageCode];
+    const nextAvailableCode =
+      PROFILE_BIO_TRANSLATION_LANGUAGES.find(
+        (languageOption) =>
+          !Object.prototype.hasOwnProperty.call(nextBioTranslations, languageOption.code)
+          && !Object.prototype.hasOwnProperty.call(nextSpecialtyTranslations, languageOption.code)
+      )?.code || '';
+
+    setBioTranslations(nextBioTranslations);
+    setSpecialtyTranslations(nextSpecialtyTranslations);
+    setNewBioLanguageCode((current) => current || nextAvailableCode);
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.id) return;
     setIsSavingProfile(true);
     
     try {
+      const bioTranslationsPayload = Object.entries(bioTranslations).reduce<Record<string, string>>(
+        (acc, [code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return acc;
+          const trimmedValue = String(value || '').trim();
+          if (!trimmedValue) return acc;
+          acc[normalizedCode] = trimmedValue;
+          return acc;
+        },
+        {}
+      );
+      const legacyBioColumnPayload = PROFILE_BIO_TRANSLATION_LANGUAGES.reduce<Record<string, string | null>>(
+        (acc, languageOption) => {
+          const normalizedCode = normalizeBioLanguageCode(languageOption.code);
+          const legacyColumnKey = `bio_${normalizedCode}`;
+          acc[legacyColumnKey] = bioTranslationsPayload[normalizedCode] || null;
+          return acc;
+        },
+        {}
+      );
+      const specialtyTranslationsPayload = Object.entries(specialtyTranslations).reduce<Record<string, string>>(
+        (acc, [code, value]) => {
+          const normalizedCode = normalizeBioLanguageCode(code);
+          if (!normalizedCode || normalizedCode === 'en') return acc;
+          const trimmedValue = String(value || '').trim();
+          if (!trimmedValue) return acc;
+          acc[normalizedCode] = trimmedValue;
+          return acc;
+        },
+        {}
+      );
+      const preferredLanguageToSave = isSupportedAppLanguage(profileFormData.preferredLanguage)
+        ? profileFormData.preferredLanguage
+        : language;
+
+      const normalizedConsultationLanguages = Array.from(
+        new Set(
+          selectedConsultationLanguages
+            .map((item) => normalizeConsultationLanguage(item))
+            .filter(Boolean)
+        )
+      );
+
+      if (normalizedConsultationLanguages.length === 0) {
+        toast({
+          title: t('auth.toast.consultationLanguagesRequiredTitle', 'Consultation languages required'),
+          description: t(
+            'auth.toast.consultationLanguagesRequiredDescription',
+            'Please select at least one consultation language.'
+          ),
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const baseProfilePayload = {
+        full_name: profileFormData.fullName.trim(),
+        email: profileFormData.email.trim(),
+        phone_number: profileFormData.phone.trim(),
+        specialty: profileFormData.specialty.trim(),
+        experience: profileFormData.experience.trim(),
+        bio: profileFormData.bio.trim(),
+        ...legacyBioColumnPayload,
+        bio_translations: bioTranslationsPayload,
+        specialty_translations: specialtyTranslationsPayload,
+        preferred_consultation_languages: normalizedConsultationLanguages,
+      };
       const { error } = await supabase
         .from('doctor_registrations')
         .update({
-          full_name: profileFormData.fullName,
-          email: profileFormData.email,
-          phone_number: profileFormData.phone,
-          specialty: profileFormData.specialty,
-          experience: profileFormData.experience,
-          bio: profileFormData.bio,
+          ...baseProfilePayload,
+          preferred_language: preferredLanguageToSave,
         })
         .eq('user_id', user.id);
 
-      if (error) throw error;
+      if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+        const { error: fallbackError } = await supabase
+          .from('doctor_registrations')
+          .update(baseProfilePayload)
+          .eq('user_id', user.id);
+        if (fallbackError) throw fallbackError;
+      } else if (error) {
+        throw error;
+      }
 
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
-      toast({ title: 'Success', description: 'Profile updated successfully!' });
+      queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
+      setLanguage(preferredLanguageToSave);
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.profileUpdated', 'Profile updated successfully!'),
+      });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to update profile.' });
+      toast({
+        title: t('common.error', 'Error'),
+        description: t('common.profileUpdateFailed', 'Failed to update profile.'),
+      });
     } finally {
       setIsSavingProfile(false);
     }
+  };
+
+  const toggleConsultationLanguage = (language: string) => {
+    setSelectedConsultationLanguages((prev) =>
+      prev.includes(language)
+        ? prev.filter((item) => item !== language)
+        : [...prev, language]
+    );
   };
 
   const handleChangePassword = async () => {
@@ -1386,15 +2531,23 @@ const DoctorPortal = () => {
     const confirmPassword = passwordFormData.confirmPassword.trim();
 
     if (!newPassword || !confirmPassword) {
-      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      toast({
+        title: t('common.missingFields', 'Missing fields'),
+        description: t('common.enterAndConfirmNewPassword', 'Enter and confirm your new password.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword.length < 8) {
-      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({
+        title: t('common.weakPassword', 'Weak password'),
+        description: t('common.passwordMinimumLength', 'Password must be at least 8 characters.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      toast({ title: t('common.passwordsDoNotMatch', 'Passwords do not match'), variant: 'destructive' });
       return;
     }
 
@@ -1404,11 +2557,14 @@ const DoctorPortal = () => {
       if (error) throw error;
 
       setPasswordFormData({ newPassword: '', confirmPassword: '' });
-      toast({ title: 'Success', description: 'Password changed successfully.' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.passwordChanged', 'Password changed successfully.'),
+      });
     } catch (error: any) {
       toast({
-        title: 'Error',
-        description: error?.message || 'Failed to change password.',
+        title: t('common.error', 'Error'),
+        description: error?.message || t('common.passwordChangeFailed', 'Failed to change password.'),
         variant: 'destructive',
       });
     } finally {
@@ -1451,14 +2607,16 @@ const DoctorPortal = () => {
       queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
       
       toast({
-        title: 'Success',
-        description: newAvailability ? 'You are now available for consultations' : 'You are now unavailable for new consultations',
+        title: t('common.success', 'Success'),
+        description: newAvailability
+          ? t('scheduleEditor.toast.nowAvailable', 'You are now available for consultations')
+          : t('scheduleEditor.toast.nowUnavailable', 'You are now unavailable for new consultations'),
       });
     } catch (error) {
       console.error('Failed to update availability:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to update availability status. Please try again.',
+        title: t('common.error', 'Error'),
+        description: t('scheduleEditor.toast.failedAvailabilityStatus', 'Failed to update availability status. Please try again.'),
         variant: 'destructive',
       });
       // Revert the toggle if update failed
@@ -1466,36 +2624,44 @@ const DoctorPortal = () => {
     }
   };
 
-  const requireAuth = () => {
-    if (!user) {
-      toast({ title: 'Please sign in', description: 'You must be signed in to access this feature.' });
-      navigate('/auth');
-      return false;
-    }
-    return true;
-  };
-
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'pending_payment':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">{t('appointmentStatus.pendingPayment', 'Pending Payment')}</Badge>;
+      case 'pending_approval':
+        return <Badge className="bg-amber-100 text-amber-700 border-amber-300">{t('appointmentStatus.pendingApproval', 'Pending Approval')}</Badge>;
+      case 'confirmed':
+        return <Badge className="bg-success/10 text-success border-success/20">{t('appointmentStatus.confirmed', 'Confirmed')}</Badge>;
+      case 'in_progress':
+        return <Badge className="bg-primary/10 text-primary border-primary/20">{t('appointmentStatus.inProgress', 'In Progress')}</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
-      case 'in-progress':
-        return <Badge className="bg-primary/10 text-primary border-primary/20">In Progress</Badge>;
-      case 'upcoming':
-        return <Badge variant="outline">Upcoming</Badge>;
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">{t('appointmentStatus.completed', 'Completed')}</Badge>;
       case 'cancelled':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Cancelled</Badge>;
+        return <Badge className="bg-slate-100 text-slate-700 border-slate-300">{t('appointmentStatus.cancelled', 'Cancelled')}</Badge>;
+      case 'no_show':
+        return <Badge variant="destructive">{t('appointmentStatus.noShow', 'No Show')}</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{formatAppointmentStatusLabel(status)}</Badge>;
     }
+  };
+
+  const getRescheduleRequestBadge = (apt: {
+    reschedule_request_status?: string | null;
+    reschedule_requested_by?: string | null;
+  }) => {
+    if (!isPendingRescheduleRequest(apt)) return null;
+    if (isPatientRequestedReschedule(apt)) {
+      return <Badge className="bg-blue-100 text-blue-700 border-blue-300">{t('doctorPortal.badges.patientRescheduleRequest', 'Patient Reschedule Request')}</Badge>;
+    }
+    return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-300">{t('doctorPortal.badges.doctorRescheduleRequest', 'Doctor Reschedule Request')}</Badge>;
   };
 
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
       case 'high':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Urgent</Badge>;
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">{t('doctorPortal.priority.urgent', 'Urgent')}</Badge>;
       case 'normal':
-        return <Badge variant="outline">Normal</Badge>;
+        return <Badge variant="outline">{t('doctorPortal.priority.normal', 'Normal')}</Badge>;
       default:
         return <Badge variant="outline">{priority}</Badge>;
     }
@@ -1538,6 +2704,30 @@ const DoctorPortal = () => {
     navigate('/install');
   };
 
+  const formatNaira = (value: number) => `₦${Math.round(value).toLocaleString()}`;
+
+  const submitWithdrawalRequest = () => {
+    if (!canRequestWithdrawal) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter an amount within your available balance.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    toast({
+      title: 'Withdrawal queue coming soon',
+      description: 'Your request flow is staged in UI. Backend payout processing will be enabled next.',
+    });
+    setWithdrawalDialogOpen(false);
+    setWithdrawalAmount('');
+    setWithdrawalNarration('');
+  };
+
+  const appointmentViewToggleButtonBaseClass = 'h-8 flex-1 sm:flex-none gap-1';
+  const appointmentStatusTriggerClass = 'relative h-10 w-full border border-transparent px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-background/70 sm:text-sm data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:border-border data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border';
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -1555,47 +2745,20 @@ const DoctorPortal = () => {
             </Link>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <Link to="/install" className="hidden md:block">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Download className="w-4 h-4" />
-                  Download App
-                </Button>
-              </Link>
-
               {/* Availability Toggle */}
               <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full bg-muted">
                 <span className={`w-2 h-2 rounded-full ${isAvailable ? 'bg-success' : 'bg-muted-foreground'}`} />
-                <span className="hidden sm:inline text-sm font-medium">{isAvailable ? 'Available' : 'Unavailable'}</span>
+                <span className="hidden sm:inline text-sm font-medium">
+                  {isAvailable
+                    ? t('doctorPortal.available', 'Available')
+                    : t('doctorPortal.unavailable', 'Unavailable')}
+                </span>
                 <Switch
                   checked={isAvailable}
                   onCheckedChange={handleAvailabilityToggle}
                   className="ml-1"
                 />
               </div>
-
-              {!isPwaInstalled && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="hidden md:inline-flex"
-                    onClick={handleInstallApp}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Install App
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="md:hidden"
-                    onClick={handleInstallApp}
-                    aria-label="Install app"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </>
-              )}
 
               <Button
                 variant="ghost"
@@ -1605,9 +2768,12 @@ const DoctorPortal = () => {
               >
                 <Bell className="w-5 h-5" />
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                  {stats.pendingRequests + unreadReviewsCount}
+                  {formatNumber(stats.pendingRequests + unreadReviewsCount)}
                 </span>
               </Button>
+              <div className="hidden lg:block">
+                <LanguageSelector />
+              </div>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1630,11 +2796,11 @@ const DoctorPortal = () => {
                     }}
                   >
                     <Settings className="w-4 h-4 mr-2" />
-                    Profile Settings
+                    {t('common.profileSettings', 'Profile Settings')}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleSignOut}>
                     <LogOut className="w-4 h-4 mr-2" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1673,20 +2839,38 @@ const DoctorPortal = () => {
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                  <div className="lg:hidden px-3 pb-2">
+                    <LanguageSelector />
+                  </div>
                   {[
-                    { id: 'overview', label: 'Dashboard', icon: BarChart3 },
-                    { id: 'appointments', label: 'Appointments', icon: Calendar, badge: stats.pendingRequests },
-                    { id: 'patients', label: 'My Patients', icon: Users },
-                    { id: 'availability', label: 'Availability', icon: Clock },
-                    { id: 'earnings', label: 'Earnings', icon: Banknote },
-                    { id: 'reviews', label: 'Reviews', icon: Star, badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? '99+' : unreadReviewsCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
+                    { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar, badge: stats.pendingRequests },
+                    { id: 'patients', label: t('doctorPortal.menu.myPatients', 'My Patients'), icon: Users },
+                    { id: 'availability', label: t('doctorPortal.menu.availability', 'Availability'), icon: Clock },
+                    { id: 'earnings', label: t('doctorPortal.menu.earnings', 'Earnings'), icon: Banknote },
+                    {
+                      id: 'reviews',
+                      label: t('doctorPortal.menu.reviews', 'Reviews'),
+                      icon: Star,
+                      badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadReviewsCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
+                    {
+                      id: 'messages',
+                      label: t('common.messages', 'Messages'),
+                      icon: MessageSquare,
+                      badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
                     { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'settings', label: 'Settings', icon: Settings },
+                    { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
                       onClick={() => {
+                        if (item.id === 'messages' && unreadMessagesCount > 0) {
+                          setMessagesJumpToUnreadSignal(Date.now());
+                        }
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -1704,7 +2888,7 @@ const DoctorPortal = () => {
                           ? (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-primary-foreground text-primary')
                           : (item.badgeTone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-accent text-accent-foreground')
                           }`}>
-                          {item.badge}
+                          {typeof item.badge === 'number' ? formatNumber(item.badge) : item.badge}
                         </span>
                       )}
                     </button>
@@ -1718,7 +2902,7 @@ const DoctorPortal = () => {
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >
                     <LogOut className="w-5 h-5" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </Button>
                 </div>
               </CardContent>
@@ -1737,23 +2921,24 @@ const DoctorPortal = () => {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                   <div>
                     <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
-                      Welcome back, Dr {displayName.split(' ')[0]}! 👋
+                      {t('doctorPortal.welcomeBack', 'Welcome back')}, Dr {displayName.split(' ')[0]}! 👋
                     </h1>
                     <p className="text-xs sm:text-sm text-primary-foreground/80">
-                      You have {upcomingSchedule.length} consultations scheduled in the next 24 hours.
+                      {t('doctorPortal.overview.consultationsNext24h', 'You have {count} consultations scheduled in the next 24 hours.')
+                        .replace('{count}', formatNumber(upcomingSchedule.length))}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
                       {nextAppointment ? (
                         <>
-                          <p className="text-sm text-primary-foreground/80">Next appointment in</p>
+                          <p className="text-sm text-primary-foreground/80">{t('doctorPortal.labels.nextAppointmentIn', 'Next appointment in')}</p>
                           <p className="text-2xl font-bold">{getTimeUntilNext()}</p>
                         </>
                       ) : (
                         <>
-                          <p className="text-sm text-primary-foreground/80">No upcoming</p>
-                          <p className="text-2xl font-bold">appointments</p>
+                          <p className="text-sm text-primary-foreground/80">{t('doctorPortal.empty.noUpcomingShort', 'No upcoming')}</p>
+                          <p className="text-2xl font-bold">{t('common.appointments', 'Appointments')}</p>
                         </>
                       )}
                     </div>
@@ -1762,19 +2947,21 @@ const DoctorPortal = () => {
               </motion.div>
             )}
 
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <p className="text-sm">
-                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
-                </p>
-                <Link to="/install">
-                  <Button size="sm" className="gap-2">
+            {activeTab === 'overview' && !isPwaInstalled ? (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-sm">
+                    {t('doctorPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')}{" "}
+                    <span className="font-semibold">{t('doctorPortal.downloadApp', 'Download App')}</span>{" "}
+                    {t('doctorPortal.installBannerTextSuffix', 'to install on your phone.')}
+                  </p>
+                  <Button size="sm" className="gap-2" onClick={handleInstallApp}>
                     <Download className="w-4 h-4" />
-                    Open Install Page
+                    {t('common.installApp', 'Install App')}
                   </Button>
-                </Link>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            ) : null}
 
             {/* Verification Status Banner */}
             {doctorRegistration?.verification_status === 'pending' && (
@@ -1786,29 +2973,40 @@ const DoctorPortal = () => {
                 <div className="flex items-start gap-3">
                   <Clock className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-warning mb-1">Welcome to MyE-Doctor! 🎉</h3>
+                    <h3 className="font-semibold text-warning mb-1">{t('doctorPortal.verification.pendingTitle', 'Welcome to MyE-Doctor! 🎉')}</h3>
                     <p className="text-sm text-muted-foreground">
-                      Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.
+                      {t('doctorPortal.verification.pendingBody', "Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.")}
                     </p>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {doctorRegistration?.verification_status === 'approved' && (
+            {activeTab === 'overview' && shouldShowApprovedBanner && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-lg border-2 border-success/50 bg-success/10 p-4 md:p-6"
               >
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-success mb-1">Account Approved ✓</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.
-                    </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle className="w-6 h-6 text-success flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-success mb-1">{t('doctorPortal.verification.approvedTitle', 'Account Approved ✓')}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {t('doctorPortal.verification.approvedBody', 'Congratulations! Your doctor account has been verified and approved. You can now accept appointments and provide consultations to patients. Please go to the availability tab, and set your availability so that patients can discover you online.')}
+                      </p>
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                    onClick={dismissApprovedBanner}
+                  >
+                    {t('common.dismiss', 'Dismiss')}
+                  </Button>
                 </div>
               </motion.div>
             )}
@@ -1822,50 +3020,51 @@ const DoctorPortal = () => {
                 <div className="flex items-start gap-3">
                   <XCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-destructive mb-1">Account Not Approved</h3>
+                    <h3 className="font-semibold text-destructive mb-1">{t('doctorPortal.verification.rejectedTitle', 'Account Not Approved')}</h3>
                     <p className="text-sm text-muted-foreground">
-                      Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.
+                      {t('doctorPortal.verification.rejectedBody', 'Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.')}
                     </p>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {/* Quick Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
-              {[
-                { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
-                { label: 'Pending', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
-                { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
-              ].map((stat, index) => (
-                <motion.div
-                  key={stat.label}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                >
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">{stat.label}</p>
-                          <p className="text-2xl font-bold mt-1">{stat.value}</p>
+            {activeTab === 'overview' && (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+                {[
+                  { label: 'Total Patients', value: statsLoading ? '...' : stats.totalPatients, icon: Users, color: 'bg-primary/10 text-primary' },
+                  { label: 'This Month', value: statsLoading ? '...' : stats.consultationsThisMonth, icon: Calendar, color: 'bg-success/10 text-success' },
+                  { label: 'Pending Approval', value: stats.pendingRequests, icon: Bell, color: 'bg-warning/10 text-warning' },
+                  { label: 'Rating', value: statsLoading ? '...' : (stats.rating > 0 ? stats.rating : 'N/A'), icon: Star, color: 'bg-accent/10 text-accent' },
+                ].map((stat, index) => (
+                  <motion.div
+                    key={stat.label}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                  >
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">{stat.label}</p>
+                            <p className="text-2xl font-bold mt-1">{stat.value}</p>
+                          </div>
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
+                            <stat.icon className="w-6 h-6" />
+                          </div>
                         </div>
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
-                          <stat.icon className="w-6 h-6" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
-            </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ))}
+              </div>
+            )}
 
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="overview">{t('common.overview', 'Overview')}</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
@@ -1874,21 +3073,21 @@ const DoctorPortal = () => {
                   {/* Upcoming Schedule Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">Upcoming Schedule</CardTitle>
+                      <CardTitle className="text-lg">{t('doctorPortal.headers.upcomingSchedule', 'Upcoming Schedule')}</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                        View All <ChevronRight className="w-4 h-4 ml-1" />
+                        {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
                         {upcomingSchedule.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">No appointments scheduled for the next 24 hours</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.empty.noAppointmentsNext24h', 'No appointments scheduled for the next 24 hours')}</p>
                           </div>
                         ) : (
                           upcomingSchedule.slice(0, 4).map((apt) => (
                             <div key={apt.id} className={`flex items-center justify-between p-3 rounded-lg ${
-                              apt.status === 'confirmed' ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
+                              (apt.status === 'confirmed' || apt.status === 'in_progress') ? 'bg-primary/5 border border-primary/20' : 'bg-muted/50'
                             }`}>
                               <div className="flex items-center gap-3">
                                 <div className="relative">
@@ -1904,10 +3103,22 @@ const DoctorPortal = () => {
                                 </div>
                                 <div>
                                   <p className="font-medium text-sm">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-xs text-muted-foreground">{apt.time}</p>
+                                  <p className="text-xs text-muted-foreground">{formatClockTime(apt.time)}</p>
                                 </div>
                               </div>
-                              {getStatusBadge(apt.status)}
+                              <div className="flex items-center gap-2">
+                                {getStatusBadge(apt.status)}
+                                {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openMessagesForAppointment(apt)}
+                                  >
+                                    <MessageSquare className="w-4 h-4 mr-2" />
+                                    {t('doctorPortal.actions.message', 'Message')}
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                           ))
                         )}
@@ -1915,19 +3126,19 @@ const DoctorPortal = () => {
                     </CardContent>
                   </Card>
 
-                  {/* Pending Requests Preview */}
+                  {/* Pending Approval Preview */}
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-lg">Pending Requests</CardTitle>
+                      <CardTitle className="text-lg">Pending Approval</CardTitle>
                       <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                        View All <ChevronRight className="w-4 h-4 ml-1" />
+                        {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                       </Button>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
                         {pendingRequests.length === 0 ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">No pending requests</p>
+                            <p className="text-muted-foreground">No pending-approval appointments</p>
                           </div>
                         ) : (
                           pendingRequests.map((request) => (
@@ -1936,16 +3147,30 @@ const DoctorPortal = () => {
                                 <div className="flex items-center gap-2">
                                   <p className="font-medium text-sm">{request.patient}</p>
                                   {getPriorityBadge(request.priority)}
+                                  {request.isReschedulePending && (
+                                    <Badge className="bg-blue-100 text-blue-700 border-blue-300">Reschedule</Badge>
+                                  )}
                                 </div>
+                                {request.isReschedulePending && request.proposedDate && request.proposedTime && (
+                                  <p className="text-xs text-blue-700 mt-1">
+                                    Proposed: {new Date(request.proposedDate).toLocaleDateString()} at {request.proposedTime}
+                                  </p>
+                                )}
                                 <p className="text-xs text-muted-foreground mt-1">{request.reason}</p>
                               </div>
                               <div className="flex gap-2">
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.id)}>
-                                  <XCircle className="w-4 h-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleAcceptRequest(request.id)}>
-                                  <CheckCircle className="w-4 h-4" />
-                                </Button>
+                                {request.isReschedulePending && request.requestedBy === 'doctor' ? (
+                                  <Badge variant="secondary">Waiting patient</Badge>
+                                ) : (
+                                  <>
+                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-success" onClick={() => handleApproveRequest(request.appointment)}>
+                                      <CheckCircle className="w-4 h-4" />
+                                    </Button>
+                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => handleDeclineRequest(request.appointment)}>
+                                      <XCircle className="w-4 h-4" />
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </div>
                           ))
@@ -1959,23 +3184,23 @@ const DoctorPortal = () => {
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <div>
-                      <CardTitle className="text-lg">Recent Reviews</CardTitle>
-                      <CardDescription>What your patients are saying</CardDescription>
+                      <CardTitle className="text-lg">{t('doctorPortal.headers.recentReviews', 'Recent Reviews')}</CardTitle>
+                      <CardDescription>{t('doctorPortal.headers.recentReviewsDescription', 'What your patients are saying')}</CardDescription>
                     </div>
                     <div className="flex items-center gap-2">
                       <Star className="w-5 h-5 text-warning fill-warning" />
-                      <span className="font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
+                      <span className="font-bold">{statsLoading ? '...' : (doctorStats?.rating || t('specialists.defaults.notAvailable', 'N/A'))}</span>
                       <span className="text-muted-foreground text-sm">({recentReviews.length} reviews)</span>
                     </div>
                   </CardHeader>
                   <CardContent>
                     {reviewsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading reviews...</p>
+                        <p className="text-muted-foreground">{t('doctorPortal.loading.reviews', 'Loading reviews...')}</p>
                       </div>
                     ) : recentReviews.length === 0 ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">No reviews yet</p>
+                        <p className="text-muted-foreground">{t('doctorPortal.empty.noReviewsYet', 'No reviews yet')}</p>
                       </div>
                     ) : (
                       <div className="grid md:grid-cols-3 gap-4">
@@ -1995,7 +3220,7 @@ const DoctorPortal = () => {
                             <p className="text-sm mb-2">"{review.comment}"</p>
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
                               <span>{review.patient}</span>
-                              <span>{new Date(review.date).toLocaleDateString()}</span>
+                              <span>{formatDate(review.date)}</span>
                             </div>
                           </div>
                         ))}
@@ -2015,27 +3240,33 @@ const DoctorPortal = () => {
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <CardTitle>Appointments</CardTitle>
-                        <CardDescription>Manage all your appointments in one place</CardDescription>
+                        <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
-                      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                      <div className="inline-flex w-full sm:w-auto items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
                         <Button
                           size="sm"
-                          variant={appointmentViewMode === 'list' ? 'default' : 'ghost'}
-                          className="h-8 gap-1"
+                          variant="ghost"
+                          className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'list'
+                            ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                            }`}
                           onClick={() => setAppointmentViewMode('list')}
                         >
                           <List className="w-4 h-4" />
-                          List
+                          {t('common.list', 'List')}
                         </Button>
                         <Button
                           size="sm"
-                          variant={appointmentViewMode === 'calendar' ? 'default' : 'ghost'}
-                          className="h-8 gap-1"
+                          variant="ghost"
+                          className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'calendar'
+                            ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                            }`}
                           onClick={() => setAppointmentViewMode('calendar')}
                         >
                           <Calendar className="w-4 h-4" />
-                          Calendar
+                          {t('common.calendar', 'Calendar')}
                         </Button>
                       </div>
                     </div>
@@ -2043,39 +3274,61 @@ const DoctorPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-5 mb-6">
-                        <TabsTrigger value="pending" className="relative">
-                          Pending
+                      <TabsList className="mb-6 grid h-auto w-full grid-cols-2 gap-1 rounded-xl bg-muted/40 p-1 sm:grid-cols-3 lg:grid-cols-5">
+                        <TabsTrigger value="pending_approval" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.pending', 'Pending')}
                           {stats.pendingRequests > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
-                              {stats.pendingRequests}
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {formatNumber(stats.pendingRequests)}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="rejected">Rejected</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="confirmed" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.confirmed', 'Confirmed')}
+                          {confirmedCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {confirmedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="completed" className={appointmentStatusTriggerClass}>{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="closed" className={appointmentStatusTriggerClass}>
+                          {t('doctorPortal.appointments.closed', 'Closed')}
+                          {closedCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {closedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="all" className={appointmentStatusTriggerClass}>{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
-                      {/* Pending Tab Content */}
-                      <TabsContent value="pending" className="space-y-4">
+                      {/* Pending Approval Tab Content */}
+                      <TabsContent value="pending_approval" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
                           renderDoctorAppointmentsCalendar(
-                            'No pending requests',
-                            'New requests will appear here when patients book appointments'
+                            'No pending approvals',
+                            'Includes new paid bookings and reschedule requests awaiting action.'
                           )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No pending requests</p>
-                                <p className="text-sm text-muted-foreground mt-2">New requests will appear here when patients book appointments</p>
+                                <p className="text-muted-foreground">No pending approvals</p>
+                                <p className="text-sm text-muted-foreground mt-2">Includes new bookings and reschedule requests awaiting action.</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const patientRequested = isPatientRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/40' : 'border-warning/30 bg-warning/5'
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="relative">
                                       <Avatar className="w-12 h-12">
@@ -2091,49 +3344,79 @@ const DoctorPortal = () => {
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {new Date(apt.date).toLocaleDateString()} at {apt.time}
+                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
                                       </p>
+                                      {pendingReschedule && (
+                                        <p className="text-xs font-medium text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
+                                      {getRescheduleRequestBadge(apt as {
+                                        reschedule_request_status?: string | null;
+                                        reschedule_requested_by?: string | null;
+                                      })}
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
-                                  <div className="flex gap-2">
+                                  <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
                                     {apt.patient_id && (
-                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                        View Folder
+                                      <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => handleViewPatientFolder(apt)}>
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30" onClick={() => handleDeclineRequest(apt.id)}>
-                                      Decline
-                                    </Button>
-                                    <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => handleAcceptRequest(apt.id)}>
-                                      Accept
-                                    </Button>
+                                    {pendingReschedule && patientRequested ? (
+                                      <>
+                                        <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
+                                          Approve Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="destructive" className="w-full sm:w-auto" onClick={() => handleDeclineRequest(apt)}>
+                                          Decline Request
+                                        </Button>
+                                      </>
+                                    ) : pendingReschedule ? (
+                                      <Badge variant="secondary">Waiting for patient approval</Badge>
+                                    ) : (
+                                      <>
+                                        <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
+                                          Approve
+                                        </Button>
+                                        <Button size="sm" variant="destructive" className="w-full sm:w-auto" onClick={() => handleDeclineRequest(apt)}>
+                                          Cancel
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
                       </TabsContent>
 
-                      {/* Upcoming Tab Content */}
-                      <TabsContent value="upcoming" className="space-y-4">
+                      {/* Confirmed Tab Content */}
+                      <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No upcoming appointments')
+                          renderDoctorAppointmentsCalendar('No confirmed or in-progress appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No upcoming appointments</p>
+                                <p className="text-muted-foreground">No confirmed or in-progress appointments</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isPastConfirmed = hasAppointmentTimePassed(apt);
+                                return (
+                                <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                  isPastConfirmed ? 'border-amber-300/40 bg-amber-50/40' : 'border-primary/30 bg-primary/5'
+                                }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -2150,76 +3433,125 @@ const DoctorPortal = () => {
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
                                       <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      {isPastConfirmed && (
+                                        <p className="text-xs font-medium text-amber-700 mt-1">
+                                          Appointment time passed. Mark no-show or reschedule via patient follow-up.
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  <div className="flex gap-2">
+                                  <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
                                       status={apt.status}
                                       variant="default"
                                       size="sm"
-                                      className="gradient-primary"
+                                      className="gradient-primary w-full sm:w-auto"
                                     />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="w-full sm:w-auto"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
+                                    </Button>
                                     {apt.patient_id && (
                                       <Button
                                         size="sm"
                                         variant="outline"
+                                        className="w-full sm:w-auto"
                                         onClick={() => handleViewPatientFolder(apt)}
                                       >
-                                        View Folder
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                      </Button>
+                                    )}
+                                    {isPastConfirmed && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="w-full sm:w-auto"
+                                        onClick={() => openRescheduleDialog(apt)}
+                                      >
+                                        Reschedule
+                                      </Button>
+                                    )}
+                                    {isPastConfirmed && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="w-full text-destructive border-destructive/30 sm:w-auto"
+                                        onClick={() => handleMarkNoShow(apt.id)}
+                                      >
+                                        Mark No Show
                                       </Button>
                                     )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
                       </TabsContent>
 
-                      {/* Rejected Tab Content */}
-                      <TabsContent value="rejected" className="space-y-4">
+                      {/* Closed Tab Content (Cancelled + No Show) */}
+                      <TabsContent value="closed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No rejected appointments')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noClosedAppointments', 'No closed appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <XCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No rejected appointments</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noClosedAppointments', 'No closed appointments')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
-                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                    <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isNoShow = apt.status === 'no_show';
+                                return (
+                                  <div
+                                    key={apt.id}
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                      isNoShow ? 'border-destructive/30 bg-destructive/5' : 'border-muted-foreground/30 bg-muted/40'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                      <div className="text-center w-20">
+                                        <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                        <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      </div>
+                                      <div className="w-px h-12 bg-border" />
+                                      <Avatar className="w-12 h-12">
+                                        <AvatarImage src={(apt as any).patient_profile_picture} />
+                                        <AvatarFallback className="bg-primary/10 text-primary">
+                                          {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div>
+                                        <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
+                                        <p className="text-sm text-muted-foreground">
+                                          {apt.patient_age
+                                            ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                            : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                      </div>
                                     </div>
-                                    <div className="w-px h-12 bg-border" />
-                                    <Avatar className="w-12 h-12">
-                                      <AvatarImage src={(apt as any).patient_profile_picture} />
-                                      <AvatarFallback className="bg-primary/10 text-primary">
-                                        {apt.patient_name?.split(' ').map(n => n[0]).join('') || 'P'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                      <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
-                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    <div className="flex gap-2">
+                                      {apt.patient_id && (
+                                        <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                          {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                        </Button>
+                                      )}
+                                      <Badge variant={isNoShow ? 'destructive' : 'secondary'}>
+                                        {isNoShow ? t('appointmentStatus.noShow', 'No Show') : t('appointmentStatus.cancelled', 'Cancelled')}
+                                      </Badge>
                                     </div>
                                   </div>
-                                  <div className="flex gap-2">
-                                    {apt.patient_id && (
-                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                        View Folder
-                                      </Button>
-                                    )}
-                                    <Badge variant="destructive">Rejected</Badge>
-                                  </div>
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </>
                         )}
@@ -2228,21 +3560,21 @@ const DoctorPortal = () => {
                       {/* Completed Tab Content */}
                       <TabsContent value="completed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No completed consultations')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noCompletedConsultations', 'No completed consultations'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <CheckCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No completed consultations</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noCompletedConsultations', 'No completed consultations')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2253,7 +3585,11 @@ const DoctorPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                       {(apt as any).rating && (
                                         <div className="flex items-center gap-1 mt-1">
                                           {[...Array(5)].map((_, i) => (
@@ -2266,11 +3602,21 @@ const DoctorPortal = () => {
                                       )}
                                     </div>
                                   </div>
-                                  {apt.patient_id && (
-                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      View Folder
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
-                                  )}
+                                    {apt.patient_id && (
+                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                               ))
                             )}
@@ -2281,21 +3627,29 @@ const DoctorPortal = () => {
                       {/* All Tab Content */}
                       <TabsContent value="all" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderDoctorAppointmentsCalendar('No appointments found')
+                          renderDoctorAppointmentsCalendar(t('doctorPortal.empty.noAppointmentsFound', 'No appointments found'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No appointments found</p>
+                                <p className="text-muted-foreground">{t('doctorPortal.empty.noAppointmentsFound', 'No appointments found')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const patientRequested = isPatientRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/30' : ''
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2306,17 +3660,35 @@ const DoctorPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
-                                      <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {apt.patient_age
+                                          ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
+                                          : t('doctorPortal.labels.ageNA', 'Age N/A')}
+                                      </p>
                                       <Badge className="mt-1" variant={
-                                        apt.status === 'pending' ? 'default' :
+                                        apt.status === 'pending_approval' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
+                                        apt.status === 'in_progress' ? 'secondary' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {apt.status}
+                                        {formatAppointmentStatusLabel(apt.status)}
                                       </Badge>
+                                      <div className="mt-1">
+                                        {getRescheduleRequestBadge(apt as {
+                                          reschedule_request_status?: string | null;
+                                          reschedule_requested_by?: string | null;
+                                        })}
+                                      </div>
+                                      {pendingReschedule && (
+                                        <p className="text-xs text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  {apt.status === 'confirmed' && (
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
@@ -2325,23 +3697,53 @@ const DoctorPortal = () => {
                                       size="sm"
                                     />
                                   )}
-                                  {apt.patient_id && (
-                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      View Folder
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'completed') && (
+                                    <Button size="sm" variant="outline" onClick={() => openMessagesForAppointment(apt)}>
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
                                   )}
-                                  {apt.status === 'pending' && (
+                                  {apt.patient_id && (
+                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                    </Button>
+                                  )}
+                                  {!pendingReschedule && apt.status === 'pending_approval' && (
                                     <div className="flex gap-2">
-                                      <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleDeclineRequest(apt.id)}>
-                                        Decline
+                                      <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        Approve
                                       </Button>
-                                      <Button size="sm" className="bg-success" onClick={() => handleAcceptRequest(apt.id)}>
-                                        Accept
+                                      <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        Cancel
                                       </Button>
                                     </div>
                                   )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+                                    hasAppointmentTimePassed(apt) && (
+                                      <div className="flex gap-2">
+                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                          Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleMarkNoShow(apt.id)}>
+                                          Mark No Show
+                                        </Button>
+                                      </div>
+                                    )}
+                                  {pendingReschedule && patientRequested && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" onClick={() => handleApproveRequest(apt)}>
+                                        Approve Reschedule
+                                      </Button>
+                                      <Button size="sm" variant="destructive" onClick={() => handleDeclineRequest(apt)}>
+                                        Decline Request
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && !patientRequested && (
+                                    <Badge variant="secondary">Waiting for patient approval</Badge>
+                                  )}
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2355,18 +3757,18 @@ const DoctorPortal = () => {
                 <Card>
                   <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <CardTitle>My Patients</CardTitle>
-                      <CardDescription>All patients under your care</CardDescription>
+                      <CardTitle>{t('doctorPortal.menu.myPatients', 'My Patients')}</CardTitle>
+                      <CardDescription>{t('doctorPortal.headers.patientsDescription', 'All patients under your care')}</CardDescription>
                     </div>
-                    <Input placeholder="Search patients..." className="w-full sm:w-64" />
+                    <Input placeholder={t('doctorPortal.labels.searchPatients', 'Search patients...')} className="w-full sm:w-64" />
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
                       {patientsList.length === 0 ? (
                         <div className="text-center py-12">
                           <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-muted-foreground">No patients yet</p>
-                          <p className="text-sm text-muted-foreground mt-2">Patients will appear here once they book appointments with you</p>
+                          <p className="text-muted-foreground">{t('doctorPortal.empty.noPatientsYet', 'No patients yet')}</p>
+                          <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.patientsWillAppear', 'Patients will appear here once they book appointments with you')}</p>
                         </div>
                       ) : (
                         patientsList.map((patient) => (
@@ -2385,16 +3787,16 @@ const DoctorPortal = () => {
                               </div>
                               <div>
                                 <p className="font-semibold">{patient.name}</p>
-                                <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? 'years old' : ''}</p>
+                                <p className="text-sm text-muted-foreground">{patient.age} {typeof patient.age === 'number' ? t('doctorPortal.labels.yearsOld', 'years old') : ''}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                  Last visit: {new Date(patient.lastVisit).toLocaleDateString()}
+                                  {t('doctorPortal.labels.lastVisit', 'Last visit')}: {formatDate(patient.lastVisit)}
                                 </p>
                               </div>
                             </div>
                             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
                               <div className="text-left sm:text-right mb-2 sm:mb-0">
-                                <p className="text-xs text-muted-foreground">Total appointments</p>
-                                <p className="text-sm font-medium">{patient.appointments.length}</p>
+                                <p className="text-xs text-muted-foreground">{t('doctorPortal.labels.totalAppointments', 'Total appointments')}</p>
+                                <p className="text-sm font-medium">{formatNumber(patient.appointments.length)}</p>
                               </div>
                               <div className="flex flex-col sm:flex-row gap-2">
                                 <Button
@@ -2404,19 +3806,21 @@ const DoctorPortal = () => {
                                   onClick={() => patient.latestAppointment && handleViewPatientFolder(patient.latestAppointment)}
                                   disabled={!patient.latestAppointment}
                                 >
-                                  View Folder
+                                  {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                 </Button>
                                 <Button
                                   size="sm"
                                   variant="ghost"
                                   className="w-full sm:w-auto"
                                   onClick={() => {
-                                    setActiveTab('messages');
-                                    setSidebarOpen(false);
+                                    if (patient.latestAppointment) {
+                                      openMessagesForAppointment(patient.latestAppointment);
+                                    }
                                   }}
+                                  disabled={!patient.latestAppointment || !['confirmed', 'completed'].includes(String((patient.latestAppointment as { status?: string }).status || ''))}
                                 >
                                   <MessageSquare className="w-4 h-4 mr-2" />
-                                  Message
+                                  {t('doctorPortal.actions.message', 'Message')}
                                 </Button>
                               </div>
                             </div>
@@ -2435,7 +3839,7 @@ const DoctorPortal = () => {
                 ) : (
                   <Card>
                     <CardContent className="pt-6">
-                      <p className="text-muted-foreground">Please sign in to manage your schedule.</p>
+                      <p className="text-muted-foreground">{t('doctorPortal.empty.signInToManageSchedule', 'Please sign in to manage your schedule.')}</p>
                     </CardContent>
                   </Card>
                 )}
@@ -2443,7 +3847,7 @@ const DoctorPortal = () => {
 
 
                   <TabsContent value="earnings" className="space-y-6">
-                    <div className="grid md:grid-cols-3 gap-4">
+                    <div className="grid md:grid-cols-4 gap-4">
                       <Card>
                         <CardContent className="pt-6">
                           <div className="flex items-center gap-4">
@@ -2451,9 +3855,9 @@ const DoctorPortal = () => {
                               <Banknote className="w-6 h-6 text-success" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">This Month</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.thisMonth', 'This Month')}</p>
                               <p className="text-2xl font-bold">
-                                {earningsLoading ? '...' : `₦${stats.earnings.toLocaleString()}`}
+                                {earningsLoading ? '...' : formatNaira(stats.earnings)}
                               </p>
                             </div>
                           </div>
@@ -2466,7 +3870,7 @@ const DoctorPortal = () => {
                               <TrendingUp className="w-6 h-6 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">Growth</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.growth', 'Growth')}</p>
                               <p className="text-2xl font-bold">
                                 {earningsLoading ? '...' : `${earningsData?.growth || 0 > 0 ? '+' : ''}${earningsData?.growth || 0}%`}
                               </p>
@@ -2481,9 +3885,24 @@ const DoctorPortal = () => {
                               <Calendar className="w-6 h-6 text-warning" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">Consultations</p>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.labels.consultations', 'Consultations')}</p>
                               <p className="text-2xl font-bold">
                                 {earningsLoading ? '...' : earningsData?.thisMonthConsultations || 0}
+                              </p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center">
+                              <Banknote className="w-6 h-6 text-accent" />
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">{t('doctorPortal.wallet.walletAvailable', 'Wallet Available')}</p>
+                              <p className="text-2xl font-bold">
+                                {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
                               </p>
                             </div>
                           </div>
@@ -2493,18 +3912,75 @@ const DoctorPortal = () => {
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>Earnings History</CardTitle>
-                        <CardDescription>Your consultation earnings over the last 6 months</CardDescription>
+                        <CardTitle>Wallet Balance & Withdrawals</CardTitle>
+                        <CardDescription>{t('doctorPortal.wallet.trackPendingReleases', 'Track pending releases and prepare withdrawal requests')}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.availableBalance', 'Available Balance')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletAvailableBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.pendingBalance', 'Pending Balance')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletLoading ? '...' : formatNaira(walletPendingBalance)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.readyEntries', 'Ready Entries')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : availableWalletEntries}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border p-4">
+                            <p className="text-xs text-muted-foreground">{t('doctorPortal.wallet.pendingEntries', 'Pending Entries')}</p>
+                            <p className="mt-1 text-xl font-semibold">
+                              {walletTransactionsLoading ? '...' : pendingWalletEntries}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                          <p className="text-sm font-medium">{t('doctorPortal.wallet.withdrawalProcessStaged', 'Withdrawal process (staged)')}</p>
+                          <ol className="space-y-1 text-sm text-muted-foreground list-decimal pl-5">
+                            <li>{t('doctorPortal.wallet.stepEnterAmount', 'Enter amount from your available balance.')}</li>
+                            <li>{t('doctorPortal.wallet.stepConfirmDetails', 'Confirm account and narration details.')}</li>
+                            <li>{t('doctorPortal.wallet.stepSubmitRequest', 'Submit request for admin/manual payout review.')}</li>
+                            <li>{t('doctorPortal.wallet.stepMarkPaid', 'Mark request as paid and debit wallet in next release.')}</li>
+                          </ol>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs text-muted-foreground">
+                              {t('doctorPortal.wallet.backendDeferredHint', 'Backend payout orchestration is intentionally deferred until approval workflow is finalized.')}
+                            </p>
+                            <Button
+                              size="sm"
+                              onClick={() => setWithdrawalDialogOpen(true)}
+                              disabled={walletLoading}
+                            >
+                              {t('doctorPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t('doctorPortal.earnings.historyTitle', 'Earnings History')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.earnings.lastSixMonths', 'Your consultation earnings over the last 6 months')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         {earningsLoading ? (
                           <div className="h-64 flex items-center justify-center text-muted-foreground">
-                            <p>Loading earnings data...</p>
+                            <p>{t('doctorPortal.loading.earnings', 'Loading earnings data...')}</p>
                           </div>
                         ) : !earningsData?.monthlyData || earningsData.monthlyData.length === 0 ? (
                           <div className="h-64 flex items-center justify-center text-muted-foreground">
                             <BarChart3 className="w-12 h-12 mr-3" />
-                            <span>No earnings data available yet</span>
+                            <span>{t('doctorPortal.empty.noEarningsData', 'No earnings data available yet')}</span>
                           </div>
                         ) : (
                           <div className="space-y-4">
@@ -2517,7 +3993,7 @@ const DoctorPortal = () => {
                                   <div className="flex items-center justify-between text-sm">
                                     <span className="font-medium">{month.month}</span>
                                     <div className="text-right">
-                                      <span className="font-bold">₦{month.earnings.toLocaleString()}</span>
+                                      <span className="font-bold">{formatNaira(month.earnings)}</span>
                                       <span className="text-muted-foreground ml-2">({month.consultations} consultations)</span>
                                     </div>
                                   </div>
@@ -2542,14 +4018,14 @@ const DoctorPortal = () => {
                       <CardHeader>
                         <div className="flex items-center justify-between">
                           <div>
-                            <CardTitle>Patient Reviews</CardTitle>
-                            <CardDescription>Feedback from your consultations</CardDescription>
+                            <CardTitle>{t('doctorPortal.headers.patientReviews', 'Patient Reviews')}</CardTitle>
+                            <CardDescription>{t('doctorPortal.headers.patientReviewsDescription', 'Feedback from your consultations')}</CardDescription>
                           </div>
                           <div className="flex items-center gap-3 p-4 rounded-xl bg-muted">
                             <div className="text-center">
                               <div className="flex items-center gap-1">
                                 <Star className="w-6 h-6 text-warning fill-warning" />
-                                <span className="text-3xl font-bold">{statsLoading ? '...' : (doctorStats?.rating || 'N/A')}</span>
+                                <span className="text-3xl font-bold">{statsLoading ? '...' : (doctorStats?.rating || t('specialists.defaults.notAvailable', 'N/A'))}</span>
                               </div>
                               <p className="text-sm text-muted-foreground">{recentReviews.length} reviews</p>
                             </div>
@@ -2559,13 +4035,13 @@ const DoctorPortal = () => {
                       <CardContent>
                         {reviewsLoading ? (
                           <div className="text-center py-8">
-                            <p className="text-muted-foreground">Loading reviews...</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.loading.reviews', 'Loading reviews...')}</p>
                           </div>
                         ) : recentReviews.length === 0 ? (
                           <div className="text-center py-8">
                             <Star className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-muted-foreground">No reviews yet</p>
-                            <p className="text-sm text-muted-foreground mt-2">Reviews from patients will appear here after consultations</p>
+                            <p className="text-muted-foreground">{t('doctorPortal.empty.noReviewsYet', 'No reviews yet')}</p>
+                            <p className="text-sm text-muted-foreground mt-2">{t('doctorPortal.empty.reviewsWillAppear', 'Reviews from patients will appear here after consultations')}</p>
                           </div>
                         ) : (
                           <div className="space-y-4">
@@ -2594,7 +4070,7 @@ const DoctorPortal = () => {
                                 </div>
                                 <p className="text-sm mb-2">{review.comment}</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {new Date(review.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                                  {formatDate(review.date, { month: 'long', day: 'numeric', year: 'numeric' })}
                                 </p>
                               </div>
                             ))}
@@ -2605,7 +4081,10 @@ const DoctorPortal = () => {
                   </TabsContent>
 
                   <TabsContent value="messages" className="space-y-6">
-                    <DoctorMessagesTab />
+                    <DoctorMessagesTab
+                      focusSessionId={messagesFocusSessionId}
+                      jumpToUnreadSignal={messagesJumpToUnreadSignal}
+                    />
                   </TabsContent>
 
                   <TabsContent value="contact" className="space-y-6">
@@ -2621,8 +4100,8 @@ const DoctorPortal = () => {
                   <TabsContent value="settings" className="space-y-6">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Profile Settings</CardTitle>
-                        <CardDescription>Manage your doctor profile</CardDescription>
+                        <CardTitle>{t('common.profileSettings', 'Profile Settings')}</CardTitle>
+                        <CardDescription>{t('doctorPortal.headers.manageDoctorProfile', 'Manage your doctor profile')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="space-y-6">
@@ -2651,7 +4130,9 @@ const DoctorPortal = () => {
                                   disabled={isUploadingPhoto}
                                   onClick={() => document.getElementById('doctor-photo-upload')?.click()}
                                 >
-                                  {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                                  {isUploadingPhoto
+                                    ? t('doctorPortal.actions.uploading', 'Uploading...')
+                                    : t('doctorPortal.actions.changePhoto', 'Change Photo')}
                                 </Button>
                               </div>
                             </div>
@@ -2659,7 +4140,7 @@ const DoctorPortal = () => {
 
                           <div className="grid md:grid-cols-2 gap-4">
                             <div>
-                              <label className="text-sm font-medium">Full Name</label>
+                              <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                               <Input 
                                 value={profileFormData.fullName || doctorRegistration?.full_name || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
@@ -2667,7 +4148,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Email</label>
+                              <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                               <Input 
                                 value={profileFormData.email || doctorRegistration?.email || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
@@ -2675,7 +4156,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Phone</label>
+                              <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                               <Input 
                                 value={profileFormData.phone || doctorRegistration?.phone_number || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
@@ -2683,7 +4164,7 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Specialty</label>
+                              <label className="text-sm font-medium">{t('common.specialty', 'Specialty')}</label>
                               <Input 
                                 value={profileFormData.specialty || doctorRegistration?.specialty || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, specialty: e.target.value})}
@@ -2691,27 +4172,171 @@ const DoctorPortal = () => {
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">Experience</label>
+                              <label className="text-sm font-medium">{t('common.experience', 'Experience')}</label>
                               <Input 
                                 value={profileFormData.experience || doctorRegistration?.experience || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, experience: e.target.value})}
                                 className="mt-1" 
                               />
                             </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('common.language', 'Language')}</label>
+                              <select
+                                className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                value={profileFormData.preferredLanguage || language}
+                                onChange={(e) => setProfileFormData({
+                                  ...profileFormData,
+                                  preferredLanguage: (e.target.value as AppLanguage),
+                                })}
+                              >
+                                {SUPPORTED_LANGUAGES.map((languageCode) => (
+                                  <option key={languageCode} value={languageCode}>
+                                    {t(APP_LANGUAGE_OPTION_MAP[languageCode].key, APP_LANGUAGE_OPTION_MAP[languageCode].fallback)}
+                                  </option>
+                                ))}
+                              </select>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {t('doctorPortal.settings.preferredLanguageHint', 'This will be your default app language when you sign in.')}
+                              </p>
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className="text-sm font-medium">{t('auth.fields.consultationLanguages', 'Preferred Consultation Languages')}</label>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {t('auth.fields.consultationLanguagesHint', 'Select all languages you can use to consult patients.')}
+                              </p>
+                              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+                                {consultationLanguageOptions.map((languageOption) => {
+                                  const optionValue = normalizeConsultationLanguage(languageOption.value);
+                                  return (
+                                    <label
+                                      key={optionValue}
+                                      className="flex items-center gap-2 text-sm rounded-md border border-border px-3 py-2 cursor-pointer hover:bg-muted/40"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedConsultationLanguages.includes(optionValue)}
+                                        onChange={() => toggleConsultationLanguage(optionValue)}
+                                        className="h-4 w-4"
+                                      />
+                                      <span>{languageOption.label}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           </div>
 
                           <div>
-                            <label className="text-sm font-medium">Bio</label>
+                            <label className="text-sm font-medium">{t('common.bio', 'Bio')}</label>
                             <Textarea 
                               value={profileFormData.bio || doctorRegistration?.bio || ''} 
                               onChange={(e) => setProfileFormData({...profileFormData, bio: e.target.value})}
-                              placeholder="Tell patients about yourself, your experience, and approach to healthcare..."
+                              placeholder={t('doctorPortal.settings.bioPlaceholder', 'Tell patients about yourself, your experience, and approach to healthcare...')}
                               className="mt-1 min-h-[100px]" 
                             />
                           </div>
 
+                          <div className="space-y-4">
+                            <div>
+                              <p className="text-sm font-medium">{t('doctorPortal.settings.multilingualTitle', 'Multilingual Profile Content')}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {t('doctorPortal.settings.multilingualDescription', 'Add translated bio for patients using other languages.')}
+                              </p>
+                            </div>
+
+                            <div className="space-y-4">
+                              <div className="rounded-lg border border-border p-4 space-y-3">
+                                <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                                  <div>
+                                    <label className="text-xs font-medium text-muted-foreground">Language</label>
+                                    <select
+                                      value={newBioLanguageCode}
+                                      onChange={(e) => setNewBioLanguageCode(normalizeBioLanguageCode(e.target.value))}
+                                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                                    >
+                                      <option value="">Select language</option>
+                                      {availableBioTranslationLanguageOptions.map((languageOption) => (
+                                        <option key={languageOption.code} value={languageOption.code}>
+                                          {languageOption.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={handleAddBioTranslation}
+                                    disabled={!newBioLanguageCode}
+                                  >
+                                    Add Language
+                                  </Button>
+                                </div>
+
+                                {profileTranslationLanguageCodes.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    No additional profile languages added yet.
+                                  </p>
+                                ) : (
+                                  <div className="space-y-3">
+                                    {profileTranslationLanguageCodes
+                                      .map((languageCode) => (
+                                        <div key={languageCode} className="rounded-lg border border-border p-3 space-y-2">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className="text-sm font-semibold">{getBioLanguageLabel(languageCode)}</p>
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-8 px-2 text-destructive hover:text-destructive"
+                                              onClick={() => handleRemoveBioTranslation(languageCode)}
+                                            >
+                                              Remove
+                                            </Button>
+                                          </div>
+                                          <div>
+                                            <label className="text-xs font-medium text-muted-foreground">
+                                              {t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            </label>
+                                            <Input
+                                              value={specialtyTranslations[languageCode] || ''}
+                                              onChange={(e) =>
+                                                setSpecialtyTranslations((prev) => ({
+                                                  ...prev,
+                                                  [languageCode]: e.target.value,
+                                                }))
+                                              }
+                                              className="mt-1"
+                                              placeholder={t('doctorPortal.settings.specialtyInLanguage', 'Specialty in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-xs font-medium text-muted-foreground">
+                                              {t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                            </label>
+                                          <Textarea
+                                            value={bioTranslations[languageCode] || ''}
+                                            onChange={(e) =>
+                                              setBioTranslations((prev) => ({
+                                                ...prev,
+                                                [languageCode]: e.target.value,
+                                              }))
+                                            }
+                                            className="mt-1 min-h-[88px]"
+                                            placeholder={t('doctorPortal.settings.bioInLanguage', 'Bio in {lang}').replace('{lang}', getBioLanguageLabel(languageCode))}
+                                          />
+                                          </div>
+                                        </div>
+                                      ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
                           <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
-                            {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                            {isSavingProfile
+                              ? t('doctorPortal.actions.saving', 'Saving...')
+                              : t('doctorPortal.actions.saveChanges', 'Save Changes')}
                           </Button>
                         </div>
                       </CardContent>
@@ -2719,33 +4344,35 @@ const DoctorPortal = () => {
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>Change Password</CardTitle>
-                        <CardDescription>Update your account password</CardDescription>
+                        <CardTitle>{t('common.changePassword', 'Change Password')}</CardTitle>
+                        <CardDescription>{t('common.updateAccountPassword', 'Update your account password')}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="space-y-4 max-w-md">
                           <div>
-                            <label className="text-sm font-medium">New Password</label>
+                            <label className="text-sm font-medium">{t('common.newPassword', 'New Password')}</label>
                             <Input
                               type="password"
                               value={passwordFormData.newPassword}
                               onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
                               className="mt-1"
-                              placeholder="At least 8 characters"
+                              placeholder={t('common.passwordMinHint', 'At least 8 characters')}
                             />
                           </div>
                           <div>
-                            <label className="text-sm font-medium">Confirm New Password</label>
+                            <label className="text-sm font-medium">{t('common.confirmNewPassword', 'Confirm New Password')}</label>
                             <Input
                               type="password"
                               value={passwordFormData.confirmPassword}
                               onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
                               className="mt-1"
-                              placeholder="Re-enter new password"
+                              placeholder={t('common.passwordReenterHint', 'Re-enter new password')}
                             />
                           </div>
                           <Button onClick={handleChangePassword} disabled={isChangingPassword}>
-                            {isChangingPassword ? 'Updating...' : 'Update Password'}
+                            {isChangingPassword
+                              ? t('doctorPortal.actions.updating', 'Updating...')
+                              : t('doctorPortal.actions.updatePassword', 'Update Password')}
                           </Button>
                         </div>
                       </CardContent>
@@ -2756,28 +4383,152 @@ const DoctorPortal = () => {
             </div>
         </div>
         
+        <Dialog open={withdrawalDialogOpen} onOpenChange={setWithdrawalDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Request Withdrawal</DialogTitle>
+              <DialogDescription>
+                {t('doctorPortal.withdrawal.stagedFlowDescription', 'This flow is staged in UI for now. Submission will connect to payout processing in the next phase.')}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.wallet.availableBalance', 'Available Balance')}</label>
+                <div className="mt-1 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  {walletLoading ? t('doctorPortal.wallet.loadingWallet', 'Loading wallet...') : formatNaira(walletAvailableBalance)}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.withdrawal.amountLabel', 'Withdrawal Amount (₦)')}</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="100"
+                  value={withdrawalAmount}
+                  onChange={(e) => setWithdrawalAmount(e.target.value)}
+                  placeholder={t('doctorPortal.withdrawal.amountPlaceholder', 'Enter amount')}
+                  className="mt-1"
+                />
+                {withdrawalAmount && !canRequestWithdrawal && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {t('doctorPortal.withdrawal.invalidAmountHint', 'Amount must be greater than zero and not exceed your available balance.')}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm font-medium">{t('doctorPortal.withdrawal.narrationOptional', 'Narration (optional)')}</label>
+                <Textarea
+                  value={withdrawalNarration}
+                  onChange={(e) => setWithdrawalNarration(e.target.value)}
+                  placeholder={t('doctorPortal.withdrawal.narrationPlaceholder', 'e.g., Weekly payout request')}
+                  className="mt-1 min-h-[88px]"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setWithdrawalDialogOpen(false)}>
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button onClick={submitWithdrawalRequest}>
+                {t('common.submitRequest', 'Submit Request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={rescheduleDialogOpen}
+          onOpenChange={(open) => {
+            setRescheduleDialogOpen(open);
+            if (!open) {
+              setRescheduleAppointmentId(null);
+              setRescheduleDate('');
+              setRescheduleTime('');
+            }
+          }}
+        >
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>{t('doctorPortal.reschedule.requestTitle', 'Request Reschedule')}</DialogTitle>
+                <DialogDescription>
+                  {rescheduleAppointment
+                    ? t('doctorPortal.reschedule.proposeForPatient', 'Propose a new date/time for {patient}.').replace('{patient}', rescheduleAppointment.patient_name || t('doctorPortal.defaults.thisPatient', 'this patient'))
+                    : t('doctorPortal.reschedule.proposeForAppointment', 'Propose a new date/time for this appointment.')}
+                </DialogDescription>
+              </DialogHeader>
+            <div className="space-y-4">
+              {rescheduleAppointment && (
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <p>
+                    <span className="font-medium">{t('doctorPortal.reschedule.currentLabel', 'Current')}:</span>{' '}
+                    {new Date(rescheduleAppointment.date).toLocaleDateString()} {t('common.at', 'at')} {rescheduleAppointment.time}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t('doctorPortal.reschedule.patientApprovalRequiredHint', 'Patient must approve this request before the appointment is moved.')}
+                  </p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">{t('doctorPortal.reschedule.newDate', 'New Date')}</label>
+                  <Input
+                    type="date"
+                    className="mt-1"
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{t('doctorPortal.reschedule.newTime', 'New Time')}</label>
+                  <Input
+                    type="time"
+                    className="mt-1"
+                    value={rescheduleTime}
+                    onChange={(e) => setRescheduleTime(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRescheduleDialogOpen(false);
+                  setRescheduleAppointmentId(null);
+                }}
+                disabled={isRescheduling}
+              >
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button onClick={submitReschedule} disabled={isRescheduling}>
+                {isRescheduling ? t('common.submitting', 'Submitting...') : t('common.submitRequest', 'Submit Request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* View Folder Modal */}
         <Dialog open={viewFolderOpen} onOpenChange={setViewFolderOpen}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
-            <DialogHeader className="pr-10">
-              <DialogTitle>Patient Folder</DialogTitle>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
+              <DialogHeader className="pr-10">
+              <DialogTitle>{folderLanguageText.viewPatientFolder}</DialogTitle>
               <DialogDescription>
-                Folder for {selectedAppointmentForFolder?.patient_name}
+                {selectedAppointmentForFolder?.patient_name}
               </DialogDescription>
             </DialogHeader>
             <ScrollArea className="max-h-[70vh] pr-2">
             <div className="space-y-4">
               <div className="p-4 rounded-lg bg-muted/50">
                 <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="font-medium">Patient:</span> {selectedAppointmentForFolder?.patient_name}</div>
-                  <div><span className="font-medium">Date:</span> {selectedAppointmentForFolder?.date}</div>
-                  <div><span className="font-medium">Time:</span> {selectedAppointmentForFolder?.time}</div>
-                  <div><span className="font-medium">Last Updated:</span> {patientFolder?.updated_at ? new Date(patientFolder.updated_at).toLocaleString() : 'N/A'}</div>
+                  <div><span className="font-medium">{t('portal.patient', 'Patient')}:</span> {selectedAppointmentForFolder?.patient_name}</div>
+                  <div><span className="font-medium">{folderMetaText.date}:</span> {selectedAppointmentForFolder?.date}</div>
+                  <div><span className="font-medium">{folderMetaText.time}:</span> {formatClockTime(selectedAppointmentForFolder?.time)}</div>
+                  <div><span className="font-medium">{folderMetaText.lastUpdated}:</span> {patientFolder?.updated_at ? formatDateTime(patientFolder.updated_at) : t('specialists.defaults.notAvailable', 'N/A')}</div>
                 </div>
               </div>
 
               {isLoadingPatientFolder ? (
-                <div className="text-sm text-muted-foreground">Loading patient folder...</div>
+                <div className="text-sm text-muted-foreground">{t('doctorPortal.loading.patientFolder', 'Loading patient folder...')}</div>
               ) : (
                 <>
                   {patientFolder ? (
@@ -2788,8 +4539,12 @@ const DoctorPortal = () => {
                           <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[60px]">
                             <p className="text-sm whitespace-pre-wrap">
                               {formatFolderEntryText(
-                                patientFolder[field],
-                                `No ${formatFolderFieldLabel(field).toLowerCase()} recorded.`
+                                getLocalizedFieldText(
+                                  patientFolder[field],
+                                  patientFolder[`${field}_translations`],
+                                  language
+                                ),
+                                folderLanguageText.notRecorded
                               )}
                             </p>
                           </div>
@@ -2797,23 +4552,26 @@ const DoctorPortal = () => {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground">No patient folder found yet.</p>
+                    <p className="text-sm text-muted-foreground">{folderLanguageText.noPatientFolder}</p>
                   )}
                   <div>
-                    <label className="text-sm font-medium">Recent Consultation Entries</label>
+                    <label className="text-sm font-medium">{folderLanguageText.recentEntries}</label>
                     <div className="mt-2 space-y-2">
                       {patientFolderNotes.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No consultation entries found.</p>
+                        <p className="text-sm text-muted-foreground">{folderLanguageText.noEntries}</p>
                       ) : (
                         patientFolderNotes.map((note) => (
                           <div key={note.id} className="p-3 rounded-lg bg-muted/30">
-                            <p className="text-xs text-muted-foreground mb-1">{new Date(note.created_at).toLocaleString()}</p>
-                            <p className="text-sm"><span className="font-medium">Assessment:</span> {note.diagnosis || 'Not recorded'}</p>
-                            <p className="text-sm"><span className="font-medium">Plan:</span> {note.treatment_plan || 'Not recorded'}</p>
-                            <p className="text-sm"><span className="font-medium">E-Prescription:</span> {note.prescriptions || 'Not recorded'}</p>
+                            <p className="text-xs text-muted-foreground mb-1">{formatDateTime(note.created_at)}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.assessment.label}:</span> {getLocalizedFieldText(note.diagnosis, note.diagnosis_translations, language) || folderLanguageText.notRecorded}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.treatment_plan.label}:</span> {getLocalizedFieldText(note.treatment_plan, note.treatment_plan_translations, language) || folderLanguageText.notRecorded}</p>
+                            <p className="text-sm"><span className="font-medium">{folderLanguageText.fields.e_prescription.label}:</span> {getLocalizedFieldText(note.prescriptions, note.prescriptions_translations, language) || folderLanguageText.notRecorded}</p>
                             <p className="text-sm whitespace-pre-wrap">
-                              <span className="font-medium">Full Clerking Note:</span>{' '}
-                              {formatFolderEntryText(note.follow_up_notes, 'Not recorded')}
+                              <span className="font-medium">{folderLanguageText.fullClerkingNote}:</span>{' '}
+                              {formatFolderEntryText(
+                                getLocalizedFieldText(note.follow_up_notes, note.follow_up_notes_translations, language),
+                                folderLanguageText.notRecorded
+                              )}
                             </p>
                           </div>
                         ))
@@ -2821,10 +4579,10 @@ const DoctorPortal = () => {
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm font-medium">Uploaded Health Records</label>
+                    <label className="text-sm font-medium">{t('patientPortal.records.uploadedInvestigations', 'Uploaded Investigations')}</label>
                     <div className="mt-2 space-y-2">
                       {patientHealthRecords.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No uploaded health records found.</p>
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noRecordsUploadedYet', 'No investigations uploaded yet')}</p>
                       ) : (
                         patientHealthRecords.map((record) => (
                           <div key={record.id} className="p-3 rounded-lg bg-muted/30">
@@ -2832,7 +4590,7 @@ const DoctorPortal = () => {
                               <div className="min-w-0">
                                 <p className="text-sm font-medium truncate">{record.file_name}</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {new Date(record.uploaded_at).toLocaleString()}
+                                  {formatDateTime(record.uploaded_at)}
                                   {record.file_size ? ` • ${(record.file_size / 1024).toFixed(1)} KB` : ''}
                                 </p>
                                 {record.notes && (
@@ -2844,7 +4602,7 @@ const DoctorPortal = () => {
                                 variant="outline"
                                 onClick={() => window.open(record.file_url, '_blank')}
                               >
-                                View
+                                {t('doctorPortal.actions.viewFolder', 'View')}
                               </Button>
                             </div>
                           </div>
@@ -2857,7 +4615,7 @@ const DoctorPortal = () => {
               <div>
                 <div className="mt-2 p-3 rounded-lg bg-muted/30">
                   <p className="text-xs text-muted-foreground">
-                    Folder access is limited to patients you have consulted with.
+                    {folderMetaText.accessNotice}
                   </p>
                 </div>
               </div>
@@ -2865,7 +4623,7 @@ const DoctorPortal = () => {
             </ScrollArea>
             <DialogFooter>
               <Button variant="outline" onClick={() => setViewFolderOpen(false)}>
-                Close
+                {t('common.close', 'Close')}
               </Button>
             </DialogFooter>
           </DialogContent>
