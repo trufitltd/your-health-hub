@@ -13,7 +13,12 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
-import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
+import {
+  isBlockingAppointmentRow,
+  isTimePointBusyByAppointments,
+  normalizeTimeHHMM,
+  timeToMinutes,
+} from '@/lib/appointmentIntervals';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import {
@@ -45,7 +50,8 @@ interface Doctor {
 }
 
 type SlotStatusRow = {
-  id: string;
+  time: string | null;
+  duration_minutes: number | null;
   status: string | null;
   slot_locked_until: string | null;
 };
@@ -177,20 +183,26 @@ export default function DoctorDiscovery() {
 
       if (availabilityMode === 'now') {
         const { date, time } = getNowDatetime();
+        const normalizedTime = normalizeTimeHHMM(time);
+        if (!normalizedTime) return [];
         const dayIndex = new Date(date).getDay();
-        checkTimes.push({ date, time, dayIndex });
+        checkTimes.push({ date, time: normalizedTime, dayIndex });
       } else if (availabilityMode === 'exact') {
         if (!availabilityFilters.date || !availabilityFilters.time) return [];
+        const normalizedTime = normalizeTimeHHMM(availabilityFilters.time);
+        if (!normalizedTime) return [];
         const dayIndex = new Date(availabilityFilters.date).getDay();
         checkTimes.push({ 
           date: availabilityFilters.date, 
-          time: availabilityFilters.time, 
+          time: normalizedTime, 
           dayIndex 
         });
       } else if (availabilityMode === 'range') {
         if (!availabilityFilters.startDate || !availabilityFilters.startTime) return [];
         const endD = availabilityFilters.endDate || availabilityFilters.startDate;
-        const endT = availabilityFilters.endTime || '23:59';
+        const startTime = normalizeTimeHHMM(availabilityFilters.startTime);
+        if (!startTime) return [];
+        const endTime = normalizeTimeHHMM(availabilityFilters.endTime || '23:59') || '23:59';
         
         const current = new Date(availabilityFilters.startDate);
         const end = new Date(endD);
@@ -198,15 +210,16 @@ export default function DoctorDiscovery() {
         while (current <= end) {
           const dateStr = current.toISOString().split('T')[0];
           const dayIndex = current.getDay();
-          checkTimes.push({ date: dateStr, time: availabilityFilters.startTime, dayIndex });
-          if (endT !== availabilityFilters.startTime) {
-            checkTimes.push({ date: dateStr, time: endT, dayIndex });
+          checkTimes.push({ date: dateStr, time: startTime, dayIndex });
+          if (endTime !== startTime) {
+            checkTimes.push({ date: dateStr, time: endTime, dayIndex });
           }
           current.setDate(current.getDate() + 1);
         }
       }
 
       if (checkTimes.length === 0) return [];
+      const uniqueDates = Array.from(new Set(checkTimes.map(({ date }) => date)));
 
       // Get active doctors first
       const { data: activeDoctors, error: doctorError } = await supabase
@@ -219,52 +232,61 @@ export default function DoctorDiscovery() {
 
       const activeDoctorIds = activeDoctors.map(d => d.id);
       const doctorSet = new Set<string>();
-      const nowMs = Date.now();
 
       // Check each doctor
       for (const doctorId of activeDoctorIds) {
         let hasAvailableSlot = false;
 
         // Get all schedules for this doctor
-        const { data: schedules } = await supabase
+        const { data: schedules, error: scheduleError } = await supabase
           .from('doctor_schedules')
           .select('day_of_week, start_time, end_time, slot_duration_minutes')
           .eq('doctor_id', doctorId)
           .eq('is_available', true);
 
+        if (scheduleError) throw scheduleError;
         if (!schedules || schedules.length === 0) continue;
+
+        const appointmentsByDate = new Map<string, SlotStatusRow[]>();
+        for (const date of uniqueDates) {
+          const { data: appointments, error: appointmentsError } = await supabase
+            .from('appointments')
+            .select('time,duration_minutes,status,slot_locked_until')
+            .eq('doctor_id', doctorId)
+            .eq('date', date);
+
+          if (appointmentsError) throw appointmentsError;
+
+          const blockingAppointments = (appointments || [])
+            .filter((row) => isBlockingAppointmentRow(row as SlotStatusRow))
+            .map((row) => row as SlotStatusRow);
+          appointmentsByDate.set(date, blockingAppointments);
+        }
 
         // Check each requested time
         for (const { date, time, dayIndex } of checkTimes) {
-          // Find schedules for this day
-          const daySchedules = schedules.filter(s => s.day_of_week === dayIndex);
+          const daySchedules = schedules.filter((schedule) => Number(schedule.day_of_week) === dayIndex);
           if (daySchedules.length === 0) continue;
 
-          // Check if time falls within any schedule and generate slots
-          for (const schedule of daySchedules) {
-            if (time >= schedule.start_time && time < schedule.end_time) {
-              // Check if this specific time slot exists in the schedule
-              const { data: booking } = await supabase
-                .from('appointments')
-                .select('id, status, slot_locked_until')
-                .eq('doctor_id', doctorId)
-                .eq('date', date)
-                .eq('time', time)
-                .limit(1);
+          const requestedMinute = timeToMinutes(time);
+          if (requestedMinute === null) continue;
 
-              const hasBlockingBooking = ((booking || []) as SlotStatusRow[]).some((row) => {
-                if (!isSlotBlockingAppointmentStatus(row.status)) return false;
-                if (!isPendingPaymentAppointmentStatus(row.status)) return true;
-                if (!row.slot_locked_until) return false;
-                return new Date(row.slot_locked_until).getTime() > nowMs;
-              });
-
-              if (!hasBlockingBooking) {
-                hasAvailableSlot = true;
-                break;
-              }
-            }
+          const appointmentsForDate = appointmentsByDate.get(date) || [];
+          if (isTimePointBusyByAppointments(time, appointmentsForDate)) {
+            continue;
           }
+
+          const coveredBySchedule = daySchedules.some((schedule) => {
+            const scheduleStart = timeToMinutes(String(schedule.start_time).slice(0, 5));
+            const scheduleEnd = timeToMinutes(String(schedule.end_time).slice(0, 5));
+            if (scheduleStart === null || scheduleEnd === null) return false;
+            return requestedMinute >= scheduleStart && requestedMinute < scheduleEnd;
+          });
+
+          if (coveredBySchedule) {
+            hasAvailableSlot = true;
+          }
+
           if (hasAvailableSlot) break;
         }
 
