@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
@@ -69,12 +69,26 @@ interface VerificationNotes {
   [key: string]: string;
 }
 
+const CENTRAL_ADMIN_TABS = new Set([
+  'overview',
+  'doctors',
+  'patients',
+  'verification',
+  'inbox',
+  'clinical',
+  'quality',
+  'payments',
+  'pricing',
+  'settings',
+]);
+
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
   const { t } = useLanguage();
   const { formatDate, formatDateTime } = useLocaleFormatter();
   const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -117,6 +131,33 @@ const CentralAdmin = () => {
       phone: (user?.user_metadata?.phone as string) || '',
     });
   }, [user?.email, user?.user_metadata]);
+
+  useEffect(() => {
+    const nextTab = searchParams.get('tab');
+    if (!nextTab) return;
+    if (!CENTRAL_ADMIN_TABS.has(nextTab)) return;
+    setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
+    // Only depend on searchParams to avoid circular updates.
+    // State changes are synced back via the separate useEffect below.
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!CENTRAL_ADMIN_TABS.has(activeTab)) return;
+
+    setSearchParams((prevParams) => {
+      const nextParams = new URLSearchParams(prevParams);
+      if (activeTab === 'overview') {
+        nextParams.delete('tab');
+      } else {
+        nextParams.set('tab', activeTab);
+      }
+
+      if (nextParams.toString() === prevParams.toString()) {
+        return prevParams;
+      }
+      return nextParams;
+    }, { replace: true });
+  }, [activeTab, setSearchParams]);
 
   // Fetch all doctors with their verification status - MUST be before early returns
   const { data: doctors = [], isLoading: doctorsLoading, refetch } = useQuery({

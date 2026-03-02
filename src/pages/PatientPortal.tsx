@@ -154,6 +154,24 @@ const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
   typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
 );
 
+const PATIENT_PORTAL_TAB_VALUES = new Set([
+  'overview',
+  'appointments',
+  'prescriptions',
+  'messages',
+  'records',
+  'payments',
+  'settings',
+]);
+
+const PATIENT_PORTAL_APPOINTMENT_STATUS_VALUES = new Set([
+  'pending_approval',
+  'confirmed',
+  'completed',
+  'closed',
+  'all',
+]);
+
 interface PatientPrescription {
   id: string;
   noteId: string;
@@ -1376,6 +1394,46 @@ const PatientPortal = () => {
     if (type === 'adjustment') return 'Adjustment';
     return type ? type.replace(/_/g, ' ') : 'Wallet Transaction';
   };
+
+  useEffect(() => {
+    const nextTab = searchParams.get('tab');
+    if (nextTab && PATIENT_PORTAL_TAB_VALUES.has(nextTab) && nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+
+    const nextAppointmentStatus = searchParams.get('appt_status');
+    if (
+      nextAppointmentStatus
+      && PATIENT_PORTAL_APPOINTMENT_STATUS_VALUES.has(nextAppointmentStatus)
+      && nextAppointmentStatus !== appointmentStatusFilter
+    ) {
+      setAppointmentStatusFilter(nextAppointmentStatus as AppointmentStatus | 'all' | 'closed');
+    }
+    // Only depend on searchParams to avoid circular updates.
+    // State changes are synced back via the separate useEffect below.
+  }, [searchParams]);
+
+  useEffect(() => {
+    setSearchParams((prevParams) => {
+      const nextParams = new URLSearchParams(prevParams);
+      if (activeTab === 'overview') {
+        nextParams.delete('tab');
+      } else {
+        nextParams.set('tab', activeTab);
+      }
+
+      if (appointmentStatusFilter === 'all') {
+        nextParams.delete('appt_status');
+      } else {
+        nextParams.set('appt_status', appointmentStatusFilter);
+      }
+
+      if (nextParams.toString() === prevParams.toString()) {
+        return prevParams;
+      }
+      return nextParams;
+    }, { replace: true });
+  }, [activeTab, appointmentStatusFilter, setSearchParams]);
 
   // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {

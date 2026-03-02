@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Layout } from '@/components/layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,6 +56,23 @@ type SlotStatusRow = {
   slot_locked_until: string | null;
 };
 
+type DoctorDiscoveryFilters = {
+  specialty: string;
+  minRating: number;
+  minExperience: number;
+  hospital: string;
+  consultationLanguage: string;
+};
+
+type DoctorDiscoveryAvailabilityFilters = {
+  date: string;
+  time: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+};
+
 const SUPPORTED_CONSULTATION_LANGUAGES = [
   'english',
   'hausa',
@@ -106,10 +123,60 @@ const formatConsultationLanguageLabel = (value: string) => {
       .join(' ');
 };
 
+const URL_PARAM_DOCTOR_TYPE_VALUES = new Set(['all', 'general', 'specialist']);
+const URL_PARAM_AVAILABILITY_MODE_VALUES = new Set(['none', 'now', 'exact', 'range']);
+const DOCTOR_DISCOVERY_MANAGED_URL_PARAMS = [
+  'q',
+  'type',
+  'specialty',
+  'minRating',
+  'minExperience',
+  'hospital',
+  'consultationLanguage',
+  'availability',
+  'date',
+  'time',
+  'startDate',
+  'startTime',
+  'endDate',
+  'endTime',
+];
+
+const areDoctorDiscoveryFiltersEqual = (
+  left: DoctorDiscoveryFilters,
+  right: DoctorDiscoveryFilters,
+) => (
+  left.specialty === right.specialty
+  && left.minRating === right.minRating
+  && left.minExperience === right.minExperience
+  && left.hospital === right.hospital
+  && left.consultationLanguage === right.consultationLanguage
+);
+
+const areDoctorDiscoveryAvailabilityFiltersEqual = (
+  left: DoctorDiscoveryAvailabilityFilters,
+  right: DoctorDiscoveryAvailabilityFilters,
+) => (
+  left.date === right.date
+  && left.time === right.time
+  && left.startDate === right.startDate
+  && left.startTime === right.startTime
+  && left.endDate === right.endDate
+  && left.endTime === right.endTime
+);
+
+const parseNonNegativeNumber = (value: string | null, fallback: number) => {
+  if (value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+};
+
 export default function DoctorDiscovery() {
   const { user } = useAuth();
   const { t, language } = useLanguage();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const { formatDate, formatTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const queryClient = useQueryClient();
@@ -118,7 +185,7 @@ export default function DoctorDiscovery() {
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<DoctorDiscoveryFilters>({
     specialty: '',
     minRating: 0,
     minExperience: 0,
@@ -126,7 +193,7 @@ export default function DoctorDiscovery() {
     consultationLanguage: '',
   });
   const [availabilityMode, setAvailabilityMode] = useState<'none' | 'now' | 'exact' | 'range'>('none');
-  const [availabilityFilters, setAvailabilityFilters] = useState({
+  const [availabilityFilters, setAvailabilityFilters] = useState<DoctorDiscoveryAvailabilityFilters>({
     date: '',
     time: '',
     startDate: '',
@@ -138,6 +205,127 @@ export default function DoctorDiscovery() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+
+  useEffect(() => {
+    const nextSearchQuery = searchParams.get('q') ?? '';
+    if (nextSearchQuery !== searchQuery) {
+      setSearchQuery(nextSearchQuery);
+    }
+
+    const rawDoctorType = searchParams.get('type');
+    const nextDoctorType = URL_PARAM_DOCTOR_TYPE_VALUES.has(rawDoctorType || '')
+      ? (rawDoctorType as 'all' | 'general' | 'specialist')
+      : 'all';
+    if (nextDoctorType !== doctorTypeFilter) {
+      setDoctorTypeFilter(nextDoctorType);
+    }
+
+    const nextFilters: DoctorDiscoveryFilters = {
+      specialty: searchParams.get('specialty') ?? '',
+      minRating: parseNonNegativeNumber(searchParams.get('minRating'), 0),
+      minExperience: parseNonNegativeNumber(searchParams.get('minExperience'), 0),
+      hospital: searchParams.get('hospital') ?? '',
+      consultationLanguage: searchParams.get('consultationLanguage') ?? '',
+    };
+    setFilters((prev) => (areDoctorDiscoveryFiltersEqual(prev, nextFilters) ? prev : nextFilters));
+
+    const rawAvailabilityMode = searchParams.get('availability');
+    const nextAvailabilityMode = URL_PARAM_AVAILABILITY_MODE_VALUES.has(rawAvailabilityMode || '')
+      ? (rawAvailabilityMode as 'none' | 'now' | 'exact' | 'range')
+      : 'none';
+    if (nextAvailabilityMode !== availabilityMode) {
+      setAvailabilityMode(nextAvailabilityMode);
+    }
+
+    const baseAvailabilityFilters: DoctorDiscoveryAvailabilityFilters = {
+      date: '',
+      time: '',
+      startDate: '',
+      startTime: '',
+      endDate: '',
+      endTime: '',
+    };
+    const nextAvailabilityFilters: DoctorDiscoveryAvailabilityFilters = nextAvailabilityMode === 'exact'
+      ? {
+        ...baseAvailabilityFilters,
+        date: searchParams.get('date') ?? '',
+        time: searchParams.get('time') ?? '',
+      }
+      : nextAvailabilityMode === 'range'
+        ? {
+          ...baseAvailabilityFilters,
+          startDate: searchParams.get('startDate') ?? '',
+          startTime: searchParams.get('startTime') ?? '',
+          endDate: searchParams.get('endDate') ?? '',
+          endTime: searchParams.get('endTime') ?? '',
+        }
+        : baseAvailabilityFilters;
+    setAvailabilityFilters((prev) => (
+      areDoctorDiscoveryAvailabilityFiltersEqual(prev, nextAvailabilityFilters)
+        ? prev
+        : nextAvailabilityFilters
+    ));
+  }, [searchParams]);
+
+  useEffect(() => {
+    setSearchParams((prevParams) => {
+      const nextParams = new URLSearchParams(prevParams);
+      DOCTOR_DISCOVERY_MANAGED_URL_PARAMS.forEach((key) => nextParams.delete(key));
+
+      const normalizedSearchQuery = searchQuery.trim();
+      if (normalizedSearchQuery) {
+        nextParams.set('q', normalizedSearchQuery);
+      }
+      if (doctorTypeFilter !== 'all') {
+        nextParams.set('type', doctorTypeFilter);
+      }
+      if (filters.specialty) {
+        nextParams.set('specialty', filters.specialty);
+      }
+      if (filters.minRating > 0) {
+        nextParams.set('minRating', String(filters.minRating));
+      }
+      if (filters.minExperience > 0) {
+        nextParams.set('minExperience', String(filters.minExperience));
+      }
+      if (filters.hospital) {
+        nextParams.set('hospital', filters.hospital);
+      }
+      if (filters.consultationLanguage) {
+        nextParams.set('consultationLanguage', filters.consultationLanguage);
+      }
+      if (availabilityMode !== 'none') {
+        nextParams.set('availability', availabilityMode);
+      }
+      if (availabilityMode === 'exact') {
+        if (availabilityFilters.date) {
+          nextParams.set('date', availabilityFilters.date);
+        }
+        if (availabilityFilters.time) {
+          nextParams.set('time', availabilityFilters.time);
+        }
+      }
+      if (availabilityMode === 'range') {
+        if (availabilityFilters.startDate) {
+          nextParams.set('startDate', availabilityFilters.startDate);
+        }
+        if (availabilityFilters.startTime) {
+          nextParams.set('startTime', availabilityFilters.startTime);
+        }
+        if (availabilityFilters.endDate) {
+          nextParams.set('endDate', availabilityFilters.endDate);
+        }
+        if (availabilityFilters.endTime) {
+          nextParams.set('endTime', availabilityFilters.endTime);
+        }
+      }
+
+      if (nextParams.toString() === prevParams.toString()) {
+        return prevParams;
+      }
+      return nextParams;
+    }, { replace: true });
+  }, [searchQuery, doctorTypeFilter, filters, availabilityMode, availabilityFilters, setSearchParams]);
 
   // Handle scroll to show/hide filters
   useEffect(() => {

@@ -5,7 +5,7 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { DateClickArg, EventClickArg, EventInput, DayCellMountArg, EventMountArg } from '@fullcalendar/core';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
@@ -196,6 +196,25 @@ type WalletTransactionRow = {
   status: string | null;
 };
 
+const DOCTOR_PORTAL_TAB_VALUES = new Set([
+  'overview',
+  'appointments',
+  'patients',
+  'availability',
+  'earnings',
+  'reviews',
+  'messages',
+  'settings',
+]);
+
+const DOCTOR_PORTAL_APPOINTMENT_STATUS_VALUES = new Set([
+  'pending_approval',
+  'confirmed',
+  'completed',
+  'closed',
+  'all',
+]);
+
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
@@ -258,6 +277,7 @@ const DoctorPortal = () => {
   const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const consultationLanguageOptions = useMemo(() => {
     const fallbackLabels: Record<string, string> = {
@@ -281,6 +301,46 @@ const DoctorPortal = () => {
     || code.toUpperCase();
   const unreadReviewsCount = unreadReviewIds.length;
   const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
+
+  useEffect(() => {
+    const nextTab = searchParams.get('tab');
+    if (nextTab && DOCTOR_PORTAL_TAB_VALUES.has(nextTab) && nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+
+    const nextAppointmentStatus = searchParams.get('appt_status');
+    if (
+      nextAppointmentStatus
+      && DOCTOR_PORTAL_APPOINTMENT_STATUS_VALUES.has(nextAppointmentStatus)
+      && nextAppointmentStatus !== appointmentStatusFilter
+    ) {
+      setAppointmentStatusFilter(nextAppointmentStatus as AppointmentStatus | 'all' | 'closed');
+    }
+    // Only depend on searchParams to avoid circular updates.
+    // State changes are synced back via the separate useEffect below.
+  }, [searchParams]);
+
+  useEffect(() => {
+    setSearchParams((prevParams) => {
+      const nextParams = new URLSearchParams(prevParams);
+      if (activeTab === 'overview') {
+        nextParams.delete('tab');
+      } else {
+        nextParams.set('tab', activeTab);
+      }
+
+      if (appointmentStatusFilter === 'confirmed') {
+        nextParams.delete('appt_status');
+      } else {
+        nextParams.set('appt_status', appointmentStatusFilter);
+      }
+
+      if (nextParams.toString() === prevParams.toString()) {
+        return prevParams;
+      }
+      return nextParams;
+    }, { replace: true });
+  }, [activeTab, appointmentStatusFilter, setSearchParams]);
 
   const getSeenReviewIds = () => {
     if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
