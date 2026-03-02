@@ -6,14 +6,25 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Calendar as DateCalendar } from '@/components/ui/calendar';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailableSlots';
+import { generateTimeSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
-import { Calendar, Clock, ChevronRight, AlertCircle, CreditCard } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { formatSpecialtyLabel } from '@/lib/utils';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useLocaleFormatter } from '@/lib/locale';
+import { AvailabilityService } from '@/services/AvailabilityService';
+import { BookingService } from '@/services/BookingService';
+import { PatientWalletService } from '@/services/PatientWalletService';
+import {
+  isSlotBlockedByAppointments,
+  normalizeDurationMinutes,
+  type AppointmentIntervalRow,
+} from '@/lib/appointmentIntervals';
 
 interface LocationState {
   doctorId?: string;
@@ -22,15 +33,44 @@ interface LocationState {
   profilePicture?: string;
 }
 
+type BookedAppointmentRow = AppointmentIntervalRow & {
+  time: string | null;
+  duration_minutes: number | null;
+};
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const calendarClassNames = {
+  cell:
+    "h-9 w-9 text-center text-sm p-0 relative first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20 [&:has([aria-selected].day-outside)]:bg-primary/10 [&:has([aria-selected])]:bg-primary/15",
+  day_today: "border border-primary/40 text-primary font-semibold",
+  day_selected:
+    "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+  day_outside:
+    "day-outside text-muted-foreground opacity-50 aria-selected:bg-primary/10 aria-selected:text-muted-foreground aria-selected:opacity-40",
+  day_range_middle: "aria-selected:bg-primary/15 aria-selected:text-foreground",
+};
+
 export default function SlotSelection() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const { t } = useLanguage();
+  const { formatDate: formatLocaleDate, formatClockTime, formatCurrency } = useLocaleFormatter();
   const state = location.state as LocationState;
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState<number>(30);
+  const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
   const [isConfirming, setIsConfirming] = useState(false);
+  const [finalPrice, setFinalPrice] = useState<number | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -39,30 +79,6 @@ export default function SlotSelection() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
-
-  // Auto-scroll to time selection when date is selected
-  useEffect(() => {
-    if (selectedDate) {
-      setTimeout(() => {
-        const timeSection = document.getElementById('time-selection');
-        if (timeSection) {
-          timeSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 100);
-    }
-  }, [selectedDate]);
-
-  // Auto-scroll to summary when time is selected
-  useEffect(() => {
-    if (selectedTime) {
-      setTimeout(() => {
-        const summarySection = document.getElementById('appointment-summary');
-        if (summarySection) {
-          summarySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 100);
-    }
-  }, [selectedTime]);
 
   // Redirect if no doctor selected
   if (!state?.doctorId) {
@@ -73,9 +89,9 @@ export default function SlotSelection() {
             <CardContent className="pt-6">
               <div className="text-center">
                 <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
-                <p className="text-muted-foreground mb-4">No doctor selected</p>
+                <p className="text-muted-foreground mb-4">{t('slotSelection.noDoctorSelected', 'No doctor selected')}</p>
                 <Button onClick={() => navigate('/doctor-discovery')}>
-                  Back to Doctor Discovery
+                  {t('slotSelection.backToDoctorDiscovery', 'Back to Doctor Discovery')}
                 </Button>
               </div>
             </CardContent>
@@ -84,6 +100,90 @@ export default function SlotSelection() {
       </Layout>
     );
   }
+
+  const { data: featureFlags = { duration_pricing: true, tier_pricing: true, consultation_type_pricing: false } } = useQuery({
+    queryKey: ['pricing-feature-flags-slot-selection'],
+    queryFn: () => AvailabilityService.getFeatureFlags(),
+  });
+
+  const durationPricingEnabled = featureFlags.duration_pricing;
+
+  const { data: allowedDurations = [] } = useQuery({
+    queryKey: ['allowed-durations-slot-selection'],
+    queryFn: () => AvailabilityService.getAllowedDurations(),
+  });
+
+  const hasConfiguredDurations = allowedDurations.length > 0;
+  const selectedDurationIsAllowed = allowedDurations.includes(selectedDuration);
+
+  const { data: consultationTypes = [] } = useQuery({
+    queryKey: ['active-consultation-types-slot-selection'],
+    queryFn: () => AvailabilityService.getActiveConsultationTypes(),
+  });
+
+  const { data: patientWallet } = useQuery({
+    queryKey: ['patient-wallet', user?.id],
+    queryFn: () => PatientWalletService.getPatientWallet(user!.id),
+    enabled: !!user?.id,
+  });
+
+  useEffect(() => {
+    if (!durationPricingEnabled) {
+      setSelectedTime(null);
+      setFinalPrice(null);
+    }
+  }, [durationPricingEnabled]);
+
+  useEffect(() => {
+    if (!hasConfiguredDurations) {
+      setSelectedTime(null);
+      setFinalPrice(null);
+      return;
+    }
+    if (allowedDurations.includes(selectedDuration)) return;
+
+    setSelectedDuration(allowedDurations[0]);
+    setSelectedTime(null);
+    setFinalPrice(null);
+  }, [allowedDurations, hasConfiguredDurations, selectedDuration]);
+
+  useEffect(() => {
+    if (!consultationTypes.length) return;
+
+    const existing = consultationTypes.find((type: any) => type.name === selectedConsultationType);
+    if (!existing) {
+      const firstType = consultationTypes[0]?.name;
+      if (firstType === 'chat' || firstType === 'voice' || firstType === 'video') {
+        setSelectedConsultationType(firstType);
+        setFinalPrice(null);
+      }
+    }
+  }, [consultationTypes, selectedConsultationType]);
+
+  // Auto-scroll to time selection when date is selected
+  useEffect(() => {
+    if (selectedDate && durationPricingEnabled) {
+      setTimeout(() => {
+        const timeSection = document.getElementById('time-selection');
+        if (timeSection) {
+          timeSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [selectedDate, durationPricingEnabled]);
+
+  // Auto-scroll to summary when ready
+  useEffect(() => {
+    const ready = selectedDate && (!durationPricingEnabled || selectedTime);
+    if (ready) {
+      setTimeout(() => {
+        const summarySection = document.getElementById('appointment-summary');
+        if (summarySection) {
+          summarySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [selectedDate, selectedTime, durationPricingEnabled]);
 
   // Fetch doctor schedules and availability
   const { data: schedules = [], isLoading: schedulesLoading } = useQuery({
@@ -98,192 +198,338 @@ export default function SlotSelection() {
         console.error('Error fetching schedules:', error);
         throw error;
       }
-      
-      console.log('Fetched schedules:', data);
+
       return data || [];
     },
   });
 
-  // Fetch booked appointments for selected doctor and date
-  const { data: bookedSlots = [] } = useQuery({
-    queryKey: ['booked-slots', state.doctorId, selectedDate],
+  // Fetch blocking appointments for selected doctor and date
+  const { data: bookedAppointments = [] } = useQuery({
+    queryKey: ['booked-appointments', state.doctorId, selectedDate],
     queryFn: async () => {
       if (!state.doctorId || !selectedDate) return [];
-      
+
       const { data, error } = await supabase
         .from('appointments')
-        .select('time')
+        .select('time, duration_minutes, status, slot_locked_until')
         .eq('doctor_id', state.doctorId)
-        .eq('date', selectedDate)
-        .in('status', ['pending', 'confirmed']);
-      
+        .eq('date', selectedDate);
+
       if (error) throw error;
-      return (data || []).map(apt => apt.time);
+
+      return (data || [])
+        .map((apt) => apt as BookedAppointmentRow);
     },
     enabled: !!state.doctorId && !!selectedDate,
   });
 
   // Get available dates (next 30 days)
   const availableDates = useMemo(() => {
-    if (!schedules.length) {
-      console.log('No schedules available');
-      return [];
-    }
+    if (!schedules.length) return [];
 
-    console.log('Processing schedules:', schedules);
     const dates = new Set<string>();
     const today = new Date();
 
-    // Generate dates for the next 30 days
     for (let i = 0; i < 30; i++) {
       const date = new Date(today);
       date.setDate(date.getDate() + i);
-      const dateStr = date.toISOString().split('T')[0];
-      // Get day of week as number (0=Sunday, 1=Monday, etc.)
+      const dateStr = toDateKey(date);
       const dayIndex = date.getDay();
 
-      console.log(`Checking date ${dateStr}, dayOfWeek: ${dayIndex}`);
-
-      // Check if doctor works on this day AND has available schedules
-      const hasSchedule = schedules.some(s => {
-        console.log(`Schedule day_of_week: "${s.day_of_week}", is_available: ${s.is_available}, type: ${typeof s.day_of_week}`);
-        return s.day_of_week !== null && parseInt(String(s.day_of_week)) === dayIndex && s.is_available === true;
+      const hasSchedule = schedules.some((s: any) => {
+        return s.day_of_week !== null && parseInt(String(s.day_of_week), 10) === dayIndex && s.is_available === true;
       });
 
-      if (hasSchedule) {
-        console.log(`Adding date: ${dateStr}`);
-        dates.add(dateStr);
-      }
+      if (hasSchedule) dates.add(dateStr);
     }
 
-    console.log('Available dates:', Array.from(dates));
     return Array.from(dates).sort();
   }, [schedules]);
 
   // Get available times for selected date, excluding booked slots
   const availableTimes = useMemo(() => {
     if (!selectedDate || !schedules.length) return [];
+    if (durationPricingEnabled && !hasConfiguredDurations) return [];
 
-    const date = new Date(selectedDate);
+    const date = new Date(`${selectedDate}T00:00:00`);
     const dayIndex = date.getDay();
 
-    const daySchedules = schedules.filter(s => 
-      s.day_of_week !== null && 
-      parseInt(String(s.day_of_week)) === dayIndex && 
-      s.is_available === true
+    const daySchedules = schedules.filter((s: any) =>
+      s.day_of_week !== null &&
+      parseInt(String(s.day_of_week), 10) === dayIndex &&
+      s.is_available === true,
     );
 
     const times = new Set<string>();
-    daySchedules.forEach(schedule => {
+    daySchedules.forEach((schedule: any) => {
+      const duration = durationPricingEnabled
+        ? selectedDuration
+        : Number(schedule.slot_duration_minutes || 30);
+
       const slots = generateTimeSlots(
-        schedule.start_time,
-        schedule.end_time,
-        schedule.slot_duration_minutes
+        String(schedule.start_time).slice(0, 5),
+        String(schedule.end_time).slice(0, 5),
+        duration,
       );
-      slots.forEach(time => times.add(time));
+      slots.forEach((time) => times.add(time));
     });
 
     // Filter out past times if selected date is today
     const now = new Date();
-    const isToday = selectedDate === now.toISOString().split('T')[0];
-    
+    const isToday = selectedDate === toDateKey(now);
+
+    let sorted = Array.from(times).sort();
     if (isToday) {
       const currentTime = now.toTimeString().slice(0, 5);
-      return Array.from(times).filter(time => time > currentTime).sort();
+      sorted = sorted.filter((time) => time > currentTime);
     }
 
-    return Array.from(times).sort();
-  }, [selectedDate, schedules]);
+    return sorted;
+  }, [selectedDate, schedules, selectedDuration, durationPricingEnabled, hasConfiguredDurations]);
+
+  const blockedStartTimes = useMemo(() => {
+    if (!availableTimes.length) return new Set<string>();
+
+    const requestedDuration = normalizeDurationMinutes(selectedDuration, 30);
+    const blocked = new Set<string>();
+
+    availableTimes.forEach((time) => {
+      if (isSlotBlockedByAppointments(time, requestedDuration, bookedAppointments)) {
+        blocked.add(time);
+      }
+    });
+
+    return blocked;
+  }, [availableTimes, bookedAppointments, selectedDuration]);
+
+  const summaryReady = !!(
+    selectedDate &&
+    (
+      !durationPricingEnabled ||
+      (hasConfiguredDurations && selectedDurationIsAllowed && selectedTime)
+    )
+  );
+
+  const {
+    data: previewPrice,
+    isLoading: previewPriceLoading,
+    isFetching: previewPriceFetching,
+  } = useQuery({
+    queryKey: [
+      'price-preview-slot-selection',
+      user?.id,
+      state.doctorId,
+      selectedDuration,
+      selectedConsultationType,
+      selectedDate,
+      selectedTime,
+      durationPricingEnabled,
+    ],
+    queryFn: () =>
+      AvailabilityService.calculatePricePreview({
+        doctorId: state.doctorId!,
+        duration: selectedDuration,
+        consultationType: selectedConsultationType,
+      }),
+    enabled: !!user && !!state.doctorId && summaryReady,
+    retry: false,
+  });
+
+  const displayedPrice = finalPrice ?? previewPrice ?? null;
+  const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
+  const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const autoHybridForWallet = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
+  const effectivePaymentMethod: 'paystack' | 'wallet' | 'hybrid' = useMemo(() => {
+    if (paymentMethod === 'wallet' && autoHybridForWallet) return 'hybrid';
+    return paymentMethod;
+  }, [paymentMethod, autoHybridForWallet]);
+  const walletAppliedForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.min(patientWalletBalance, displayedPrice)
+    : 0;
+  const paystackDueForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
+    ? Math.max(displayedPrice - walletAppliedForHybrid, 0)
+    : 0;
+  const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
+  const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
+  const minCalendarDate = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }, []);
+  const maxCalendarDate = useMemo(() => {
+    const max = new Date();
+    max.setDate(max.getDate() + 29);
+    max.setHours(23, 59, 59, 999);
+    return max;
+  }, []);
 
   const handleConfirm = async () => {
-    if (!selectedDate || !selectedTime || !user) {
-      toast({ title: 'Missing selection', description: 'Please select both date and time' });
-      return;
-    }
-
-    if (!paystackPublicKey) {
-      toast({ 
-        title: 'Configuration Error', 
-        description: 'Payment gateway not configured. Please contact support.' 
+    if (!selectedDate || !user) {
+      toast({
+        title: t('slotSelection.toast.missingSelectionTitle', 'Missing selection'),
+        description: t('slotSelection.toast.selectAppointmentDate', 'Please select an appointment date.')
       });
       return;
     }
 
-    // Calculate consultation fee
-    const isSpecialist = state.specialty && !state.specialty.toLowerCase().includes('general');
-    const consultationFee = isSpecialist ? 10000 : 5000;
-    const amountInKobo = consultationFee * 100; // Convert to kobo
+    if (durationPricingEnabled && !hasConfiguredDurations) {
+      toast({
+        title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
+        description: 'No allowed durations are configured. Please contact support.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    // Generate unique reference
-    const reference = `APT-${Date.now()}-${user.id.substring(0, 8)}`;
+    if (durationPricingEnabled && !selectedTime) {
+      toast({
+        title: t('slotSelection.toast.missingSelectionTitle', 'Missing selection'),
+        description: t('slotSelection.toast.selectAppointmentTime', 'Please select an appointment time.')
+      });
+      return;
+    }
 
-    // Fetch user email from profiles table
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('email')
-      .eq('user_id', user.id)
-      .single();
+    const paystackRequiredForSelection = effectivePaymentMethod === 'paystack'
+      || (effectivePaymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
 
-    const userEmail = profile?.email || user.email || '';
+    if (paystackRequiredForSelection && !paystackPublicKey) {
+      toast({
+        title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
+        description: t('slotSelection.toast.paymentGatewayNotConfigured', 'Payment gateway not configured. Please contact support.'),
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    // Initialize Paystack payment
-    initializePayment({
-      email: userEmail,
-      amount: amountInKobo,
-      reference,
-      publicKey: paystackPublicKey,
-      metadata: {
-        custom_fields: [
-          {
-            display_name: 'Patient ID',
-            variable_name: 'patient_id',
-            value: user.id,
-          },
-          {
-            display_name: 'Doctor ID',
-            variable_name: 'doctor_id',
-            value: state.doctorId || '',
-          },
-          {
-            display_name: 'Doctor',
-            variable_name: 'doctor_name',
-            value: state.doctorName || '',
-          },
-          {
-            display_name: 'Appointment Date',
-            variable_name: 'appointment_date',
-            value: selectedDate,
-          },
-          {
-            display_name: 'Appointment Time',
-            variable_name: 'appointment_time',
-            value: selectedTime,
-          },
-        ],
-      },
-      onSuccess: async (response) => {
-        toast({ 
-          title: 'Payment successful!', 
-          description: 'Your appointment is being confirmed. Please wait...' 
+    setIsConfirming(true);
+
+    try {
+      const booking = await BookingService.initiateBooking({
+        doctorId: state.doctorId,
+        preferredDate: selectedDate,
+        preferredTime: durationPricingEnabled ? (selectedTime || undefined) : undefined,
+        duration: selectedDuration,
+        consultationType: selectedConsultationType,
+        paymentMethod: effectivePaymentMethod,
+      });
+
+      setFinalPrice(booking.finalPrice);
+      const walletChargedAmount = Number(booking.walletChargedAmount || 0);
+      const paystackAmountDue = Number(
+        booking.paystackAmountDue
+        ?? (booking.paymentInitialization ? Number(booking.paymentInitialization.amountInKobo || 0) / 100 : 0),
+      );
+
+      if (booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
+        setIsConfirming(false);
+        toast({
+          title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
+          description: walletChargedAmount > 0
+            ? `Wallet charged ${formatCurrency(walletChargedAmount)}. Your booking is now pending doctor approval.`
+            : t(
+              'slotSelection.toast.walletBookingSuccessDescription',
+              'Your booking has been paid from wallet and is now pending doctor approval.',
+            ),
         });
-
-        // Redirect to patient portal - webhook will create appointment
         setTimeout(() => {
           navigate('/patient-portal?tab=appointments');
-        }, 2000);
-      },
-      onClose: () => {
-        toast({ 
-          title: 'Payment cancelled', 
-          description: 'You cancelled the payment process.' 
-        });
-      },
-    });
-  };
+        }, 800);
+        return;
+      }
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const paymentInit = booking.paymentInitialization;
+      if (!paymentInit) {
+        throw new Error('Missing payment initialization response');
+      }
+
+      let paymentCompleted = false;
+      initializePayment({
+        email: paymentInit.email || user.email || '',
+        amount: paymentInit.amountInKobo,
+        reference: paymentInit.reference,
+        publicKey: paystackPublicKey,
+        metadata: paymentInit.metadata,
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit.reference || '').trim();
+
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
+                : confirmResult.alreadyProcessed
+                ? t(
+                  'slotSelection.toast.appointmentAlreadyProcessed',
+                  'This payment was already processed and your appointment remains pending doctor approval.',
+                )
+                : t(
+                  'slotSelection.toast.appointmentPendingApproval',
+                  'Payment successful. Your appointment is pending doctor approval.',
+                ),
+            });
+          } catch (confirmErr: any) {
+            console.warn('[slot-selection] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: t('booking.paymentSuccessTitle', 'Payment successful'),
+              description: walletChargedAmount > 0
+                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment will appear after payment confirmation processing completes.`
+                : t(
+                  'slotSelection.toast.paymentSuccessPendingWebhook',
+                  'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+                ),
+            });
+          } finally {
+            setIsConfirming(false);
+            setTimeout(() => {
+              navigate('/patient-portal?tab=appointments');
+            }, 800);
+          }
+        },
+        onClose: () => {
+          if (paymentCompleted) return;
+          setIsConfirming(false);
+          toast({
+            title: t('booking.paymentCancelledTitle', 'Payment cancelled'),
+            description: t('slotSelection.toast.paymentCancelledDescription', 'You cancelled the payment process.'),
+          });
+        },
+      });
+    } catch (error: any) {
+      setIsConfirming(false);
+      toast({
+        title: t('booking.failedTitle', 'Booking failed'),
+        description: error?.message || 'Unable to initiate booking right now.',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -303,7 +549,7 @@ export default function SlotSelection() {
                 onClick={() => navigate(-1)}
                 className="mb-6"
               >
-                ← Back
+                {t('slotSelection.back', '← Back')}
               </Button>
 
               <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
@@ -319,7 +565,7 @@ export default function SlotSelection() {
                       <h1 className="text-2xl font-bold">{state.doctorName}</h1>
                       <p className="text-muted-foreground">{formatSpecialtyLabel(state.specialty)}</p>
                     </div>
-                    <Badge className="bg-primary text-primary-foreground">Available</Badge>
+                    <Badge className="bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
                   </div>
                 </CardContent>
               </Card>
@@ -333,30 +579,32 @@ export default function SlotSelection() {
               className="mb-8 flex items-center justify-between"
             >
               {[
-                { step: 1, label: 'Date' },
-                { step: 2, label: 'Time' },
-                { step: 3, label: 'Confirm' },
-              ].map((item, index) => (
-                <div key={item.step} className="flex items-center flex-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm ${
-                    selectedDate && selectedTime && item.step <= 3 ? 'bg-primary text-primary-foreground' :
-                    (item.step === 1 && selectedDate) || (item.step === 2 && selectedTime) ? 'bg-primary text-primary-foreground' :
-                    'bg-muted text-muted-foreground'
-                  }`}>
-                    {item.step}
+                { step: 1, label: t('slotSelection.step.date', 'Date') },
+                { step: 2, label: durationPricingEnabled ? t('slotSelection.step.time', 'Time') : t('slotSelection.step.autoSlot', 'Auto Slot') },
+                { step: 3, label: t('slotSelection.step.confirm', 'Confirm') },
+              ].map((item, index) => {
+                const active = item.step === 1
+                  ? !!selectedDate
+                  : item.step === 2
+                  ? (!durationPricingEnabled || !!selectedTime)
+                  : !!summaryReady;
+
+                return (
+                  <div key={item.step} className="flex items-center flex-1">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm ${
+                      active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                    }`}>
+                      {item.step}
+                    </div>
+                    <p className={`ml-2 text-sm font-medium ${active ? 'text-primary' : 'text-muted-foreground'}`}>
+                      {item.label}
+                    </p>
+                    {index < 2 && (
+                      <div className={`flex-1 h-1 mx-2 rounded ${active ? 'bg-primary' : 'bg-muted'}`} />
+                    )}
                   </div>
-                  <p className={`ml-2 text-sm font-medium ${
-                    (item.step === 1 && selectedDate) || (item.step === 2 && selectedTime) ? 'text-primary' : 'text-muted-foreground'
-                  }`}>
-                    {item.label}
-                  </p>
-                  {index < 2 && (
-                    <div className={`flex-1 h-1 mx-2 rounded ${
-                      (item.step === 1 && selectedDate) || (item.step === 2 && selectedTime) ? 'bg-primary' : 'bg-muted'
-                    }`} />
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </motion.div>
 
             {/* Date Selection */}
@@ -369,50 +617,152 @@ export default function SlotSelection() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Calendar className="w-5 h-5" />
-                    Select Date
+                    <CalendarIcon className="w-5 h-5" />
+                    {t('slotSelection.selectDate', 'Select Date')}
                   </CardTitle>
-                  <CardDescription>Choose your preferred appointment date</CardDescription>
+                  <CardDescription>
+                    {t('slotSelection.selectDateDescription', 'Pick a date from the calendar. Only available days are enabled.')}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   {schedulesLoading ? (
                     <div className="text-center py-8">
-                      <p className="text-muted-foreground">Loading available dates...</p>
+                      <p className="text-muted-foreground">{t('slotSelection.loadingAvailableDates', 'Loading available dates...')}</p>
                     </div>
                   ) : availableDates.length === 0 ? (
                     <div className="text-center py-8">
                       <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                      <p className="text-muted-foreground">No available dates</p>
+                      <p className="text-muted-foreground">{t('slotSelection.noAvailableDates', 'No available dates')}</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {availableDates.map(date => (
-                        <motion.button
-                          key={date}
-                          whileHover={{ scale: 1.05 }}
-                          onClick={() => {
-                            setSelectedDate(date);
-                            setSelectedTime(null); // Reset time when date changes
+                    <div className="grid gap-4 lg:grid-cols-[320px,1fr]">
+                      <div className="rounded-lg border bg-background/60">
+                        <DateCalendar
+                          mode="single"
+                          selected={selectedCalendarDate}
+                          classNames={calendarClassNames}
+                          onSelect={(date) => {
+                            if (!date) return;
+                            const dateKey = toDateKey(date);
+                            if (!availableDateSet.has(dateKey)) return;
+                            setSelectedDate(dateKey);
+                            setSelectedTime(null);
+                            setFinalPrice(null);
                           }}
-                          className={`p-3 rounded-lg border-2 transition-all text-center ${
-                            selectedDate === date
-                              ? 'border-primary bg-primary/10 text-primary font-semibold'
-                              : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
-                          }`}
-                        >
-                          <div className="text-xs">{formatDate(date).split(',')[0]}</div>
-                          <div className="text-sm font-medium">{new Date(date).getDate()}</div>
-                          <div className="text-xs">{formatDate(date).split(' ')[1]}</div>
-                        </motion.button>
-                      ))}
+                          disabled={(date) => {
+                            if (date < minCalendarDate || date > maxCalendarDate) return true;
+                            return !availableDateSet.has(toDateKey(date));
+                          }}
+                          className="mx-auto"
+                        />
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="rounded-lg border bg-background/50 p-4">
+                          <p className="text-sm font-medium">{t('slotSelection.selectedDate', 'Selected Date')}</p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {selectedDate
+                              ? new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-US', {
+                                  weekday: 'long',
+                                  month: 'long',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })
+                              : t('slotSelection.chooseAvailableDate', 'Choose an available date from the calendar')}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                          <p className="text-sm font-medium text-primary">{t('slotSelection.flowTipTitle', 'Flow Tip')}</p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {t('slotSelection.flowTipDescription', 'After selecting a date, pick your consultation details and then a time slot.')}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </CardContent>
               </Card>
             </motion.div>
 
-            {/* Time Selection */}
+            {/* Duration + Consultation mode */}
             {selectedDate && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.25 }}
+                className="mb-8"
+              >
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock className="w-5 h-5" />
+                      {t('slotSelection.consultationDetailsTitle', 'Consultation Details')}
+                    </CardTitle>
+                    <CardDescription>
+                      Configure your booking preferences before payment.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium">{t('slotSelection.consultationMode', 'Consultation Mode')}</label>
+                      <select
+                        value={selectedConsultationType}
+                        onChange={(e) => {
+                          setSelectedConsultationType(e.target.value as 'chat' | 'voice' | 'video');
+                          setFinalPrice(null);
+                        }}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        {(consultationTypes.length ? consultationTypes : [{ name: 'video' }]).map((type: any) => (
+                          <option key={type.name} value={type.name}>
+                            {String(type.name).charAt(0).toUpperCase() + String(type.name).slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium">{t('slotSelection.duration', 'Duration')}</label>
+                      {durationPricingEnabled ? (
+                        hasConfiguredDurations ? (
+                          <div className="mt-2 grid grid-cols-4 gap-2">
+                            {allowedDurations.map((mins) => (
+                              <button
+                                key={mins}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDuration(mins);
+                                  setSelectedTime(null);
+                                  setFinalPrice(null);
+                                }}
+                                className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                                  selectedDuration === mins
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border hover:border-primary/40'
+                                }`}
+                              >
+                                {t('slotSelection.minutesShort', '{minutes} min').replace('{minutes}', String(mins))}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-sm text-destructive">
+                            No allowed durations are configured.
+                          </p>
+                        )
+                      ) : (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {t('slotSelection.autoAssignDescription', 'Time selection is disabled by current pricing configuration. The system will auto-assign the next available slot.')}
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+
+            {/* Time Selection */}
+            {selectedDate && durationPricingEnabled && hasConfiguredDurations && (
               <motion.div
                 id="time-selection"
                 initial={{ opacity: 0, y: 20 }}
@@ -424,34 +774,39 @@ export default function SlotSelection() {
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Clock className="w-5 h-5" />
-                      Select Time
+                      {t('slotSelection.selectTime', 'Select Time')}
                     </CardTitle>
                     <CardDescription>
-                      Available times on {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                      Available times on {formatLocaleDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {availableTimes.length === 0 ? (
                       <div className="text-center py-8">
                         <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                        <p className="text-muted-foreground">No available times for this date</p>
+                        <p className="text-muted-foreground">{t('slotSelection.noAvailableTimesForDate', 'No available times for this date')}</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
                         {availableTimes.map(time => {
-                          const isBooked = bookedSlots.includes(time);
+                          const isBooked = blockedStartTimes.has(time);
                           const isPast = (() => {
                             const now = new Date();
                             const slotDateTime = new Date(`${selectedDate}T${time}`);
                             return slotDateTime < now;
                           })();
                           const isDisabled = isBooked || isPast;
-                          
+
                           return (
                             <motion.button
                               key={time}
                               whileHover={!isDisabled ? { scale: 1.05 } : {}}
-                              onClick={() => !isDisabled && setSelectedTime(time)}
+                              onClick={() => {
+                                if (!isDisabled) {
+                                  setSelectedTime(time);
+                                  setFinalPrice(null);
+                                }
+                              }}
                               disabled={isDisabled}
                               className={`p-3 rounded-lg border-2 transition-all text-center text-sm font-medium ${
                                 isDisabled
@@ -461,9 +816,9 @@ export default function SlotSelection() {
                                   : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
                               }`}
                             >
-                              {time}
-                              {isBooked && <span className="block text-[10px] mt-0.5">Booked</span>}
-                              {isPast && !isBooked && <span className="block text-[10px] mt-0.5">Past</span>}
+                              {formatClockTime(time)}
+                              {isBooked && <span className="block text-[10px] mt-0.5">{t('slotSelection.booked', 'Booked')}</span>}
+                              {isPast && !isBooked && <span className="block text-[10px] mt-0.5">{t('slotSelection.past', 'Past')}</span>}
                             </motion.button>
                           );
                         })}
@@ -475,7 +830,7 @@ export default function SlotSelection() {
             )}
 
             {/* Confirmation Summary */}
-            {selectedDate && selectedTime && (
+            {summaryReady && (
               <motion.div
                 id="appointment-summary"
                 initial={{ opacity: 0, y: 20 }}
@@ -485,25 +840,88 @@ export default function SlotSelection() {
               >
                 <Card className="border-success/30 bg-success/5">
                   <CardHeader>
-                    <CardTitle className="text-success">Appointment Summary</CardTitle>
+                    <CardTitle className="text-success">{t('slotSelection.summaryTitle', 'Appointment Summary')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
-                        <span className="text-muted-foreground">Doctor</span>
+                        <span className="text-muted-foreground">{t('slotSelection.summary.doctor', 'Doctor')}</span>
                         <span className="font-medium">{state.doctorName}</span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
-                        <span className="text-muted-foreground">Date</span>
-                        <span className="font-medium">{new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+                        <span className="text-muted-foreground">{t('slotSelection.summary.date', 'Date')}</span>
+                        <span className="font-medium">{formatLocaleDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+                      </div>
+                      {durationPricingEnabled && selectedTime && (
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
+                          <span className="text-muted-foreground">{t('slotSelection.summary.time', 'Time')}</span>
+                          <span className="font-medium">{selectedTime}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
+                        <span className="text-muted-foreground">{t('slotSelection.summary.mode', 'Mode')}</span>
+                        <span className="font-medium capitalize">{selectedConsultationType}</span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
-                        <span className="text-muted-foreground">Time</span>
-                        <span className="font-medium">{selectedTime}</span>
+                        <span className="text-muted-foreground">{t('slotSelection.summary.duration', 'Duration')}</span>
+                        <span className="font-medium">
+                          {t('slotSelection.summary.durationMinutes', '{minutes} minutes').replace('{minutes}', String(selectedDuration))}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-primary/10 border border-primary/20">
-                        <span className="text-muted-foreground">Consultation Fee</span>
-                        <span className="font-semibold text-primary">₦{state.specialty?.toLowerCase().includes('general') ? '5,000' : '10,000'}</span>
+                        <span className="text-muted-foreground">{t('slotSelection.summary.consultationFee', 'Consultation Fee')}</span>
+                        <span className="font-semibold text-primary">
+                          {displayedPrice !== null
+                            ? formatCurrency(displayedPrice)
+                            : isPreviewingPrice
+                            ? t('slotSelection.summary.calculating', 'Calculating...')
+                            : t('slotSelection.summary.unableToPreview', 'Unable to preview right now')}
+                        </span>
+                      </div>
+                      <div className="rounded-lg border p-3 bg-background/50">
+                        <p className="text-sm font-medium mb-2">
+                          {t('slotSelection.summary.paymentMethod', 'Payment Method')}
+                        </p>
+                        <div className="space-y-2 text-sm">
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>{t('slotSelection.summary.paystack', 'Paystack')}</span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'paystack'}
+                              onChange={() => setPaymentMethod('paystack')}
+                            />
+                          </label>
+                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
+                            <span>
+                              {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance)})
+                            </span>
+                            <input
+                              type="radio"
+                              name="booking-payment-method"
+                              checked={paymentMethod === 'wallet'}
+                              onChange={() => setPaymentMethod('wallet')}
+                            />
+                          </label>
+                        </div>
+                        {paymentMethod === 'wallet' && displayedPrice !== null && (
+                          <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
+                            {paystackDueForHybrid > 0 ? (
+                              <>
+                                <p>
+                                  <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid)}
+                                </p>
+                                <p>
+                                  <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid)}
+                                </p>
+                              </>
+                            ) : (
+                              <p>
+                                <span className="font-medium">Wallet covers full amount:</span> {formatCurrency(displayedPrice)}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </CardContent>
@@ -519,15 +937,23 @@ export default function SlotSelection() {
               className="flex gap-4 justify-end"
             >
               <Button variant="outline" onClick={() => navigate(-1)}>
-                Cancel
+                {t('common.cancel', 'Cancel')}
               </Button>
               <Button
                 onClick={handleConfirm}
-                disabled={!selectedDate || !selectedTime || isConfirming}
+                disabled={!summaryReady || isConfirming}
                 className="gap-2"
               >
-                <CreditCard className="w-4 h-4" />
-                {isConfirming ? 'Processing...' : 'Pay & Confirm Booking'}
+                {effectivePaymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
+                {isConfirming
+                  ? t('slotSelection.processing', 'Processing...')
+                  : effectivePaymentMethod === 'wallet'
+                  ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  : effectivePaymentMethod === 'hybrid'
+                  ? paystackDueForHybrid > 0
+                  ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
+                  : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </motion.div>

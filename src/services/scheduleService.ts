@@ -73,7 +73,7 @@ export const upsertSchedule = async (
         .update({
           start_time: schedule.start_time,
           end_time: schedule.end_time,
-          slot_duration_minutes: schedule.slot_duration_minutes || 30,
+          slot_duration_minutes: schedule.slot_duration_minutes || 15,
           max_patients_per_slot: schedule.max_patients_per_slot || 1,
           is_available: schedule.is_available !== false,
           updated_at: new Date().toISOString(),
@@ -94,7 +94,7 @@ export const upsertSchedule = async (
         day_of_week: schedule.day_of_week,
         start_time: schedule.start_time,
         end_time: schedule.end_time,
-        slot_duration_minutes: schedule.slot_duration_minutes || 30,
+        slot_duration_minutes: schedule.slot_duration_minutes || 15,
         max_patients_per_slot: schedule.max_patients_per_slot || 1,
         is_available: schedule.is_available !== false,
       })
@@ -215,16 +215,27 @@ export const getFormattedSchedule = async (doctorId: string) => {
 };
 
 /**
- * Create default schedule for a doctor (Monday-Saturday, 9 AM - 11 PM)
+ * Create default schedule for new doctor (all days, 9 AM - 11 PM)
  */
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
-    const scheduleData = DEFAULT_SCHEDULE_DAYS.map((day_of_week) => ({
+    const defaultSchedules = [
+      { day_of_week: 0, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Sunday
+      { day_of_week: 1, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Monday
+      { day_of_week: 2, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Tuesday
+      { day_of_week: 3, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Wednesday
+      { day_of_week: 4, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Thursday
+      { day_of_week: 5, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Friday
+      { day_of_week: 6, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Saturday
+    ];
+
+    // Direct insert without checking for existing schedules
+    const scheduleData = defaultSchedules.map(schedule => ({
       doctor_id: doctorId,
-      day_of_week,
-      start_time: DEFAULT_SCHEDULE_START,
-      end_time: DEFAULT_SCHEDULE_END,
-      slot_duration_minutes: 30,
+      day_of_week: schedule.day_of_week,
+      start_time: schedule.start_time,
+      end_time: schedule.end_time,
+      slot_duration_minutes: 15,
       max_patients_per_slot: 1,
       is_available: true,
     }));

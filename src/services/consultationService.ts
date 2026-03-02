@@ -172,6 +172,22 @@ class ConsultationService {
   }
 
   /**
+   * Mark an appointment as in progress once both participants are admitted to the session.
+   */
+  async markAppointmentInProgress(appointmentId: string): Promise<void> {
+    const { error } = await supabase
+      .from('appointments')
+      .update({ status: 'in_progress' })
+      .eq('id', appointmentId)
+      .in('status', ['confirmed', 'in_progress']);
+
+    if (error) {
+      console.error('[ConsultationService] Error updating appointment to in_progress:', error);
+      throw new Error(`Failed to update appointment status: ${error.message}`);
+    }
+  }
+
+  /**
    * Send a message in a consultation
    */
   async sendMessage(

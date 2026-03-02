@@ -14,82 +14,159 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
-
-const services = [
-  {
-    id: 'video',
-    icon: Video,
-    title: 'Video Consultation',
-    description: 'Face-to-face consultations with certified doctors through high-quality video calls. Get diagnosed, receive prescriptions, and get follow-up care.',
-    features: ['HD video quality', 'Screen sharing', 'Recording available', 'Cross-device support'],
-    color: 'bg-primary',
-  },
-  {
-    id: 'audio',
-    icon: Phone,
-    title: 'Audio Consultation',
-    description: 'When video isn\'t possible, connect with your doctor through secure voice calls. Perfect for follow-ups and quick consultations.',
-    features: ['Crystal clear audio', 'Low bandwidth', 'Privacy focused', 'Quick connect'],
-    color: 'bg-accent',
-  },
-  {
-    id: 'chat',
-    icon: MessageSquare,
-    title: 'Secure Chat',
-    description: 'Chat with your doctor during consultations. Share symptoms, ask questions, and receive guidance in real-time.',
-    features: ['End-to-end encrypted', 'File sharing', 'Image upload', 'Chat history'],
-    color: 'bg-success',
-  },
-  {
-    id: 'booking',
-    icon: Calendar,
-    title: 'Easy Booking',
-    description: 'Book appointments with general practitioners or specialists in just a few clicks. Choose your preferred time slot.',
-    features: ['Instant confirmation', 'Calendar sync', 'Reminders', 'Reschedule option'],
-    color: 'bg-warning',
-  },
-  {
-    id: 'records',
-    icon: FileText,
-    title: 'Digital Health Records',
-    description: 'Access your consultation history, prescriptions, and medical records anytime. Securely stored and always available.',
-    features: ['Secure storage', 'Easy access', 'Download option', 'Share with doctors'],
-    color: 'bg-primary',
-  },
-  {
-    id: 'specialist',
-    icon: Users,
-    title: 'Specialist Clinics',
-    description: 'Access our network of specialist e-clinics. Book appointments with cardiologists, dermatologists, pediatricians, and more.',
-    features: ['15+ specialties', 'Expert doctors', 'Priority booking', 'Second opinions'],
-    color: 'bg-accent',
-  },
-];
-
-const processSteps = [
-  {
-    step: '01',
-    title: 'Create Account',
-    description: 'Sign up for free and complete your health profile',
-  },
-  {
-    step: '02',
-    title: 'Choose Doctor',
-    description: 'Browse specialists and select based on your needs',
-  },
-  {
-    step: '03',
-    title: 'Book Appointment',
-    description: 'Pick a convenient time slot and confirm booking',
-  },
-  {
-    step: '04',
-    title: 'Consult Online',
-    description: 'Connect via video, audio, or chat for your consultation',
-  },
-];
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useLocaleFormatter } from '@/lib/locale';
 
 export default function ServicesPage() {
+  const { t } = useLanguage();
+  const { formatNumber } = useLocaleFormatter();
+
+  const services = [
+    {
+      id: 'video',
+      icon: Video,
+      title: t('services.items.video.title', 'Video Consultation'),
+      description: t(
+        'services.items.video.description',
+        'Face-to-face consultations with certified doctors through high-quality video calls. Get diagnosed, receive prescriptions, and get follow-up care.',
+      ),
+      features: [
+        t('services.items.video.features.1', 'HD video quality'),
+        t('services.items.video.features.2', 'Screen sharing'),
+        t('services.items.video.features.3', 'Recording available'),
+        t('services.items.video.features.4', 'Cross-device support'),
+      ],
+      color: 'bg-primary',
+    },
+    {
+      id: 'audio',
+      icon: Phone,
+      title: t('services.items.audio.title', 'Audio Consultation'),
+      description: t(
+        'services.items.audio.description',
+        "When video isn't possible, connect with your doctor through secure voice calls. Perfect for follow-ups and quick consultations.",
+      ),
+      features: [
+        t('services.items.audio.features.1', 'Crystal clear audio'),
+        t('services.items.audio.features.2', 'Low bandwidth'),
+        t('services.items.audio.features.3', 'Privacy focused'),
+        t('services.items.audio.features.4', 'Quick connect'),
+      ],
+      color: 'bg-accent',
+    },
+    {
+      id: 'chat',
+      icon: MessageSquare,
+      title: t('services.items.chat.title', 'Secure Chat'),
+      description: t(
+        'services.items.chat.description',
+        'Chat with your doctor during consultations. Share symptoms, ask questions, and receive guidance in real-time.',
+      ),
+      features: [
+        t('services.items.chat.features.1', 'End-to-end encrypted'),
+        t('services.items.chat.features.2', 'File sharing'),
+        t('services.items.chat.features.3', 'Image upload'),
+        t('services.items.chat.features.4', 'Chat history'),
+      ],
+      color: 'bg-success',
+    },
+    {
+      id: 'booking',
+      icon: Calendar,
+      title: t('services.items.booking.title', 'Easy Booking'),
+      description: t(
+        'services.items.booking.description',
+        'Book appointments with general practitioners or specialists in just a few clicks. Choose your preferred time slot.',
+      ),
+      features: [
+        t('services.items.booking.features.1', 'Instant confirmation'),
+        t('services.items.booking.features.2', 'Calendar sync'),
+        t('services.items.booking.features.3', 'Reminders'),
+        t('services.items.booking.features.4', 'Reschedule option'),
+      ],
+      color: 'bg-warning',
+    },
+    {
+      id: 'records',
+      icon: FileText,
+      title: t('services.items.records.title', 'Digital Health Records'),
+      description: t(
+        'services.items.records.description',
+        'Access your consultation history, prescriptions, and medical records anytime. Securely stored and always available.',
+      ),
+      features: [
+        t('services.items.records.features.1', 'Secure storage'),
+        t('services.items.records.features.2', 'Easy access'),
+        t('services.items.records.features.3', 'Download option'),
+        t('services.items.records.features.4', 'Share with doctors'),
+      ],
+      color: 'bg-primary',
+    },
+    {
+      id: 'specialist',
+      icon: Users,
+      title: t('services.items.specialist.title', 'Specialist Clinics'),
+      description: t(
+        'services.items.specialist.description',
+        'Access our network of specialist e-clinics. Book appointments with cardiologists, dermatologists, pediatricians, and more.',
+      ),
+      features: [
+        t('services.items.specialist.features.1', '{count}+ specialties').replace('{count}', formatNumber(15)),
+        t('services.items.specialist.features.2', 'Expert doctors'),
+        t('services.items.specialist.features.3', 'Priority booking'),
+        t('services.items.specialist.features.4', 'Second opinions'),
+      ],
+      color: 'bg-accent',
+    },
+  ];
+
+  const processSteps = [
+    {
+      step: '01',
+      title: t('services.steps.1.title', 'Create Account'),
+      description: t('services.steps.1.description', 'Sign up for free and complete your health profile'),
+    },
+    {
+      step: '02',
+      title: t('services.steps.2.title', 'Choose Doctor'),
+      description: t('services.steps.2.description', 'Browse specialists and select based on your needs'),
+    },
+    {
+      step: '03',
+      title: t('services.steps.3.title', 'Book Appointment'),
+      description: t('services.steps.3.description', 'Pick a convenient time slot and confirm booking'),
+    },
+    {
+      step: '04',
+      title: t('services.steps.4.title', 'Consult Online'),
+      description: t(
+        'services.steps.4.description',
+        'Connect via video, audio, or chat for your consultation',
+      ),
+    },
+  ];
+
+  const securityItems = [
+    {
+      icon: Shield,
+      title: t('services.security.items.encryption.title', 'End-to-End Encryption'),
+      desc: t('services.security.items.encryption.description', 'All communications are fully encrypted'),
+    },
+    {
+      icon: Clock,
+      title: t('services.security.items.compliance.title', 'HIPAA Compliant'),
+      desc: t('services.security.items.compliance.description', 'Meeting healthcare data protection standards'),
+    },
+    {
+      icon: Users,
+      title: t('services.security.items.access.title', 'Role-Based Access'),
+      desc: t(
+        'services.security.items.access.description',
+        'Only authorized personnel can access your data',
+      ),
+    },
+  ];
+
   return (
     <Layout>
       {/* Hero */}
@@ -100,12 +177,17 @@ export default function ServicesPage() {
             animate={{ opacity: 1, y: 0 }}
             className="text-center max-w-3xl mx-auto"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">Our Services</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">
+              {t('services.hero.badge', 'Our Services')}
+            </span>
             <h1 className="text-4xl md:text-5xl font-bold mt-3 mb-6">
-              Comprehensive Healthcare Services
+              {t('services.hero.title', 'Comprehensive Healthcare Services')}
             </h1>
             <p className="text-lg text-muted-foreground">
-              Experience modern healthcare with our suite of telemedicine services designed for your convenience, comfort, and peace of mind.
+              {t(
+                'services.hero.description',
+                'Experience modern healthcare with our suite of telemedicine services designed for your convenience, comfort, and peace of mind.',
+              )}
             </p>
           </motion.div>
         </div>
@@ -152,12 +234,17 @@ export default function ServicesPage() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <span className="text-primary font-medium text-sm uppercase tracking-wider">How It Works</span>
+            <span className="text-primary font-medium text-sm uppercase tracking-wider">
+              {t('services.howItWorks.badge', 'How It Works')}
+            </span>
             <h2 className="text-3xl md:text-4xl font-bold mt-3 mb-4">
-              Getting Started is Easy
+              {t('services.howItWorks.title', 'Getting Started is Easy')}
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Follow these simple steps to start your online healthcare journey
+              {t(
+                'services.howItWorks.description',
+                'Follow these simple steps to start your online healthcare journey',
+              )}
             </p>
           </motion.div>
 
@@ -189,19 +276,20 @@ export default function ServicesPage() {
               whileInView={{ opacity: 1, x: 0 }}
               viewport={{ once: true }}
             >
-              <span className="text-primary font-medium text-sm uppercase tracking-wider">Security & Privacy</span>
+              <span className="text-primary font-medium text-sm uppercase tracking-wider">
+                {t('services.security.badge', 'Security & Privacy')}
+              </span>
               <h2 className="text-3xl md:text-4xl font-bold mt-3 mb-6">
-                Your Data is Safe With Us
+                {t('services.security.title', 'Your Data is Safe With Us')}
               </h2>
               <p className="text-muted-foreground mb-8">
-                We take your privacy seriously. All consultations are encrypted end-to-end, and your health data is protected with enterprise-grade security measures.
+                {t(
+                  'services.security.description',
+                  'We take your privacy seriously. All consultations are encrypted end-to-end, and your health data is protected with enterprise-grade security measures.',
+                )}
               </p>
               <div className="space-y-4">
-                {[
-                  { icon: Shield, title: 'End-to-End Encryption', desc: 'All communications are fully encrypted' },
-                  { icon: Clock, title: 'HIPAA Compliant', desc: 'Meeting healthcare data protection standards' },
-                  { icon: Users, title: 'Role-Based Access', desc: 'Only authorized personnel can access your data' },
-                ].map((item) => (
+                {securityItems.map((item) => (
                   <div key={item.title} className="flex items-start gap-4">
                     <div className="w-10 h-10 rounded-xl bg-primary-light flex items-center justify-center shrink-0">
                       <item.icon className="w-5 h-5 text-primary" />
@@ -238,21 +326,24 @@ export default function ServicesPage() {
             viewport={{ once: true }}
           >
             <h2 className="text-3xl md:text-4xl font-bold mb-4">
-              Ready to Get Started?
+              {t('services.cta.title', 'Ready to Get Started?')}
             </h2>
             <p className="text-muted-foreground mb-8 max-w-xl mx-auto">
-              Join thousands of patients who trust MyEdoctor for their healthcare needs.
+              {t(
+                'services.cta.description',
+                'Join thousands of patients who trust MyEdoctor for their healthcare needs.',
+              )}
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link to="/booking">
                 <Button variant="gradient" size="lg">
-                  Book Consultation
+                  {t('services.cta.bookConsultation', 'Book Consultation')}
                   <ArrowRight className="w-4 h-4" />
                 </Button>
               </Link>
               <Link to="/auth?mode=register">
                 <Button variant="outline" size="lg">
-                  Create Account
+                  {t('services.cta.createAccount', 'Create Account')}
                 </Button>
               </Link>
             </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check, Phone, MapPin, Upload } from 'lucide-react';
@@ -12,18 +12,211 @@ import { toast } from '@/components/ui/use-toast';
 import { createDefaultSchedule } from '@/services/scheduleService';
 import { smsService } from '@/services/smsService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
+import { useLocaleFormatter } from '@/lib/locale';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 type AuthMode = 'login' | 'register' | 'verify';
 type UserRole = 'patient' | 'doctor';
+type CountryPhoneCode = { iso: string; name: string; dialCode: string };
 
-const benefits = [
-  'Access to 50+ certified specialists',
-  'Secure video & audio consultations',
-  'Easy appointment booking',
-  'Digital prescriptions & records',
+const COUNTRY_PHONE_CODES: CountryPhoneCode[] = [
+  { iso: 'AF', name: 'Afghanistan', dialCode: '+93' },
+  { iso: 'AL', name: 'Albania', dialCode: '+355' },
+  { iso: 'DZ', name: 'Algeria', dialCode: '+213' },
+  { iso: 'AD', name: 'Andorra', dialCode: '+376' },
+  { iso: 'AO', name: 'Angola', dialCode: '+244' },
+  { iso: 'AR', name: 'Argentina', dialCode: '+54' },
+  { iso: 'AM', name: 'Armenia', dialCode: '+374' },
+  { iso: 'AU', name: 'Australia', dialCode: '+61' },
+  { iso: 'AT', name: 'Austria', dialCode: '+43' },
+  { iso: 'AZ', name: 'Azerbaijan', dialCode: '+994' },
+  { iso: 'BH', name: 'Bahrain', dialCode: '+973' },
+  { iso: 'BD', name: 'Bangladesh', dialCode: '+880' },
+  { iso: 'BY', name: 'Belarus', dialCode: '+375' },
+  { iso: 'BE', name: 'Belgium', dialCode: '+32' },
+  { iso: 'BZ', name: 'Belize', dialCode: '+501' },
+  { iso: 'BJ', name: 'Benin', dialCode: '+229' },
+  { iso: 'BT', name: 'Bhutan', dialCode: '+975' },
+  { iso: 'BO', name: 'Bolivia', dialCode: '+591' },
+  { iso: 'BA', name: 'Bosnia and Herzegovina', dialCode: '+387' },
+  { iso: 'BW', name: 'Botswana', dialCode: '+267' },
+  { iso: 'BR', name: 'Brazil', dialCode: '+55' },
+  { iso: 'BN', name: 'Brunei', dialCode: '+673' },
+  { iso: 'BG', name: 'Bulgaria', dialCode: '+359' },
+  { iso: 'BF', name: 'Burkina Faso', dialCode: '+226' },
+  { iso: 'BI', name: 'Burundi', dialCode: '+257' },
+  { iso: 'KH', name: 'Cambodia', dialCode: '+855' },
+  { iso: 'CM', name: 'Cameroon', dialCode: '+237' },
+  { iso: 'CA', name: 'Canada', dialCode: '+1' },
+  { iso: 'CV', name: 'Cape Verde', dialCode: '+238' },
+  { iso: 'CF', name: 'Central African Republic', dialCode: '+236' },
+  { iso: 'TD', name: 'Chad', dialCode: '+235' },
+  { iso: 'CL', name: 'Chile', dialCode: '+56' },
+  { iso: 'CN', name: 'China', dialCode: '+86' },
+  { iso: 'CO', name: 'Colombia', dialCode: '+57' },
+  { iso: 'KM', name: 'Comoros', dialCode: '+269' },
+  { iso: 'CG', name: 'Congo', dialCode: '+242' },
+  { iso: 'CD', name: 'Congo (DRC)', dialCode: '+243' },
+  { iso: 'CR', name: 'Costa Rica', dialCode: '+506' },
+  { iso: 'CI', name: "Cote d'Ivoire", dialCode: '+225' },
+  { iso: 'HR', name: 'Croatia', dialCode: '+385' },
+  { iso: 'CU', name: 'Cuba', dialCode: '+53' },
+  { iso: 'CY', name: 'Cyprus', dialCode: '+357' },
+  { iso: 'CZ', name: 'Czech Republic', dialCode: '+420' },
+  { iso: 'DK', name: 'Denmark', dialCode: '+45' },
+  { iso: 'DJ', name: 'Djibouti', dialCode: '+253' },
+  { iso: 'DO', name: 'Dominican Republic', dialCode: '+1' },
+  { iso: 'EC', name: 'Ecuador', dialCode: '+593' },
+  { iso: 'EG', name: 'Egypt', dialCode: '+20' },
+  { iso: 'SV', name: 'El Salvador', dialCode: '+503' },
+  { iso: 'GQ', name: 'Equatorial Guinea', dialCode: '+240' },
+  { iso: 'ER', name: 'Eritrea', dialCode: '+291' },
+  { iso: 'EE', name: 'Estonia', dialCode: '+372' },
+  { iso: 'SZ', name: 'Eswatini', dialCode: '+268' },
+  { iso: 'ET', name: 'Ethiopia', dialCode: '+251' },
+  { iso: 'FJ', name: 'Fiji', dialCode: '+679' },
+  { iso: 'FI', name: 'Finland', dialCode: '+358' },
+  { iso: 'FR', name: 'France', dialCode: '+33' },
+  { iso: 'GA', name: 'Gabon', dialCode: '+241' },
+  { iso: 'GM', name: 'Gambia', dialCode: '+220' },
+  { iso: 'GE', name: 'Georgia', dialCode: '+995' },
+  { iso: 'DE', name: 'Germany', dialCode: '+49' },
+  { iso: 'GH', name: 'Ghana', dialCode: '+233' },
+  { iso: 'GR', name: 'Greece', dialCode: '+30' },
+  { iso: 'GT', name: 'Guatemala', dialCode: '+502' },
+  { iso: 'GN', name: 'Guinea', dialCode: '+224' },
+  { iso: 'GW', name: 'Guinea-Bissau', dialCode: '+245' },
+  { iso: 'GY', name: 'Guyana', dialCode: '+592' },
+  { iso: 'HT', name: 'Haiti', dialCode: '+509' },
+  { iso: 'HN', name: 'Honduras', dialCode: '+504' },
+  { iso: 'HK', name: 'Hong Kong', dialCode: '+852' },
+  { iso: 'HU', name: 'Hungary', dialCode: '+36' },
+  { iso: 'IS', name: 'Iceland', dialCode: '+354' },
+  { iso: 'IN', name: 'India', dialCode: '+91' },
+  { iso: 'ID', name: 'Indonesia', dialCode: '+62' },
+  { iso: 'IR', name: 'Iran', dialCode: '+98' },
+  { iso: 'IQ', name: 'Iraq', dialCode: '+964' },
+  { iso: 'IE', name: 'Ireland', dialCode: '+353' },
+  { iso: 'IL', name: 'Israel', dialCode: '+972' },
+  { iso: 'IT', name: 'Italy', dialCode: '+39' },
+  { iso: 'JM', name: 'Jamaica', dialCode: '+1' },
+  { iso: 'JP', name: 'Japan', dialCode: '+81' },
+  { iso: 'JO', name: 'Jordan', dialCode: '+962' },
+  { iso: 'KZ', name: 'Kazakhstan', dialCode: '+7' },
+  { iso: 'KE', name: 'Kenya', dialCode: '+254' },
+  { iso: 'KI', name: 'Kiribati', dialCode: '+686' },
+  { iso: 'KW', name: 'Kuwait', dialCode: '+965' },
+  { iso: 'KG', name: 'Kyrgyzstan', dialCode: '+996' },
+  { iso: 'LA', name: 'Laos', dialCode: '+856' },
+  { iso: 'LV', name: 'Latvia', dialCode: '+371' },
+  { iso: 'LB', name: 'Lebanon', dialCode: '+961' },
+  { iso: 'LS', name: 'Lesotho', dialCode: '+266' },
+  { iso: 'LR', name: 'Liberia', dialCode: '+231' },
+  { iso: 'LY', name: 'Libya', dialCode: '+218' },
+  { iso: 'LI', name: 'Liechtenstein', dialCode: '+423' },
+  { iso: 'LT', name: 'Lithuania', dialCode: '+370' },
+  { iso: 'LU', name: 'Luxembourg', dialCode: '+352' },
+  { iso: 'MO', name: 'Macau', dialCode: '+853' },
+  { iso: 'MG', name: 'Madagascar', dialCode: '+261' },
+  { iso: 'MW', name: 'Malawi', dialCode: '+265' },
+  { iso: 'MY', name: 'Malaysia', dialCode: '+60' },
+  { iso: 'MV', name: 'Maldives', dialCode: '+960' },
+  { iso: 'ML', name: 'Mali', dialCode: '+223' },
+  { iso: 'MT', name: 'Malta', dialCode: '+356' },
+  { iso: 'MH', name: 'Marshall Islands', dialCode: '+692' },
+  { iso: 'MR', name: 'Mauritania', dialCode: '+222' },
+  { iso: 'MU', name: 'Mauritius', dialCode: '+230' },
+  { iso: 'MX', name: 'Mexico', dialCode: '+52' },
+  { iso: 'FM', name: 'Micronesia', dialCode: '+691' },
+  { iso: 'MD', name: 'Moldova', dialCode: '+373' },
+  { iso: 'MC', name: 'Monaco', dialCode: '+377' },
+  { iso: 'MN', name: 'Mongolia', dialCode: '+976' },
+  { iso: 'ME', name: 'Montenegro', dialCode: '+382' },
+  { iso: 'MA', name: 'Morocco', dialCode: '+212' },
+  { iso: 'MZ', name: 'Mozambique', dialCode: '+258' },
+  { iso: 'MM', name: 'Myanmar', dialCode: '+95' },
+  { iso: 'NA', name: 'Namibia', dialCode: '+264' },
+  { iso: 'NR', name: 'Nauru', dialCode: '+674' },
+  { iso: 'NP', name: 'Nepal', dialCode: '+977' },
+  { iso: 'NL', name: 'Netherlands', dialCode: '+31' },
+  { iso: 'NZ', name: 'New Zealand', dialCode: '+64' },
+  { iso: 'NI', name: 'Nicaragua', dialCode: '+505' },
+  { iso: 'NE', name: 'Niger', dialCode: '+227' },
+  { iso: 'NG', name: 'Nigeria', dialCode: '+234' },
+  { iso: 'KP', name: 'North Korea', dialCode: '+850' },
+  { iso: 'MK', name: 'North Macedonia', dialCode: '+389' },
+  { iso: 'NO', name: 'Norway', dialCode: '+47' },
+  { iso: 'OM', name: 'Oman', dialCode: '+968' },
+  { iso: 'PK', name: 'Pakistan', dialCode: '+92' },
+  { iso: 'PW', name: 'Palau', dialCode: '+680' },
+  { iso: 'PS', name: 'Palestine', dialCode: '+970' },
+  { iso: 'PA', name: 'Panama', dialCode: '+507' },
+  { iso: 'PG', name: 'Papua New Guinea', dialCode: '+675' },
+  { iso: 'PY', name: 'Paraguay', dialCode: '+595' },
+  { iso: 'PE', name: 'Peru', dialCode: '+51' },
+  { iso: 'PH', name: 'Philippines', dialCode: '+63' },
+  { iso: 'PL', name: 'Poland', dialCode: '+48' },
+  { iso: 'PT', name: 'Portugal', dialCode: '+351' },
+  { iso: 'QA', name: 'Qatar', dialCode: '+974' },
+  { iso: 'RO', name: 'Romania', dialCode: '+40' },
+  { iso: 'RU', name: 'Russia', dialCode: '+7' },
+  { iso: 'RW', name: 'Rwanda', dialCode: '+250' },
+  { iso: 'KN', name: 'Saint Kitts and Nevis', dialCode: '+1' },
+  { iso: 'LC', name: 'Saint Lucia', dialCode: '+1' },
+  { iso: 'VC', name: 'Saint Vincent and the Grenadines', dialCode: '+1' },
+  { iso: 'WS', name: 'Samoa', dialCode: '+685' },
+  { iso: 'SM', name: 'San Marino', dialCode: '+378' },
+  { iso: 'ST', name: 'Sao Tome and Principe', dialCode: '+239' },
+  { iso: 'SA', name: 'Saudi Arabia', dialCode: '+966' },
+  { iso: 'SN', name: 'Senegal', dialCode: '+221' },
+  { iso: 'RS', name: 'Serbia', dialCode: '+381' },
+  { iso: 'SC', name: 'Seychelles', dialCode: '+248' },
+  { iso: 'SL', name: 'Sierra Leone', dialCode: '+232' },
+  { iso: 'SG', name: 'Singapore', dialCode: '+65' },
+  { iso: 'SK', name: 'Slovakia', dialCode: '+421' },
+  { iso: 'SI', name: 'Slovenia', dialCode: '+386' },
+  { iso: 'SB', name: 'Solomon Islands', dialCode: '+677' },
+  { iso: 'SO', name: 'Somalia', dialCode: '+252' },
+  { iso: 'ZA', name: 'South Africa', dialCode: '+27' },
+  { iso: 'KR', name: 'South Korea', dialCode: '+82' },
+  { iso: 'SS', name: 'South Sudan', dialCode: '+211' },
+  { iso: 'ES', name: 'Spain', dialCode: '+34' },
+  { iso: 'LK', name: 'Sri Lanka', dialCode: '+94' },
+  { iso: 'SD', name: 'Sudan', dialCode: '+249' },
+  { iso: 'SR', name: 'Suriname', dialCode: '+597' },
+  { iso: 'SE', name: 'Sweden', dialCode: '+46' },
+  { iso: 'CH', name: 'Switzerland', dialCode: '+41' },
+  { iso: 'SY', name: 'Syria', dialCode: '+963' },
+  { iso: 'TW', name: 'Taiwan', dialCode: '+886' },
+  { iso: 'TJ', name: 'Tajikistan', dialCode: '+992' },
+  { iso: 'TZ', name: 'Tanzania', dialCode: '+255' },
+  { iso: 'TH', name: 'Thailand', dialCode: '+66' },
+  { iso: 'TL', name: 'Timor-Leste', dialCode: '+670' },
+  { iso: 'TG', name: 'Togo', dialCode: '+228' },
+  { iso: 'TO', name: 'Tonga', dialCode: '+676' },
+  { iso: 'TT', name: 'Trinidad and Tobago', dialCode: '+1' },
+  { iso: 'TN', name: 'Tunisia', dialCode: '+216' },
+  { iso: 'TR', name: 'Turkey', dialCode: '+90' },
+  { iso: 'TM', name: 'Turkmenistan', dialCode: '+993' },
+  { iso: 'TV', name: 'Tuvalu', dialCode: '+688' },
+  { iso: 'UG', name: 'Uganda', dialCode: '+256' },
+  { iso: 'UA', name: 'Ukraine', dialCode: '+380' },
+  { iso: 'AE', name: 'United Arab Emirates', dialCode: '+971' },
+  { iso: 'GB', name: 'United Kingdom', dialCode: '+44' },
+  { iso: 'US', name: 'United States', dialCode: '+1' },
+  { iso: 'UY', name: 'Uruguay', dialCode: '+598' },
+  { iso: 'UZ', name: 'Uzbekistan', dialCode: '+998' },
+  { iso: 'VU', name: 'Vanuatu', dialCode: '+678' },
+  { iso: 'VA', name: 'Vatican City', dialCode: '+379' },
+  { iso: 'VE', name: 'Venezuela', dialCode: '+58' },
+  { iso: 'VN', name: 'Vietnam', dialCode: '+84' },
+  { iso: 'YE', name: 'Yemen', dialCode: '+967' },
+  { iso: 'ZM', name: 'Zambia', dialCode: '+260' },
+  { iso: 'ZW', name: 'Zimbabwe', dialCode: '+263' },
 ];
 
 export default function AuthPage() {
+  const { t } = useLanguage();
   const [searchParams] = useSearchParams();
   const initialMode = searchParams.get('mode') === 'register' ? 'register' : 'login';
 
@@ -34,7 +227,8 @@ export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('+234');
+  const [phoneCountryIso, setPhoneCountryIso] = useState('NG');
+  const [phoneLocalNumber, setPhoneLocalNumber] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [pendingUserData, setPendingUserData] = useState<any>(null);
   const navigate = useNavigate();
@@ -63,6 +257,30 @@ export default function AuthPage() {
   const [doctorExperience, setDoctorExperience] = useState('');
   const [consultationRate, setConsultationRate] = useState('');
   const [doctorConsentAgreed, setDoctorConsentAgreed] = useState(false);
+  const [consultationLanguages, setConsultationLanguages] = useState<string[]>([]);
+  const profilePictureInputRef = useRef<HTMLInputElement | null>(null);
+  const medicalLicenseInputRef = useRef<HTMLInputElement | null>(null);
+  const { formatCurrency, formatNumber } = useLocaleFormatter();
+  const consultationLanguageOptions = [
+    { value: 'english', label: t('auth.values.languages.english', 'English') },
+    { value: 'hausa', label: t('auth.values.languages.hausa', 'Hausa') },
+    { value: 'igbo', label: t('auth.values.languages.igbo', 'Igbo') },
+    { value: 'yoruba', label: t('auth.values.languages.yoruba', 'Yoruba') },
+    { value: 'arabic', label: t('auth.values.languages.arabic', 'Arabic') },
+    { value: 'swahili', label: t('auth.values.languages.swahili', 'Swahili') },
+    { value: 'fulfulde', label: t('auth.values.languages.fulfulde', 'Fulfulde') },
+    { value: 'tiv', label: t('auth.values.languages.tiv', 'Tiv') },
+    { value: 'pidgin_english', label: t('auth.values.languages.pidgin_english', 'Pidgin English') },
+    { value: 'french', label: t('auth.values.languages.french', 'French') },
+    { value: 'spanish', label: t('auth.values.languages.spanish', 'Spanish') },
+    { value: 'portuguese', label: t('auth.values.languages.portuguese', 'Portuguese') },
+  ];
+  const benefits = [
+    `${t('auth.benefits.specialistsAccessPrefix', 'Access to')} ${formatNumber(50)}+ ${t('auth.benefits.certifiedSpecialists', 'certified specialists')}`,
+    t('auth.benefits.secureConsultations', 'Secure video & audio consultations'),
+    t('auth.benefits.easyBooking', 'Easy appointment booking'),
+    t('auth.benefits.digitalRecords', 'Digital prescriptions & records'),
+  ];
 
   const isGeneralPracticeSpecialty = (value: string) => {
     const normalized = value.trim().toLowerCase();
@@ -80,6 +298,13 @@ export default function AuthPage() {
   const specialistRequiresRate = !!selectedDoctorSpecialty && !isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const generalPractitionerSelected = !!selectedDoctorSpecialty && isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const parsedConsultationRate = parseConsultationRate(consultationRate);
+  const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
+  const selectedPhoneDialCode = selectedPhoneCountry?.dialCode || '+234';
+  const toggleConsultationLanguage = (language: string) => {
+    setConsultationLanguages((prev) =>
+      prev.includes(language) ? prev.filter((item) => item !== language) : [...prev, language]
+    );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,10 +326,11 @@ export default function AuthPage() {
           return;
         }
 
-        const normalizedPhone = phoneNumber.trim();
+        const cleanedLocalPhone = phoneLocalNumber.replace(/\D/g, '').replace(/^0+/, '');
+        const normalizedPhone = `${selectedPhoneDialCode}${cleanedLocalPhone}`;
         const phoneDigits = normalizedPhone.replace(/\D/g, '');
-        if (!normalizedPhone || normalizedPhone === '+234' || phoneDigits.length < 13) {
-          toast({ title: 'Phone number required', description: 'Please enter a valid phone number (e.g., +2348012345678).' });
+        if (!cleanedLocalPhone || phoneDigits.length < 8) {
+          toast({ title: 'Phone number required', description: 'Please enter a valid phone number.' });
           setIsLoading(false);
           return;
         }
@@ -128,6 +354,14 @@ export default function AuthPage() {
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
               !hospitalAffiliation || !specialty || !medicalLicense || !doctorIdType || !doctorIdNumber || !doctorExperience) {
             toast({ title: 'Missing information', description: 'Please fill in all required fields and upload medical license.' });
+            setIsLoading(false);
+            return;
+          }
+          if (consultationLanguages.length === 0) {
+            toast({
+              title: t('auth.toast.consultationLanguagesRequiredTitle', 'Consultation languages required'),
+              description: t('auth.toast.consultationLanguagesRequiredDescription', 'Please select at least one consultation language.')
+            });
             setIsLoading(false);
             return;
           }
@@ -210,7 +444,7 @@ export default function AuthPage() {
               full_name: name,
               gender,
               age: parseInt(age),
-              phone_number: phoneNumber,
+              phone_number: normalizedPhone,
               email,
               city,
               state,
@@ -218,6 +452,7 @@ export default function AuthPage() {
               marital_status: maritalStatus,
               hospital_affiliation: hospitalAffiliation,
               specialty: resolvedSpecialty,
+              preferred_consultation_languages: consultationLanguages,
               experience: doctorExperience,
               rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '') || !parsedRate
                 ? null
@@ -244,7 +479,7 @@ export default function AuthPage() {
               full_name: name,
               gender,
               age: parseInt(age || '0') || 18,
-              phone_number: phoneNumber,
+              phone_number: normalizedPhone,
               email,
               city,
               state,
@@ -276,7 +511,7 @@ export default function AuthPage() {
           role,
           name,
           email,
-          phoneNumber,
+          phoneNumber: normalizedPhone,
           gender,
           age,
           city,
@@ -290,6 +525,7 @@ export default function AuthPage() {
           hospitalAffiliation,
           specialty,
           otherSpecialty,
+          consultationLanguages,
           doctorExperience,
           consultationRate,
           doctorConsentAgreed,
@@ -426,6 +662,7 @@ export default function AuthPage() {
                 marital_status: pendingUserData.maritalStatus,
                 hospital_affiliation: pendingUserData.hospitalAffiliation,
                 specialty: resolvedSpecialty,
+                preferred_consultation_languages: pendingUserData.consultationLanguages || [],
                 experience: pendingUserData.doctorExperience,
                 rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
                   ? null
@@ -451,6 +688,7 @@ export default function AuthPage() {
                   name: doctorPayload.full_name,
                   specialty: doctorPayload.specialty,
                   rate_per_consultation: doctorPayload.rate_per_consultation,
+                  preferred_consultation_languages: doctorPayload.preferred_consultation_languages,
                   phone: pendingUserData.phoneNumber,
                   avatar_url: profilePictureUrl || null,
                 })
@@ -567,20 +805,24 @@ export default function AuthPage() {
 
           {/* Title */}
           <h1 className="text-2xl md:text-3xl font-bold mb-2">
-            {mode === 'login' ? 'Welcome back' : mode === 'verify' ? 'Verify your email' : 'Create your account'}
+            {mode === 'login'
+              ? t('auth.title.welcomeBack', 'Welcome back')
+              : mode === 'verify'
+              ? t('auth.title.verifyEmail', 'Verify your email')
+              : t('auth.title.createAccount', 'Create your account')}
           </h1>
           <p className="text-muted-foreground mb-8">
             {mode === 'login'
-              ? 'Sign in with your email to access your health dashboard'
+              ? t('auth.subtitle.signIn', 'Sign in with your email to access your health dashboard')
               : mode === 'verify'
-              ? `Enter the verification code sent to ${email}`
-              : 'Join thousands of patients getting quality healthcare'}
+              ? `${t('auth.subtitle.enterVerificationCode', 'Enter the verification code sent to')} ${email}`
+              : t('auth.subtitle.joinPatients', 'Join thousands of patients getting quality healthcare')}
           </p>
 
           {/* Role Selection (Register only) */}
           {mode === 'register' && (
             <div className="mb-6">
-              <Label className="text-sm font-medium mb-3 block">I am a:</Label>
+              <Label className="text-sm font-medium mb-3 block">{t('auth.role.iAmA', 'I am a:')}</Label>
               <div className="flex gap-3">
                 {(['patient', 'doctor'] as UserRole[]).map((r) => (
                   <button
@@ -594,9 +836,13 @@ export default function AuthPage() {
                         : 'border-border hover:border-primary/50'
                     )}
                   >
-                    <p className="font-semibold capitalize">{r}</p>
+                    <p className="font-semibold capitalize">
+                      {r === 'patient' ? t('portal.patient', 'Patient') : t('portal.doctor', 'Doctor')}
+                    </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {r === 'patient' ? 'Book consultations' : 'Provide consultations'}
+                      {r === 'patient'
+                        ? t('auth.role.patientDescription', 'Book consultations')
+                        : t('auth.role.doctorDescription', 'Provide consultations')}
                     </p>
                   </button>
                 ))}
@@ -608,11 +854,11 @@ export default function AuthPage() {
           <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
             {mode === 'verify' ? (
               <div>
-                <Label htmlFor="verificationCode">Verification Code</Label>
+                <Label htmlFor="verificationCode">{t('auth.verification.code', 'Verification Code')}</Label>
                 <Input
                   id="verificationCode"
                   type="text"
-                  placeholder="Enter 6-digit code"
+                  placeholder={t('auth.verification.placeholder', 'Enter 6-digit code')}
                   className="h-12 text-center text-2xl tracking-widest"
                   maxLength={6}
                   required
@@ -621,7 +867,7 @@ export default function AuthPage() {
                 />
                 <div className="flex flex-col gap-2 mt-2">
                   <p className="text-sm text-muted-foreground">
-                    Didn't receive the code?{' '}
+                    {t('auth.verification.notReceived', "Didn't receive the code?")}{' '}
                     <button
                       type="button"
                       onClick={async () => {
@@ -634,11 +880,11 @@ export default function AuthPage() {
                       }}
                       className="text-primary hover:underline"
                     >
-                      Resend code
+                      {t('auth.verification.resend', 'Resend code')}
                     </button>
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Having issues?{' '}
+                    {t('auth.verification.havingIssues', 'Having issues?')}{' '}
                     <button
                       type="button"
                       onClick={() => {
@@ -649,7 +895,7 @@ export default function AuthPage() {
                       }}
                       className="text-destructive hover:underline"
                     >
-                      Start over
+                      {t('auth.verification.startOver', 'Start over')}
                     </button>
                   </p>
                 </div>
@@ -658,13 +904,13 @@ export default function AuthPage() {
               <>
                 {mode === 'register' && (
                   <div>
-                    <Label htmlFor="name">Full Name</Label>
+                    <Label htmlFor="name">{t('common.fullName', 'Full Name')}</Label>
                     <div className="relative mt-1.5">
                       <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                       <Input
                         id="name"
                         type="text"
-                        placeholder="Enter your full name"
+                        placeholder={t('auth.fields.fullNamePlaceholder', 'Enter your full name')}
                         className="pl-10 h-12"
                         required
                         value={name}
@@ -675,13 +921,13 @@ export default function AuthPage() {
                 )}
 
                 <div>
-                  <Label htmlFor="email">{mode === 'login' ? 'Email Address' : 'Email Address *'}</Label>
+                  <Label htmlFor="email">{mode === 'login' ? t('auth.fields.emailAddress', 'Email Address') : `${t('auth.fields.emailAddress', 'Email Address')} *`}</Label>
                   <div className="relative mt-1.5">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                     <Input
                       id="email"
                       type="email"
-                      placeholder={mode === 'login' ? 'Enter your email' : 'Enter your email address'}
+                      placeholder={mode === 'login' ? t('auth.fields.emailPlaceholderLogin', 'Enter your email') : t('auth.fields.emailPlaceholderRegister', 'Enter your email address')}
                       className="pl-10 h-12"
                       required={mode !== 'login' || mode === 'login'}
                       value={email}
@@ -692,36 +938,44 @@ export default function AuthPage() {
 
                 {mode !== 'login' && (
                   <div>
-                    <Label htmlFor="phoneNumber">{mode === 'register' ? 'Phone Number *' : 'Phone Number'}</Label>
-                    <div className="relative mt-1.5">
-                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                      <Input
-                        id="phoneNumber"
-                        type="tel"
-                        placeholder="+2348012345678"
-                        className="pl-10 h-12"
-                        required={mode === 'register'}
-                        value={phoneNumber}
-                        onChange={(e) => {
-                          let value = e.target.value;
-                          if (value && !value.startsWith('+234')) {
-                            value = '+234' + value.replace(/^\+?234?/, '');
-                          }
-                          setPhoneNumber(value);
-                        }}
-                      />
+                    <Label htmlFor="phoneLocalNumber">{mode === 'register' ? `${t('auth.fields.phoneNumber', 'Phone Number')} *` : t('auth.fields.phoneNumber', 'Phone Number')}</Label>
+                    <div className="mt-1.5 grid grid-cols-[170px_1fr] gap-2">
+                      <Select value={phoneCountryIso} onValueChange={setPhoneCountryIso}>
+                        <SelectTrigger className="h-12">
+                          <SelectValue placeholder={t('auth.fields.countryCode', 'Code')} />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-80">
+                          {COUNTRY_PHONE_CODES.map((countryCode) => (
+                            <SelectItem key={countryCode.iso} value={countryCode.iso}>
+                              {`${countryCode.name} (${countryCode.dialCode})`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                        <Input
+                          id="phoneLocalNumber"
+                          type="tel"
+                          placeholder={t('auth.fields.phoneLocalPlaceholder', 'Enter phone number')}
+                          className="pl-10 h-12"
+                          required={mode === 'register'}
+                          value={phoneLocalNumber}
+                          onChange={(e) => setPhoneLocalNumber(e.target.value.replace(/[^\d]/g, ''))}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
 
                 <div>
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">{t('auth.fields.password', 'Password')}</Label>
                   <div className="relative mt-1.5">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                     <Input
                       id="password"
                       type={showPassword ? 'text' : 'password'}
-                      placeholder={mode === 'register' ? 'Create a password' : 'Enter your password'}
+                      placeholder={mode === 'register' ? t('auth.fields.passwordPlaceholderRegister', 'Create a password') : t('auth.fields.passwordPlaceholderLogin', 'Enter your password')}
                       className="pl-10 pr-10 h-12"
                       required
                       value={password}
@@ -740,29 +994,29 @@ export default function AuthPage() {
                 {/* Patient Registration Fields */}
                 {mode === 'register' && role === 'patient' && (
                   <div className="space-y-4 pt-4 border-t border-border">
-                    <h3 className="text-lg font-semibold">Patient Information</h3>
+                    <h3 className="text-lg font-semibold">{t('auth.sections.patientInfo', 'Patient Information')}</h3>
                     
                     {/* Gender & Age */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <Label>Gender *</Label>
+                        <Label>{t('auth.fields.gender', 'Gender')} *</Label>
                         <Select value={gender} onValueChange={setGender}>
                           <SelectTrigger className="h-12">
-                            <SelectValue placeholder="Select gender" />
+                            <SelectValue placeholder={t('auth.fields.selectGender', 'Select gender')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="male">Male</SelectItem>
-                            <SelectItem value="female">Female</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
+                            <SelectItem value="male">{t('auth.values.gender.male', 'Male')}</SelectItem>
+                            <SelectItem value="female">{t('auth.values.gender.female', 'Female')}</SelectItem>
+                            <SelectItem value="other">{t('auth.values.gender.other', 'Other')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
-                        <Label htmlFor="age">Age *</Label>
+                        <Label htmlFor="age">{t('common.age', 'Age')} *</Label>
                         <Input
                           id="age"
                           type="number"
-                          placeholder="Age"
+                          placeholder={t('common.age', 'Age')}
                           className="h-12"
                           required
                           value={age}
@@ -774,10 +1028,10 @@ export default function AuthPage() {
                     {/* Location */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <Label htmlFor="city">City *</Label>
+                        <Label htmlFor="city">{t('auth.fields.city', 'City')} *</Label>
                         <Input
                           id="city"
-                          placeholder="City"
+                          placeholder={t('auth.fields.city', 'City')}
                           className="h-12"
                           required
                           value={city}
@@ -785,10 +1039,10 @@ export default function AuthPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="state">State *</Label>
+                        <Label htmlFor="state">{t('auth.fields.state', 'State')} *</Label>
                         <Input
                           id="state"
-                          placeholder="State"
+                          placeholder={t('auth.fields.state', 'State')}
                           className="h-12"
                           required
                           value={state}
@@ -796,10 +1050,10 @@ export default function AuthPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="country">Country *</Label>
+                        <Label htmlFor="country">{t('auth.fields.country', 'Country')} *</Label>
                         <Input
                           id="country"
-                          placeholder="Country"
+                          placeholder={t('auth.fields.country', 'Country')}
                           className="h-12"
                           required
                           value={country}
@@ -810,16 +1064,16 @@ export default function AuthPage() {
 
                     {/* Marital Status */}
                     <div>
-                      <Label>Marital Status *</Label>
+                      <Label>{t('auth.fields.maritalStatus', 'Marital Status')} *</Label>
                       <Select value={maritalStatus} onValueChange={setMaritalStatus}>
                         <SelectTrigger className="h-12">
-                          <SelectValue placeholder="Select marital status" />
+                          <SelectValue placeholder={t('auth.fields.selectMaritalStatus', 'Select marital status')} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="single">Single</SelectItem>
-                          <SelectItem value="married">Married</SelectItem>
-                          <SelectItem value="divorced">Divorced</SelectItem>
-                          <SelectItem value="widowed">Widowed</SelectItem>
+                          <SelectItem value="single">{t('auth.values.marital.single', 'Single')}</SelectItem>
+                          <SelectItem value="married">{t('auth.values.marital.married', 'Married')}</SelectItem>
+                          <SelectItem value="divorced">{t('auth.values.marital.divorced', 'Divorced')}</SelectItem>
+                          <SelectItem value="widowed">{t('auth.values.marital.widowed', 'Widowed')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -827,10 +1081,10 @@ export default function AuthPage() {
                     {/* Emergency Contact */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <Label htmlFor="emergencyContactName">Emergency Contact Name *</Label>
+                        <Label htmlFor="emergencyContactName">{t('auth.fields.emergencyContactName', 'Emergency Contact Name')} *</Label>
                         <Input
                           id="emergencyContactName"
-                          placeholder="Contact name"
+                          placeholder={t('auth.fields.contactName', 'Contact name')}
                           className="h-12"
                           required
                           value={emergencyContactName}
@@ -838,11 +1092,11 @@ export default function AuthPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="emergencyContactPhone">Emergency Contact Phone *</Label>
+                        <Label htmlFor="emergencyContactPhone">{t('auth.fields.emergencyContactPhone', 'Emergency Contact Phone')} *</Label>
                         <Input
                           id="emergencyContactPhone"
                           type="tel"
-                          placeholder="Contact phone"
+                          placeholder={t('auth.fields.contactPhone', 'Contact phone')}
                           className="h-12"
                           required
                           value={emergencyContactPhone}
@@ -854,26 +1108,26 @@ export default function AuthPage() {
                     {/* Identification */}
                     <div className="space-y-4">
                       <div>
-                        <Label>Identification Type *</Label>
+                        <Label>{t('auth.fields.identificationType', 'Identification Type')} *</Label>
                         <Select value={identificationType} onValueChange={setIdentificationType}>
                           <SelectTrigger className="h-12">
-                            <SelectValue placeholder="Select ID type" />
+                            <SelectValue placeholder={t('auth.fields.selectIdType', 'Select ID type')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="nin">National Identification Number (NIN)</SelectItem>
-                            <SelectItem value="student_id">Student ID Card</SelectItem>
-                            <SelectItem value="passport">International Passport</SelectItem>
-                            <SelectItem value="drivers_license">National Driver's License</SelectItem>
-                            <SelectItem value="voters_card">Voter's Card</SelectItem>
-                            <SelectItem value="hospital_id">Hospital / HMO ID Card</SelectItem>
+                            <SelectItem value="nin">{t('auth.values.id.nin', 'National Identification Number (NIN)')}</SelectItem>
+                            <SelectItem value="student_id">{t('auth.values.id.studentId', 'Student ID Card')}</SelectItem>
+                            <SelectItem value="passport">{t('auth.values.id.passport', 'International Passport')}</SelectItem>
+                            <SelectItem value="drivers_license">{t('auth.values.id.driversLicense', "National Driver's License")}</SelectItem>
+                            <SelectItem value="voters_card">{t('auth.values.id.votersCard', "Voter's Card")}</SelectItem>
+                            <SelectItem value="hospital_id">{t('auth.values.id.hospitalCard', 'Hospital / HMO ID Card')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
-                        <Label htmlFor="identificationNumber">Identification Number *</Label>
+                        <Label htmlFor="identificationNumber">{t('auth.fields.identificationNumber', 'Identification Number')} *</Label>
                         <Input
                           id="identificationNumber"
-                          placeholder="Enter ID number"
+                          placeholder={t('auth.fields.idNumberPlaceholder', 'Enter ID number')}
                           className="h-12"
                           required
                           value={identificationNumber}
@@ -893,7 +1147,11 @@ export default function AuthPage() {
                           required
                         />
                         <span className="text-sm">
-                          <strong>Patient Consent:</strong> I Agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions.
+                          <strong>{t('auth.consent.patientTitle', 'Patient Consent:')}</strong>{' '}
+                          {t(
+                            'auth.consent.patientBody',
+                            "I agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions."
+                          )}
                         </span>
                       </label>
                     </div>
@@ -903,44 +1161,56 @@ export default function AuthPage() {
                 {/* Doctor Registration Fields */}
                 {mode === 'register' && role === 'doctor' && (
                   <div className="space-y-4 pt-4 border-t border-border">
-                    <h3 className="text-lg font-semibold">Doctor Information</h3>
+                    <h3 className="text-lg font-semibold">{t('auth.sections.doctorInfo', 'Doctor Information')}</h3>
                     
                     {/* Profile Picture */}
                     <div>
-                      <Label htmlFor="profilePicture">Profile Picture (Optional)</Label>
-                      <div className="relative mt-1.5">
-                        <Upload className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <Input
+                      <Label htmlFor="profilePicture">{t('auth.fields.profilePictureOptional', 'Profile Picture (Optional)')}</Label>
+                      <div className="mt-1.5 space-y-2">
+                        <input
                           id="profilePicture"
+                          ref={profilePictureInputRef}
                           type="file"
                           accept="image/*"
-                          className="pl-10 h-12"
+                          className="hidden"
                           onChange={(e) => setProfilePicture(e.target.files?.[0] || null)}
                         />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start gap-2 h-12"
+                          onClick={() => profilePictureInputRef.current?.click()}
+                        >
+                          <Upload className="w-4 h-4" />
+                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                          {profilePicture?.name || t('auth.fields.noFileSelected', 'No file selected')}
+                        </p>
                       </div>
                     </div>
 
                     {/* Gender & Age */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <Label>Gender *</Label>
+                        <Label>{t('auth.fields.gender', 'Gender')} *</Label>
                         <Select value={gender} onValueChange={setGender}>
                           <SelectTrigger className="h-12">
-                            <SelectValue placeholder="Select gender" />
+                            <SelectValue placeholder={t('auth.fields.selectGender', 'Select gender')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="male">Male</SelectItem>
-                            <SelectItem value="female">Female</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
+                            <SelectItem value="male">{t('auth.values.gender.male', 'Male')}</SelectItem>
+                            <SelectItem value="female">{t('auth.values.gender.female', 'Female')}</SelectItem>
+                            <SelectItem value="other">{t('auth.values.gender.other', 'Other')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
-                        <Label htmlFor="age">Age *</Label>
+                        <Label htmlFor="age">{t('common.age', 'Age')} *</Label>
                         <Input
                           id="age"
                           type="number"
-                          placeholder="Age"
+                          placeholder={t('common.age', 'Age')}
                           className="h-12"
                           required
                           value={age}
@@ -952,10 +1222,10 @@ export default function AuthPage() {
                     {/* Location */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <Label htmlFor="city">City *</Label>
+                        <Label htmlFor="city">{t('auth.fields.city', 'City')} *</Label>
                         <Input
                           id="city"
-                          placeholder="City"
+                          placeholder={t('auth.fields.city', 'City')}
                           className="h-12"
                           required
                           value={city}
@@ -963,10 +1233,10 @@ export default function AuthPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="state">State *</Label>
+                        <Label htmlFor="state">{t('auth.fields.state', 'State')} *</Label>
                         <Input
                           id="state"
-                          placeholder="State"
+                          placeholder={t('auth.fields.state', 'State')}
                           className="h-12"
                           required
                           value={state}
@@ -974,10 +1244,10 @@ export default function AuthPage() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor="country">Country *</Label>
+                        <Label htmlFor="country">{t('auth.fields.country', 'Country')} *</Label>
                         <Input
                           id="country"
-                          placeholder="Country"
+                          placeholder={t('auth.fields.country', 'Country')}
                           className="h-12"
                           required
                           value={country}
@@ -988,26 +1258,26 @@ export default function AuthPage() {
 
                     {/* Marital Status */}
                     <div>
-                      <Label>Marital Status *</Label>
+                      <Label>{t('auth.fields.maritalStatus', 'Marital Status')} *</Label>
                       <Select value={maritalStatus} onValueChange={setMaritalStatus}>
                         <SelectTrigger className="h-12">
-                          <SelectValue placeholder="Select marital status" />
+                          <SelectValue placeholder={t('auth.fields.selectMaritalStatus', 'Select marital status')} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="single">Single</SelectItem>
-                          <SelectItem value="married">Married</SelectItem>
-                          <SelectItem value="divorced">Divorced</SelectItem>
-                          <SelectItem value="widowed">Widowed</SelectItem>
+                          <SelectItem value="single">{t('auth.values.marital.single', 'Single')}</SelectItem>
+                          <SelectItem value="married">{t('auth.values.marital.married', 'Married')}</SelectItem>
+                          <SelectItem value="divorced">{t('auth.values.marital.divorced', 'Divorced')}</SelectItem>
+                          <SelectItem value="widowed">{t('auth.values.marital.widowed', 'Widowed')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
                     {/* Hospital Affiliation */}
                     <div>
-                      <Label htmlFor="hospitalAffiliation">Hospital Affiliation(s) *</Label>
+                      <Label htmlFor="hospitalAffiliation">{t('auth.fields.hospitalAffiliations', 'Hospital Affiliation(s)')} *</Label>
                       <Input
                         id="hospitalAffiliation"
-                        placeholder="Enter hospital affiliations"
+                        placeholder={t('auth.fields.hospitalAffiliationsPlaceholder', 'Enter hospital affiliations')}
                         className="h-12"
                         required
                         value={hospitalAffiliation}
@@ -1017,30 +1287,30 @@ export default function AuthPage() {
 
                     {/* Specialty */}
                     <div>
-                      <Label>Specialty *</Label>
+                      <Label>{t('common.specialty', 'Specialty')} *</Label>
                       <Select value={specialty} onValueChange={setSpecialty}>
                         <SelectTrigger className="h-12">
-                          <SelectValue placeholder="Select your specialty" />
+                          <SelectValue placeholder={t('auth.fields.selectSpecialty', 'Select your specialty')} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="general_practitioner">General Practitioner</SelectItem>
-                          <SelectItem value="pediatrics">Pediatrics</SelectItem>
-                          <SelectItem value="obstetrics_gynecology">Obstetrics & Gynecology</SelectItem>
-                          <SelectItem value="psychiatry">Psychiatry / Mental Health</SelectItem>
-                          <SelectItem value="dermatology">Dermatology</SelectItem>
-                          <SelectItem value="endocrinology">Endocrinology</SelectItem>
-                          <SelectItem value="rheumatology">Rheumatology</SelectItem>
-                          <SelectItem value="cardiology">Cardiology</SelectItem>
-                          <SelectItem value="oncology">Oncology</SelectItem>
-                          <SelectItem value="infectious_diseases">Infectious Diseases</SelectItem>
-                          <SelectItem value="family_medicine">Family Medicine</SelectItem>
-                          <SelectItem value="urology">Urology</SelectItem>
-                          <SelectItem value="orthopedics">Orthopedics</SelectItem>
-                          <SelectItem value="ent">ENT (Ear, Nose & Throat)</SelectItem>
-                          <SelectItem value="ophthalmology">Ophthalmology</SelectItem>
-                          <SelectItem value="neurology">Neurology</SelectItem>
-                          <SelectItem value="radiology">Radiology</SelectItem>
-                          <SelectItem value="others">Others (Please specify)</SelectItem>
+                          <SelectItem value="general_practitioner">{t('auth.values.specialty.general_practitioner', 'General Practitioner')}</SelectItem>
+                          <SelectItem value="pediatrics">{t('auth.values.specialty.pediatrics', 'Pediatrics')}</SelectItem>
+                          <SelectItem value="obstetrics_gynecology">{t('auth.values.specialty.obstetrics_gynecology', 'Obstetrics & Gynecology')}</SelectItem>
+                          <SelectItem value="psychiatry">{t('auth.values.specialty.psychiatry', 'Psychiatry / Mental Health')}</SelectItem>
+                          <SelectItem value="dermatology">{t('auth.values.specialty.dermatology', 'Dermatology')}</SelectItem>
+                          <SelectItem value="endocrinology">{t('auth.values.specialty.endocrinology', 'Endocrinology')}</SelectItem>
+                          <SelectItem value="rheumatology">{t('auth.values.specialty.rheumatology', 'Rheumatology')}</SelectItem>
+                          <SelectItem value="cardiology">{t('auth.values.specialty.cardiology', 'Cardiology')}</SelectItem>
+                          <SelectItem value="oncology">{t('auth.values.specialty.oncology', 'Oncology')}</SelectItem>
+                          <SelectItem value="infectious_diseases">{t('auth.values.specialty.infectious_diseases', 'Infectious Diseases')}</SelectItem>
+                          <SelectItem value="family_medicine">{t('auth.values.specialty.family_medicine', 'Family Medicine')}</SelectItem>
+                          <SelectItem value="urology">{t('auth.values.specialty.urology', 'Urology')}</SelectItem>
+                          <SelectItem value="orthopedics">{t('auth.values.specialty.orthopedics', 'Orthopedics')}</SelectItem>
+                          <SelectItem value="ent">{t('auth.values.specialty.ent', 'ENT (Ear, Nose & Throat)')}</SelectItem>
+                          <SelectItem value="ophthalmology">{t('auth.values.specialty.ophthalmology', 'Ophthalmology')}</SelectItem>
+                          <SelectItem value="neurology">{t('auth.values.specialty.neurology', 'Neurology')}</SelectItem>
+                          <SelectItem value="radiology">{t('auth.values.specialty.radiology', 'Radiology')}</SelectItem>
+                          <SelectItem value="others">{t('auth.values.specialty.others', 'Others (Please specify)')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -1048,10 +1318,10 @@ export default function AuthPage() {
                     {/* Other Specialty */}
                     {specialty === 'others' && (
                       <div>
-                        <Label htmlFor="otherSpecialty">Please specify your specialty *</Label>
+                        <Label htmlFor="otherSpecialty">{t('auth.fields.specifySpecialty', 'Please specify your specialty')} *</Label>
                         <Input
                           id="otherSpecialty"
-                          placeholder="Enter your specialty"
+                          placeholder={t('auth.fields.specialtyPlaceholder', 'Enter your specialty')}
                           className="h-12"
                           required
                           value={otherSpecialty}
@@ -1062,12 +1332,12 @@ export default function AuthPage() {
 
                     {/* Experience */}
                     <div>
-                      <Label htmlFor="doctorExperience">Years of Experience *</Label>
+                      <Label htmlFor="doctorExperience">{t('auth.fields.yearsOfExperience', 'Years of Experience')} *</Label>
                       <Input
                         id="doctorExperience"
                         type="number"
                         min="0"
-                        placeholder="e.g. 7"
+                        placeholder={t('auth.fields.yearsExample', 'e.g. 7')}
                         className="h-12"
                         required
                         value={doctorExperience}
@@ -1075,15 +1345,36 @@ export default function AuthPage() {
                       />
                     </div>
 
+                    {/* Consultation Languages */}
+                    <div className="space-y-2">
+                      <Label>{t('auth.fields.consultationLanguages', 'Preferred Consultation Languages')} *</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {t('auth.fields.consultationLanguagesHint', 'Select all languages you can use to consult patients.')}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-lg border border-border p-3 max-h-56 overflow-y-auto">
+                        {consultationLanguageOptions.map((language) => (
+                          <label key={language.value} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={consultationLanguages.includes(language.value)}
+                              onChange={() => toggleConsultationLanguage(language.value)}
+                              className="rounded border-border"
+                            />
+                            <span>{language.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
                     {/* Specialist Rate */}
                     {specialistRequiresRate && (
                       <div className="space-y-2">
-                        <Label htmlFor="consultationRate">Consultation Rate (NGN) *</Label>
+                        <Label htmlFor="consultationRate">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')} *</Label>
                         <Input
                           id="consultationRate"
                           type="text"
                           inputMode="decimal"
-                          placeholder="Enter your rate per consultation"
+                          placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
                           className="h-12"
                           required
                           value={consultationRate}
@@ -1092,7 +1383,7 @@ export default function AuthPage() {
                         <p className="text-xs text-muted-foreground">
                           Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
                           {parsedConsultationRate && (
-                            <> You keep ₦{(parsedConsultationRate * 0.7).toLocaleString()} and MyE-Doctor gets ₦{(parsedConsultationRate * 0.3).toLocaleString()}.</>
+                            <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
                           )}
                         </p>
                       </div>
@@ -1102,46 +1393,57 @@ export default function AuthPage() {
                     {generalPractitionerSelected && (
                       <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
                         <p className="text-xs text-foreground">
-                          General Practitioner consultations are fixed at <strong>₦5,000</strong> per session. You receive <strong>60%</strong> (₦3,000) and MyE-Doctor receives <strong>40%</strong> (₦2,000).
+                          General Practitioner consultations are fixed at <strong>{formatCurrency(5000)}</strong> per session. You receive <strong>60%</strong> ({formatCurrency(3000)}) and MyE-Doctor receives <strong>40%</strong> ({formatCurrency(2000)}).
                         </p>
                       </div>
                     )}
 
                     {/* Medical License */}
                     <div>
-                      <Label htmlFor="medicalLicense">Medical License / Registration Certificate *</Label>
-                      <div className="relative mt-1.5">
-                        <Upload className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <Input
+                      <Label htmlFor="medicalLicense">{t('auth.fields.medicalLicense', 'Medical License / Registration Certificate')} *</Label>
+                      <div className="mt-1.5 space-y-2">
+                        <input
                           id="medicalLicense"
+                          ref={medicalLicenseInputRef}
                           type="file"
                           accept=".pdf,.jpg,.jpeg,.png"
-                          className="pl-10 h-12"
-                          required
+                          className="hidden"
                           onChange={(e) => setMedicalLicense(e.target.files?.[0] || null)}
                         />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start gap-2 h-12"
+                          onClick={() => medicalLicenseInputRef.current?.click()}
+                        >
+                          <Upload className="w-4 h-4" />
+                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                          {medicalLicense?.name || t('auth.fields.noFileSelected', 'No file selected')}
+                        </p>
                       </div>
                     </div>
 
                     {/* Identification */}
                     <div className="space-y-4">
                       <div>
-                        <Label>Means of Identification *</Label>
+                        <Label>{t('auth.fields.meansOfIdentification', 'Means of Identification')} *</Label>
                         <Select value={doctorIdType} onValueChange={setDoctorIdType}>
                           <SelectTrigger className="h-12">
-                            <SelectValue placeholder="Select ID type" />
+                            <SelectValue placeholder={t('auth.fields.selectIdType', 'Select ID type')} />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="nin">National Identification Number (NIN)</SelectItem>
-                            <SelectItem value="passport">International Passport</SelectItem>
+                            <SelectItem value="nin">{t('auth.values.id.nin', 'National Identification Number (NIN)')}</SelectItem>
+                            <SelectItem value="passport">{t('auth.values.id.passport', 'International Passport')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
-                        <Label htmlFor="doctorIdNumber">Identification Number *</Label>
+                        <Label htmlFor="doctorIdNumber">{t('auth.fields.identificationNumber', 'Identification Number')} *</Label>
                         <Input
                           id="doctorIdNumber"
-                          placeholder="Enter ID number"
+                          placeholder={t('auth.fields.idNumberPlaceholder', 'Enter ID number')}
                           className="h-12"
                           required
                           value={doctorIdNumber}
@@ -1161,7 +1463,11 @@ export default function AuthPage() {
                           required
                         />
                         <span className="text-sm">
-                          <strong>Doctor Consent & Agreement:</strong> I agree to provide virtual medical consultations through My E-Doctor in accordance with applicable laws and professional standards. I commit to maintaining patient confidentiality and securely handling all health information. I acknowledge the limitations of telemedicine and will exercise appropriate clinical judgment while delivering care through this platform. I further confirm that I have read, understood, and agree to MyE-Doctor’s Terms and Conditions.
+                          <strong>{t('auth.consent.doctorTitle', 'Doctor Consent & Agreement:')}</strong>{' '}
+                          {t(
+                            'auth.consent.doctorBody',
+                            "I agree to provide virtual medical consultations through My E-Doctor in accordance with applicable laws and professional standards. I commit to maintaining patient confidentiality and securely handling all health information. I acknowledge the limitations of telemedicine and will exercise appropriate clinical judgment while delivering care through this platform. I further confirm that I have read, understood, and agree to MyE-Doctor's Terms and Conditions."
+                          )}
                         </span>
                       </label>
                     </div>
@@ -1174,10 +1480,10 @@ export default function AuthPage() {
               <div className="flex items-center justify-between text-sm">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" className="rounded border-border" />
-                  <span className="text-muted-foreground">Remember me</span>
+                  <span className="text-muted-foreground">{t('auth.rememberMe', 'Remember me')}</span>
                 </label>
                 <Link to="/forgot-password" className="text-primary hover:underline">
-                  Forgot password?
+                  {t('auth.forgotPassword', 'Forgot password?')}
                 </Link>
               </div>
             )}
@@ -1192,11 +1498,11 @@ export default function AuthPage() {
               {isLoading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                  {mode === 'login' ? 'Signing in...' : mode === 'verify' ? 'Verifying...' : 'Creating account...'}
+                  {mode === 'login' ? `${t('common.login', 'Login')}...` : mode === 'verify' ? t('auth.verifying', 'Verifying...') : `${t('common.getStarted', 'Get Started')}...`}
                 </span>
               ) : (
                 <>
-                  {mode === 'login' ? 'Sign In' : mode === 'verify' ? 'Verify Code' : 'Create Account'}
+                  {mode === 'login' ? t('common.login', 'Login') : mode === 'verify' ? t('auth.verifyCode', 'Verify Code') : t('common.getStarted', 'Get Started')}
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -1206,13 +1512,13 @@ export default function AuthPage() {
           {/* Toggle Mode */}
           {mode !== 'verify' && (
             <p className="text-center text-sm text-muted-foreground mt-6">
-              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+              {mode === 'login' ? `${t('common.getStarted', 'Get Started')}? ` : `${t('common.login', 'Login')}? `}
               <button
                 type="button"
                 onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
                 className="text-primary font-medium hover:underline"
               >
-                {mode === 'login' ? 'Sign up' : 'Sign in'}
+                {mode === 'login' ? t('common.getStarted', 'Get Started') : t('common.login', 'Login')}
               </button>
             </p>
           )}
@@ -1233,12 +1539,14 @@ export default function AuthPage() {
           className="relative z-10 max-w-md"
         >
           <h2 className="text-3xl font-bold text-primary-foreground mb-6">
-            {mode === 'register' && role === 'patient' ? 'Complete Your Registration' : '-Your Doctor, Anytime, Anywhere'}
+            {mode === 'register' && role === 'patient'
+              ? t('auth.rightPanel.completeRegistration', 'Complete Your Registration')
+              : t('auth.rightPanel.tagline', '-Your Doctor, Anytime, Anywhere')}
           </h2>
           <p className="text-primary-foreground/80 mb-8">
             {mode === 'register' && role === 'patient' 
-              ? 'Fill in your details to create your patient profile and start accessing quality healthcare services.'
-              : 'Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.'}
+              ? t('auth.rightPanel.completeRegistrationDescription', 'Fill in your details to create your patient profile and start accessing quality healthcare services.')
+              : t('auth.rightPanel.generalDescription', 'Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.')}
           </p>
 
           <ul className="space-y-4">
