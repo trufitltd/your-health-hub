@@ -1292,7 +1292,7 @@ const PatientPortal = () => {
   const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
-  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
@@ -1596,7 +1596,12 @@ const PatientPortal = () => {
     [rescheduleUpgradeAmount, rescheduleHybridWalletApplied],
   );
   const effectiveReschedulePaymentMethod = useMemo<'paystack' | 'wallet' | 'hybrid'>(
-    () => (reschedulePaymentMethod === 'hybrid' && rescheduleHybridPaystackDue <= 0 ? 'wallet' : reschedulePaymentMethod),
+    () => {
+      if (reschedulePaymentMethod === 'wallet') {
+        return rescheduleHybridPaystackDue > 0 ? 'hybrid' : 'wallet';
+      }
+      return 'paystack';
+    },
     [reschedulePaymentMethod, rescheduleHybridPaystackDue],
   );
 
@@ -3272,6 +3277,14 @@ const PatientPortal = () => {
               currentConsultationType={currentRescheduleConsultationType}
               selectedConsultationType={rescheduleConsultationType}
               onConsultationTypeChange={setRescheduleConsultationType}
+              reschedulePricingPreview={{
+                proposedFinalPrice: proposedRescheduleFinalPrice,
+                previewLoading: reschedulePreviewLoading || reschedulePreviewFetching,
+                alreadyPaidAmount: reschedulePaidAmount !== null ? reschedulePaidAmount : currentRescheduleFinalPrice,
+                upgradeAmount: rescheduleUpgradeAmount,
+                walletAppliedIfSelected: rescheduleHybridWalletApplied,
+                paystackDueIfSelected: rescheduleHybridPaystackDue,
+              }}
             />
 
             {/* Reschedule Confirmation Modal */}
@@ -3382,32 +3395,16 @@ const PatientPortal = () => {
                                   value="wallet"
                                   checked={reschedulePaymentMethod === 'wallet'}
                                   onChange={() => setReschedulePaymentMethod('wallet')}
-                                  disabled={patientWalletBalance < rescheduleUpgradeAmount}
                                 />
-                                <span>{t('patientPortal.reschedule.useWallet', 'Use Wallet')} {patientWalletBalance < rescheduleUpgradeAmount ? t('patientPortal.reschedule.insufficientSuffix', '(insufficient)') : ''}</span>
-                              </label>
-                              <label className="inline-flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name="reschedule-payment-method"
-                                  value="hybrid"
-                                  checked={reschedulePaymentMethod === 'hybrid'}
-                                  onChange={() => setReschedulePaymentMethod('hybrid')}
-                                />
-                                <span>{t('patientPortal.reschedule.hybridSplit', 'Wallet + Paystack (split)')}</span>
+                                <span>{t('patientPortal.reschedule.useWallet', 'Use Wallet')}</span>
                               </label>
                             </div>
                           </div>
 
-                          {patientWalletBalance < rescheduleUpgradeAmount && reschedulePaymentMethod === 'wallet' && (
-                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                              {t('patientPortal.reschedule.walletInsufficientHint', 'Wallet balance insufficient. Please use Paystack or add funds to your wallet.')}
-                            </div>
-                          )}
-                          {reschedulePaymentMethod === 'hybrid' && (
+                          {reschedulePaymentMethod === 'wallet' && (
                             <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary">
                               {rescheduleHybridPaystackDue > 0
-                                ? `Wallet applies ₦${rescheduleHybridWalletApplied.toLocaleString()} and Paystack covers ₦${rescheduleHybridPaystackDue.toLocaleString()}.`
+                                ? `Wallet applies ₦${rescheduleHybridWalletApplied.toLocaleString()} and remaining ₦${rescheduleHybridPaystackDue.toLocaleString()} continues via Paystack automatically.`
                                 : `Wallet covers the full upgrade amount of ₦${rescheduleUpgradeAmount.toLocaleString()}.`}
                             </div>
                           )}
@@ -3447,7 +3444,7 @@ const PatientPortal = () => {
                   </Button>
                   <Button
                     onClick={rescheduleBooking}
-                    disabled={isBooking || (rescheduleUpgradeAmount > 0 && effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount)}
+                    disabled={isBooking}
                   >
                     {isBooking
                       ? t('common.submitting', 'Submitting...')

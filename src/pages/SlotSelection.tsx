@@ -69,7 +69,7 @@ export default function SlotSelection() {
   const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet' | 'hybrid'>('paystack');
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -337,11 +337,15 @@ export default function SlotSelection() {
   const displayedPrice = finalPrice ?? previewPrice ?? null;
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
-  const walletInsufficient = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
-  const walletAppliedForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+  const autoHybridForWallet = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
+  const effectivePaymentMethod: 'paystack' | 'wallet' | 'hybrid' = useMemo(() => {
+    if (paymentMethod === 'wallet' && autoHybridForWallet) return 'hybrid';
+    return paymentMethod;
+  }, [paymentMethod, autoHybridForWallet]);
+  const walletAppliedForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
     ? Math.min(patientWalletBalance, displayedPrice)
     : 0;
-  const paystackDueForHybrid = paymentMethod === 'hybrid' && displayedPrice !== null
+  const paystackDueForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
     ? Math.max(displayedPrice - walletAppliedForHybrid, 0)
     : 0;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
@@ -384,22 +388,13 @@ export default function SlotSelection() {
       return;
     }
 
-    const paystackRequiredForSelection = paymentMethod === 'paystack'
-      || (paymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
+    const paystackRequiredForSelection = effectivePaymentMethod === 'paystack'
+      || (effectivePaymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
 
     if (paystackRequiredForSelection && !paystackPublicKey) {
       toast({
         title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
         description: t('slotSelection.toast.paymentGatewayNotConfigured', 'Payment gateway not configured. Please contact support.'),
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice) {
-      toast({
-        title: t('slotSelection.toast.walletBalanceLowTitle', 'Insufficient wallet balance'),
-        description: t('slotSelection.toast.walletBalanceLowDescription', 'Your wallet balance is not enough for this booking.'),
         variant: 'destructive',
       });
       return;
@@ -414,7 +409,7 @@ export default function SlotSelection() {
         preferredTime: durationPricingEnabled ? (selectedTime || undefined) : undefined,
         duration: selectedDuration,
         consultationType: selectedConsultationType,
-        paymentMethod,
+        paymentMethod: effectivePaymentMethod,
       });
 
       setFinalPrice(booking.finalPrice);
@@ -907,34 +902,23 @@ export default function SlotSelection() {
                               onChange={() => setPaymentMethod('wallet')}
                             />
                           </label>
-                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
-                            <span>
-                              {t('slotSelection.summary.hybrid', 'Wallet + Paystack (hybrid)')}
-                            </span>
-                            <input
-                              type="radio"
-                              name="booking-payment-method"
-                              checked={paymentMethod === 'hybrid'}
-                              onChange={() => setPaymentMethod('hybrid')}
-                            />
-                          </label>
                         </div>
-                        {walletInsufficient && (
-                          <p className="mt-2 text-xs text-destructive">
-                            {t(
-                              'slotSelection.summary.walletInsufficient',
-                              'Wallet balance is below this booking fee.',
-                            )}
-                          </p>
-                        )}
-                        {paymentMethod === 'hybrid' && displayedPrice !== null && (
+                        {paymentMethod === 'wallet' && displayedPrice !== null && (
                           <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
-                            <p>
-                              <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid)}
-                            </p>
-                            <p>
-                              <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid)}
-                            </p>
+                            {paystackDueForHybrid > 0 ? (
+                              <>
+                                <p>
+                                  <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid)}
+                                </p>
+                                <p>
+                                  <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid)}
+                                </p>
+                              </>
+                            ) : (
+                              <p>
+                                <span className="font-medium">Wallet covers full amount:</span> {formatCurrency(displayedPrice)}
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
@@ -956,18 +940,18 @@ export default function SlotSelection() {
               </Button>
               <Button
                 onClick={handleConfirm}
-                disabled={!summaryReady || isConfirming || walletInsufficient}
+                disabled={!summaryReady || isConfirming}
                 className="gap-2"
               >
-                {paymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
+                {effectivePaymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
                 {isConfirming
                   ? t('slotSelection.processing', 'Processing...')
-                  : paymentMethod === 'wallet'
+                  : effectivePaymentMethod === 'wallet'
                   ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
-                  : paymentMethod === 'hybrid'
+                  : effectivePaymentMethod === 'hybrid'
                   ? paystackDueForHybrid > 0
-                    ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
-                    : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+                  ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
+                  : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
                   : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
                 <ChevronRight className="w-4 h-4" />
               </Button>
