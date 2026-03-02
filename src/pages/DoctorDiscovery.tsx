@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
+import { formatSpecialtyLabel } from '@/lib/utils';
 import {
   isBlockingAppointmentRow,
   isTimePointBusyByAppointments,
@@ -935,7 +936,7 @@ export default function DoctorDiscovery() {
                   >
                     <option value="">All Specialties</option>
                     {specialties.map(specialty => (
-                      <option key={specialty} value={specialty}>{specialty}</option>
+                      <option key={specialty} value={specialty}>{formatSpecialtyLabel(specialty)}</option>
                     ))}
                   </select>
 
