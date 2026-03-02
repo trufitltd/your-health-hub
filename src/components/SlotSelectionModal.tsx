@@ -56,6 +56,17 @@ const toDateKey = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const calendarClassNames = {
+  cell:
+    "h-9 w-9 text-center text-sm p-0 relative first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20 [&:has([aria-selected].day-outside)]:bg-primary/10 [&:has([aria-selected])]:bg-primary/15",
+  day_today: "border border-primary/40 text-primary font-semibold",
+  day_selected:
+    "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+  day_outside:
+    "day-outside text-muted-foreground opacity-50 aria-selected:bg-primary/10 aria-selected:text-muted-foreground aria-selected:opacity-40",
+  day_range_middle: "aria-selected:bg-primary/15 aria-selected:text-foreground",
+};
+
 /**
  * Slot Selection Modal Component
  * Allows users to select from available doctor slots with time picker
@@ -443,6 +454,7 @@ export function SlotSelectionModal({
                   <DateCalendar
                     mode="single"
                     selected={selectedCalendarDate}
+                    classNames={calendarClassNames}
                     onSelect={(date) => {
                       if (!date) return;
                       const dateKey = toDateKey(date);
