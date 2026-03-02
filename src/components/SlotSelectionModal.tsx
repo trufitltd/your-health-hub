@@ -14,6 +14,7 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
+import { formatSpecialtyLabel } from '@/lib/utils';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -204,7 +205,7 @@ export function SlotSelectionModal({
                   >
                     <p className="font-medium text-sm">{doctor.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      Specialty: {doctor.specialty}
+                      Specialty: {formatSpecialtyLabel(doctor.specialty)}
                     </p>
                   </button>
                 ))}
@@ -307,7 +308,7 @@ export function SlotSelectionModal({
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="font-medium">Specialty:</span>
-                  {doctors.find((d) => d.id === selectedDoctor)?.specialty}
+                  {formatSpecialtyLabel(doctors.find((d) => d.id === selectedDoctor)?.specialty)}
                 </div>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-3 h-3" />
