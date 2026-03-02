@@ -23,7 +23,6 @@ export interface PriceCalculationInput {
   consultationType?: string;
   tierId?: string | null;
   tierName?: string | null;
-  baseFallback?: number;
 }
 
 export interface PriceCalculationResult {
