@@ -39,6 +39,31 @@ export const AvailabilityService = {
     return data || [];
   },
 
+  async getAllowedDurations(): Promise<number[]> {
+    const { data, error } = await supabase
+      .from('appointment_duration_options')
+      .select('value_minutes')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .order('value_minutes', { ascending: true });
+
+    if (error) throw error;
+
+    const durations = Array.from(
+      new Set(
+        (data || [])
+          .map((row) => Number((row as { value_minutes?: number }).value_minutes || 0))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      ),
+    ).sort((a, b) => a - b);
+
+    if (durations.length === 0) {
+      throw new Error('No active duration options configured');
+    }
+
+    return durations;
+  },
+
   async calculatePricePreview(input: PricePreviewRequest): Promise<number> {
     const { data, error } = await supabase.functions.invoke('pricing-preview', {
       body: input,

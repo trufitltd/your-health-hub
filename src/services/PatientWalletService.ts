@@ -61,10 +61,11 @@ export const PatientWalletService = {
     };
   },
 
-  async requestWalletWithdrawal(amount: number, narration?: string) {
+  async requestWalletWithdrawal(amount: number, narration?: string, idempotencyKey?: string) {
     const { data, error } = await supabase.rpc('request_patient_wallet_withdrawal', {
       p_amount: amount,
       p_narration: narration ?? null,
+      p_idempotency_key: idempotencyKey ?? null,
     });
 
     if (error) throw error;
