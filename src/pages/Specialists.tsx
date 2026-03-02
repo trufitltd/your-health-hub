@@ -4,7 +4,7 @@ import { Layout } from '@/components/layout';
 import { Search, Star, Clock, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
+import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -226,7 +226,7 @@ export default function SpecialistsPage() {
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 )}
               >
-                {specialty}
+                {formatSpecialtyLabel(specialty)}
               </button>
             ))}
           </div>
@@ -264,7 +264,7 @@ export default function SpecialistsPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">{doctor.name}</h3>
-                    <p className="text-sm text-primary">{doctor.specialty || 'General Practice'}</p>
+                    <p className="text-sm text-primary">{formatSpecialtyLabel(doctor.specialty)}</p>
                     {doctor.experience && (
                       <p className="text-xs text-muted-foreground mt-1">Experience: {doctor.experience} years</p>
                     )}
