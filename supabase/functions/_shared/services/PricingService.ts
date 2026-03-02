@@ -125,7 +125,13 @@ export class PricingService {
         normalizeValue(rule.condition_value) === doctorType,
     );
 
-    const base = roundMoney(Number(baseRule?.amount ?? input.baseFallback ?? 0));
+    if (!baseRule) {
+      throw new Error(
+        `No active base pricing rule configured for doctor type "${input.doctorType}". Configure this in Pricing Management.`,
+      );
+    }
+
+    const base = roundMoney(Number(baseRule.amount));
     let current = base;
     const modifiers: PriceModifierResult[] = [];
 
@@ -158,38 +164,23 @@ export class PricingService {
 
     if (featureFlags.consultation_type_pricing && input.consultationType) {
       const typeName = normalizeValue(input.consultationType);
-      const { data: consultationType, error } = await this.supabase
+      const { error } = await this.supabase
         .from('consultation_types')
-        .select('*')
+        .select('id')
         .eq('name', typeName)
         .eq('active', true)
         .maybeSingle();
 
       if (error) throw new Error(`Failed to load consultation type pricing: ${error.message}`);
 
-      if (consultationType && consultationType.flat_rate !== null && consultationType.flat_rate !== undefined) {
-        const before = current;
-        const after = roundMoney(Number(consultationType.flat_rate));
-        modifiers.push({
-          conditionType: 'consultation_type_flat_rate',
-          conditionValue: consultationType.name,
-          action: 'set',
-          amount: Number(consultationType.flat_rate),
-          before,
-          after,
-          delta: roundMoney(after - before),
-        });
-        current = after;
-      } else {
-        const consultationRule = rules.find(
-          (rule) =>
-            rule.rule_type === 'modifier' &&
-            rule.condition_type === 'consultation_type' &&
-            normalizeValue(rule.condition_value) === typeName,
-        );
+      const consultationRule = rules.find(
+        (rule) =>
+          rule.rule_type === 'modifier' &&
+          rule.condition_type === 'consultation_type' &&
+          normalizeValue(rule.condition_value) === typeName,
+      );
 
-        if (consultationRule) current = this.applyRule(current, consultationRule, modifiers);
-      }
+      if (consultationRule) current = this.applyRule(current, consultationRule, modifiers);
     }
 
     return {
