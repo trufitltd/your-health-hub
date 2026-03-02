@@ -50,9 +50,13 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { createDefaultSchedule } from '@/services/scheduleService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
+import { formatSpecialtyLabel } from '@/lib/utils';
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -94,6 +98,26 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
   }
 } as const;
 
+const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
+  return rows.reduce((total, row) => {
+    const body = String(row.message || '');
+    if (!body) return total;
+    let count = 0;
+    for (const match of body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
+      const timestamp = `${match[1].replace(' ', 'T')}:00`;
+      const replyTimeMs = new Date(timestamp).getTime();
+      if (!Number.isNaN(replyTimeMs) && replyTimeMs > lastReadAtMs) {
+        count += 1;
+      }
+    }
+    return total + count;
+  }, 0);
+};
+
+const countAdminReplyMarkers = (body: string) => {
+  return Array.from(body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)).length;
+};
+
 const DoctorPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
@@ -129,14 +153,80 @@ const DoctorPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [unreadContactCount, setUnreadContactCount] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
+  const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const contactReadStorageKey = user?.id ? `doctor-contact-last-read-${user.id}` : null;
   const unreadReviewsCount = unreadReviewIds.length;
   const reviewSeenStorageKey = user?.id ? `doctor-review-seen-${user.id}` : null;
+
+  const { data: contactMessagesForUnread = [] } = useQuery({
+    queryKey: ['doctor-contact-unread', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase.rpc('get_my_contact_messages', { limit_count: 200 });
+      if (error) {
+        console.error('Error fetching doctor contact messages:', error);
+        return [];
+      }
+      return (data || []) as Array<{ message?: string | null }>;
+    },
+    enabled: !!user?.id,
+    refetchInterval: 15000,
+  });
+
+  useEffect(() => {
+    if (!contactReadStorageKey || typeof window === 'undefined') return;
+    if (activeTab === 'contact') {
+      window.localStorage.setItem(contactReadStorageKey, new Date().toISOString());
+      setUnreadContactCount(0);
+      return;
+    }
+    const lastReadRaw = window.localStorage.getItem(contactReadStorageKey);
+    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
+    const unread = countUnreadAdminReplies(contactMessagesForUnread, Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs);
+    setUnreadContactCount(unread);
+  }, [activeTab, contactMessagesForUnread, contactReadStorageKey]);
+
+  useEffect(() => {
+    if (!user?.id || !user.email) return;
+    const lowerEmail = user.email.toLowerCase();
+
+    const channel = supabase
+      .channel(`doctor-contact-replies-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
+          const oldRow = payload.old as { message?: string | null } | null;
+          if (!newRow?.email) return;
+          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
+
+          const oldCount = countAdminReplyMarkers(String(oldRow?.message || ''));
+          const newCount = countAdminReplyMarkers(String(newRow.message || ''));
+          if (newCount <= oldCount) return;
+
+          playNotificationSound();
+          toast({
+            title: 'New message from MyE-Doctor',
+            description: 'You received a new support reply.',
+          });
+          queryClient.invalidateQueries({ queryKey: ['doctor-contact-unread', user.id] });
+          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [playNotificationSound, queryClient, user?.email, user?.id]);
 
   const getSeenReviewIds = () => {
     if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
@@ -165,6 +255,31 @@ const DoctorPortal = () => {
   
   useTrackUserPresence(user?.id, 'doctor');
   useRealtimeMessageNotifications(user?.id, 'doctor');
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const ensureDefaultSchedule = async () => {
+      const { count, error } = await supabase
+        .from('doctor_schedules')
+        .select('id', { count: 'exact', head: true })
+        .eq('doctor_id', user.id);
+
+      if (error) {
+        console.error('Failed checking existing doctor schedules:', error);
+        return;
+      }
+
+      if ((count ?? 0) === 0) {
+        await createDefaultSchedule(user.id);
+        queryClient.invalidateQueries({ queryKey: ['schedules', user.id] });
+        queryClient.invalidateQueries({ queryKey: ['schedules-formatted', user.id] });
+        queryClient.invalidateQueries({ queryKey: ['available-slots'] });
+      }
+    };
+
+    ensureDefaultSchedule();
+  }, [user?.id, queryClient]);
 
   useEffect(() => {
     if (!user?.id || !reviewSeenStorageKey) return;
@@ -1503,7 +1618,7 @@ const DoctorPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0 hidden sm:block text-left">
                       <p className="text-sm font-medium truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                      <p className="text-xs text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                      <p className="text-xs text-muted-foreground truncate">{formatSpecialtyLabel(doctorRegistration?.specialty)}</p>
                     </div>
                   </button>
                 </DropdownMenuTrigger>
@@ -1552,7 +1667,7 @@ const DoctorPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold truncate">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                      <p className="text-sm text-muted-foreground truncate">{doctorRegistration?.specialty || 'General Practice'}</p>
+                      <p className="text-sm text-muted-foreground truncate">{formatSpecialtyLabel(doctorRegistration?.specialty)}</p>
                     </div>
                   </div>
                 </div>
@@ -1566,6 +1681,7 @@ const DoctorPortal = () => {
                     { id: 'earnings', label: 'Earnings', icon: Banknote },
                     { id: 'reviews', label: 'Reviews', icon: Star, badge: unreadReviewsCount > 0 ? (unreadReviewsCount > 99 ? '99+' : unreadReviewsCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((item) => (
                     <button
@@ -2492,6 +2608,16 @@ const DoctorPortal = () => {
                     <DoctorMessagesTab />
                   </TabsContent>
 
+                  <TabsContent value="contact" className="space-y-6">
+                    <ContactMyEDoctorForm
+                      role="doctor"
+                      userId={user?.id}
+                      fullName={doctorRegistration?.full_name || displayName || ''}
+                      email={doctorRegistration?.email || user?.email || ''}
+                      phone={doctorRegistration?.phone_number || ''}
+                    />
+                  </TabsContent>
+
                   <TabsContent value="settings" className="space-y-6">
                     <Card>
                       <CardHeader>
@@ -2507,7 +2633,7 @@ const DoctorPortal = () => {
                             </Avatar>
                             <div>
                               <p className="font-semibold text-lg">{role === 'doctor' ? `Dr. ${displayName}` : displayName}</p>
-                              <p className="text-muted-foreground">{doctorRegistration?.specialty ?? 'General Practice'}</p>
+                              <p className="text-muted-foreground">{formatSpecialtyLabel(doctorRegistration?.specialty)}</p>
                               <div className="mt-2">
                                 <input
                                   type="file"
