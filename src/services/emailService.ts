@@ -15,6 +15,15 @@ interface DoctorApprovalEmail {
 }
 
 class EmailService {
+  private escapeHtml(content: string): string {
+    return content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   private async sendEmail(payload: EmailPayload): Promise<{ success: boolean; error?: string }> {
     try {
       console.log('📧 Attempting to send email:', { to: payload.to, subject: payload.subject });
@@ -43,16 +52,14 @@ class EmailService {
 
       if (error) {
         console.error('❌ Email function error:', error);
-        // Return success anyway - email might fail but shouldn't block approval
-        return { success: true, error: 'Email notification failed but proceeding' };
+        return { success: false, error: error.message || 'Email function error' };
       }
 
       console.log('✅ Email sent successfully:', data);
       return { success: true };
     } catch (err) {
       console.error('❌ Error sending email:', err);
-      // Don't throw - email is optional
-      return { success: true, error: String(err) };
+      return { success: false, error: String(err) };
     }
   }
 
@@ -191,6 +198,53 @@ MyEdoctor Team
       subject: 'MyEdoctor Application Status Update',
       htmlContent,
       textContent: `Dear Dr. ${doctorName},\n\nThank you for your application. Unfortunately, we cannot approve it at this time.\n\n${reason ? `Reason: ${reason}\n\n` : ''}Please contact support for more information.\n\nBest regards,\nMyEdoctor Team`,
+    });
+  }
+
+  async sendSupportReplyEmail(payload: {
+    to: string;
+    recipientName?: string;
+    subject: string;
+    message: string;
+    adminName?: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    const safeRecipient = this.escapeHtml(payload.recipientName?.trim() || 'there');
+    const safeAdminName = this.escapeHtml(payload.adminName?.trim() || 'MyE-Doctor Support');
+    const safeMessageHtml = this.escapeHtml(payload.message.trim()).replace(/\n/g, '<br/>');
+    const textBody = `${payload.message.trim()}\n\n— ${payload.adminName?.trim() || 'MyE-Doctor Support'}`;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; }
+            .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+            .header { padding: 16px 20px; background: #f3f4f6; border-radius: 10px 10px 0 0; }
+            .content { border: 1px solid #e5e7eb; border-top: 0; border-radius: 0 0 10px 10px; padding: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <strong>MyE-Doctor Support Reply</strong>
+            </div>
+            <div class="content">
+              <p>Hi ${safeRecipient},</p>
+              <p>${safeMessageHtml}</p>
+              <p>Best regards,<br/>${safeAdminName}</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: payload.to,
+      subject: payload.subject,
+      htmlContent,
+      textContent: textBody,
     });
   }
 }
