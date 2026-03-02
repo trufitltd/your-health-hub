@@ -2,6 +2,8 @@ import { useNavigate } from 'react-router-dom';
 import { Video, Phone, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
+import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 interface JoinConsultationButtonProps {
   appointmentId: string;
@@ -21,17 +23,22 @@ export function JoinConsultationButton({
   className = ''
 }: JoinConsultationButtonProps) {
   const navigate = useNavigate();
+  const { t } = useLanguage();
   // We no longer track appointment "type". Default to video-enabled consultations.
   const isVideo = true;
   const isChat = false;
   const isAudio = true;
-  const isJoinable = !status || status === 'confirmed' || status === 'pending' || status === 'in-progress' || status === 'upcoming';
+  const normalizedStatus = normalizeAppointmentStatus(status);
+  const isJoinable =
+    !status ||
+    normalizedStatus === 'confirmed' ||
+    normalizedStatus === 'in_progress';
 
   const handleJoin = () => {
     if (!isJoinable) {
       toast({
-        title: 'Cannot join',
-        description: 'This consultation is not available to join.',
+        title: t('consultation.cannotJoinTitle', 'Cannot join'),
+        description: t('consultation.cannotJoinDescription', 'This consultation is not available to join.'),
         variant: 'destructive'
       });
       return;
@@ -55,7 +62,11 @@ export function JoinConsultationButton({
       ) : (
         <Phone className="w-4 h-4" />
       )}
-      {isVideo ? 'Join Video Call' : isChat ? 'Join Chat' : 'Join Audio Call'}
+      {isVideo
+        ? t('common.joinVideoCall', 'Join Video Call')
+        : isChat
+        ? t('common.joinChat', 'Join Chat')
+        : t('common.joinAudioCall', 'Join Audio Call')}
     </Button>
   );
 }

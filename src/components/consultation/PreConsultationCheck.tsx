@@ -4,6 +4,9 @@ import { Video, Mic, Speaker, CheckCircle, XCircle, RefreshCw, AlertTriangle, Me
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { translateToastText } from '@/lib/toastI18n';
+import { formatNumberForLanguage } from '@/lib/locale';
 
 interface PreConsultationCheckProps {
   onComplete: () => void;
@@ -23,6 +26,9 @@ export function PreConsultationCheck({
   onComplete,
   onCancel
 }: PreConsultationCheckProps) {
+  const { language } = useLanguage();
+  const ui = (text: string) => translateToastText(text, language);
+
   // Consultations are uniform; perform full device checks (video + audio)
   const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const [checks, setChecks] = useState<DeviceCheck>({
@@ -55,7 +61,7 @@ export function PreConsultationCheck({
       const isSecureContext = window.isSecureContext || location.protocol === 'https:' || location.hostname === 'localhost';
       if (!isSecureContext) {
         setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
-        setPermissionError('Camera and microphone require HTTPS. Please use HTTPS or localhost.');
+        setPermissionError(ui('Camera and microphone require HTTPS. Please use HTTPS or localhost.'));
         return;
       }
       
@@ -74,19 +80,19 @@ export function PreConsultationCheck({
         
         if (videoDevices.length === 0) {
           setChecks(prev => ({ ...prev, camera: 'error' }));
-          setPermissionError('No camera found. Please connect a camera and refresh the page.');
+          setPermissionError(ui('No camera found. Please connect a camera and refresh the page.'));
           return;
         }
         
         if (audioDevices.length === 0) {
           setChecks(prev => ({ ...prev, microphone: 'error' }));
-          setPermissionError('No microphone found. Please connect a microphone and refresh the page.');
+          setPermissionError(ui('No microphone found. Please connect a microphone and refresh the page.'));
           return;
         }
       } catch (enumError) {
         console.error('Device enumeration failed:', enumError);
         setChecks(prev => ({ ...prev, camera: 'error', microphone: 'error' }));
-        setPermissionError('Unable to detect devices. Please check your browser permissions.');
+        setPermissionError(ui('Unable to detect devices. Please check your browser permissions.'));
         return;
       }
       
@@ -106,13 +112,13 @@ export function PreConsultationCheck({
         
         const error = (err as { name?: string; message?: string } | undefined) ?? undefined;
         if (error && error.name === 'NotAllowedError') {
-          setPermissionError('Camera and microphone access denied. Please allow access in your browser settings.');
+          setPermissionError(ui('Camera and microphone access denied. Please allow access in your browser settings.'));
         } else if (error && error.name === 'NotFoundError') {
-          setPermissionError('Camera or microphone not found. Please connect your devices and refresh.');
+          setPermissionError(ui('Camera or microphone not found. Please connect your devices and refresh.'));
         } else if (error && error.name === 'NotReadableError') {
-          setPermissionError('Camera or microphone is being used by another application.');
+          setPermissionError(ui('Camera or microphone is being used by another application.'));
         } else {
-          setPermissionError(`Media access failed: ${error?.message ?? 'Unknown error'}`);
+          setPermissionError(`${ui('Media access failed:')} ${error?.message ?? ui('Unknown error')}`);
         }
       }
     } else if (consultationType === 'audio') {
@@ -125,7 +131,7 @@ export function PreConsultationCheck({
       } catch (error) {
         console.error('Microphone check failed:', error);
         setChecks(prev => ({ ...prev, microphone: 'error' }));
-        setPermissionError('Microphone access denied. Please allow microphone access in your browser settings.');
+        setPermissionError(ui('Microphone access denied. Please allow microphone access in your browser settings.'));
       }
     }
 
@@ -180,6 +186,10 @@ export function PreConsultationCheck({
   };
 
   const progress = Object.values(checks).filter(s => s === 'success').length / Object.values(checks).length * 100;
+  const progressLabel = formatNumberForLanguage(language, progress / 100, {
+    style: 'percent',
+    maximumFractionDigits: 0,
+  });
 
   return (
     <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
@@ -190,17 +200,17 @@ export function PreConsultationCheck({
       >
         <Card className="shadow-lg">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Pre-Consultation Check</CardTitle>
+            <CardTitle className="text-2xl">{ui('Pre-Consultation Check')}</CardTitle>
             <CardDescription>
-              Let's make sure everything is working before your consultation
+              {ui("Let's make sure everything is working before your consultation")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             {/* Progress bar */}
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-muted-foreground">Checks</span>
-                <span className="font-medium">{Math.round(progress)}%</span>
+                <span className="text-muted-foreground">{ui('Checks')}</span>
+                <span className="font-medium">{progressLabel}</span>
               </div>
               <Progress value={progress} className="h-2" />
             </div>
@@ -220,7 +230,7 @@ export function PreConsultationCheck({
                   <div className="absolute inset-0 flex items-center justify-center bg-muted">
                     <div className="text-center">
                       <Video className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
-                      <p className="text-sm text-muted-foreground">Camera not available</p>
+                      <p className="text-sm text-muted-foreground">{ui('Camera not available')}</p>
                     </div>
                   </div>
                 )}
@@ -237,7 +247,7 @@ export function PreConsultationCheck({
               <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                 <div className="flex items-center gap-3">
                   <MessageSquare className="w-5 h-5 text-muted-foreground" />
-                  <span className="font-medium">Connection</span>
+                  <span className="font-medium">{ui('Connection')}</span>
                 </div>
                 {getStatusIcon(checks.connection)}
               </div>
@@ -246,7 +256,7 @@ export function PreConsultationCheck({
                 <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                   <div className="flex items-center gap-3">
                     <Video className="w-5 h-5 text-muted-foreground" />
-                    <span className="font-medium">Camera</span>
+                    <span className="font-medium">{ui('Camera')}</span>
                   </div>
                   {getStatusIcon(checks.camera)}
                 </div>
@@ -257,7 +267,7 @@ export function PreConsultationCheck({
                   <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                     <div className="flex items-center gap-3">
                       <Mic className="w-5 h-5 text-muted-foreground" />
-                      <span className="font-medium">Microphone</span>
+                      <span className="font-medium">{ui('Microphone')}</span>
                     </div>
                     {getStatusIcon(checks.microphone)}
                   </div>
@@ -265,7 +275,7 @@ export function PreConsultationCheck({
                   <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                     <div className="flex items-center gap-3">
                       <Speaker className="w-5 h-5 text-muted-foreground" />
-                      <span className="font-medium">Speaker</span>
+                      <span className="font-medium">{ui('Speaker')}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -275,7 +285,7 @@ export function PreConsultationCheck({
                         disabled={isTestingAudio}
                         className="text-xs"
                       >
-                        {isTestingAudio ? 'Playing...' : 'Test'}
+                        {isTestingAudio ? ui('Playing...') : ui('Test')}
                       </Button>
                       {getStatusIcon(checks.speaker)}
                     </div>
@@ -289,7 +299,7 @@ export function PreConsultationCheck({
               <div className="flex items-start gap-3 p-4 rounded-lg bg-destructive/10 border border-destructive/20">
                 <AlertTriangle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm text-destructive font-medium">Permission Required</p>
+                  <p className="text-sm text-destructive font-medium">{ui('Permission Required')}</p>
                   <p className="text-sm text-muted-foreground mt-1">{permissionError}</p>
                 </div>
               </div>
@@ -298,12 +308,12 @@ export function PreConsultationCheck({
             {/* Actions */}
             <div className="flex gap-3 pt-4">
               <Button variant="outline" onClick={onCancel} className="flex-1">
-                Cancel
+                {ui('Cancel')}
               </Button>
               {hasErrors ? (
                 <Button onClick={runDeviceChecks} className="flex-1 gap-2">
                   <RefreshCw className="w-4 h-4" />
-                  Retry
+                  {ui('Retry')}
                 </Button>
               ) : (
                 <Button
@@ -311,7 +321,7 @@ export function PreConsultationCheck({
                   disabled={!allChecksComplete}
                   className="flex-1"
                 >
-                  {allChecksComplete ? 'Join Consultation' : 'Checking...'}
+                  {allChecksComplete ? ui('Join Consultation') : ui('Checking...')}
                 </Button>
               )}
             </div>

@@ -4,8 +4,9 @@ import { ConsultationRoom } from '@/components/consultation/ConsultationRoom';
 import { PreConsultationCheck } from '@/components/consultation/PreConsultationCheck';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
-import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { translateToastText } from '@/lib/toastI18n';
 
 type ConsultationPhase = 'loading' | 'pre-check' | 'waiting' | 'in-call' | 'ended';
 
@@ -14,6 +15,8 @@ const Consultation = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, role } = useAuth();
+  const { language } = useLanguage();
+  const ui = (text: string) => translateToastText(text, language);
 
   const [phase, setPhase] = useState<ConsultationPhase>('loading');
   const [isAdmitted, setIsAdmitted] = useState(false);
@@ -42,8 +45,8 @@ const Consultation = () => {
 
     if (!appointmentId) {
       toast({
-        title: 'Error',
-        description: 'Invalid appointment. Please try again.',
+        title: ui('Error'),
+        description: ui('Invalid appointment. Please try again.'),
         variant: 'destructive'
       });
       navigate(-1);
@@ -77,10 +80,10 @@ const Consultation = () => {
           console.log('Consultation ended by other participant');
           setPhase('ended');
           toast({
-            title: 'Consultation Ended',
+            title: ui('Consultation Ended'),
             description: role === 'patient'
-              ? 'The doctor has ended the consultation. Please leave a review.'
-              : 'The patient has left the consultation.'
+              ? ui('The doctor has ended the consultation. Please leave a review.')
+              : ui('The patient has left the consultation.')
           });
           // Navigate back after a brief delay
           setTimeout(() => {
@@ -94,15 +97,15 @@ const Consultation = () => {
           console.log('Patient being admitted to consultation');
           setIsAdmitted(true);
           toast({
-            title: 'Admitted',
-            description: 'The doctor has admitted you to the consultation.'
+            title: ui('Admitted'),
+            description: ui('The doctor has admitted you to the consultation.')
           });
         } else if (role === 'doctor' && newStatusStr === 'waiting') {
           console.log('Doctor notified that patient is waiting');
           setPatientWaiting(true);
           toast({
-            title: 'Patient Waiting',
-            description: `${participantName} is waiting to join the consultation.`
+            title: ui('Patient Waiting'),
+            description: `${participantName} ${ui('is waiting to join the consultation.')}`
           });
         }
       })
@@ -132,8 +135,8 @@ const Consultation = () => {
         const nextStatus = (payload.new as { status?: string } | null)?.status;
         if (nextStatus === 'completed') {
           toast({
-            title: 'Consultation Complete',
-            description: 'Please leave a review.'
+            title: ui('Consultation Complete'),
+            description: ui('Please leave a review.')
           });
           redirectPatientToReview();
         }
@@ -156,8 +159,8 @@ const Consultation = () => {
     if (role === 'doctor') {
       setPhase('in-call');
       toast({
-        title: 'Ready',
-        description: 'You can now admit the patient when they join.'
+        title: ui('Ready'),
+        description: ui('You can now admit the patient when they join.')
       });
     } else {
       setPhase('in-call');
@@ -186,10 +189,10 @@ const Consultation = () => {
   const handleEndCall = () => {
     setPhase('ended');
     toast({
-      title: 'Consultation Ended',
+      title: ui('Consultation Ended'),
       description: role === 'doctor'
-        ? 'Thank you for using MyEdoctor.'
-        : 'Please leave a review for this consultation.'
+        ? ui('Thank you for using MyEdoctor.')
+        : ui('Please leave a review for this consultation.')
     });
 
     // Redirect based on role
@@ -207,7 +210,7 @@ const Consultation = () => {
       <div className="min-h-screen flex items-center justify-center bg-muted/30">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading consultation...</p>
+          <p className="text-muted-foreground">{ui('Loading consultation...')}</p>
         </div>
       </div>
     );
@@ -236,8 +239,8 @@ const Consultation = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 className="text-2xl font-semibold mb-2">Consultation Complete</h2>
-          <p className="text-muted-foreground">Redirecting you back...</p>
+          <h2 className="text-2xl font-semibold mb-2">{ui('Consultation Complete')}</h2>
+          <p className="text-muted-foreground">{ui('Redirecting you back...')}</p>
         </div>
       </div>
     );
