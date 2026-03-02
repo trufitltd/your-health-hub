@@ -152,6 +152,8 @@ export interface PatientWalletWithdrawalRequest {
   amount: number;
   balance_after: number;
   sla_due_at?: string | null;
+  idempotency_key?: string | null;
+  idempotent_replay?: boolean;
 }
 
 export interface PatientWalletWithdrawalRequestRow {
@@ -160,6 +162,7 @@ export interface PatientWalletWithdrawalRequestRow {
   amount: number;
   status: 'pending' | 'processing' | 'completed' | 'rejected' | 'cancelled' | 'approved' | 'paid';
   narration: string | null;
+  idempotency_key?: string | null;
   created_at: string;
   updated_at: string;
   sla_due_at?: string | null;

@@ -78,6 +78,14 @@ const formatDateKey = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const createWithdrawalIdempotencyKey = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `wallet-withdrawal:${crypto.randomUUID()}`;
+  }
+
+  return `wallet-withdrawal:${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+};
+
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
   pending_payment: {
     dot: '#d97706',
@@ -518,6 +526,7 @@ const PatientPortal = () => {
   const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawNarration, setWithdrawNarration] = useState('');
+  const [withdrawIdempotencyKey, setWithdrawIdempotencyKey] = useState<string | null>(null);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -2047,7 +2056,15 @@ const PatientPortal = () => {
 
     setIsSubmittingWithdrawal(true);
     try {
-      const response = await PatientWalletService.requestWalletWithdrawal(amount, withdrawNarration || undefined);
+      const requestIdempotencyKey = withdrawIdempotencyKey || createWithdrawalIdempotencyKey();
+      if (!withdrawIdempotencyKey) {
+        setWithdrawIdempotencyKey(requestIdempotencyKey);
+      }
+      const response = await PatientWalletService.requestWalletWithdrawal(
+        amount,
+        withdrawNarration || undefined,
+        requestIdempotencyKey,
+      );
       toast({
         title: 'Withdrawal request submitted',
         description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet. Admin processing target is within 48 hours.`,
@@ -2055,6 +2072,7 @@ const PatientPortal = () => {
       setWithdrawDialogOpen(false);
       setWithdrawAmount('');
       setWithdrawNarration('');
+      setWithdrawIdempotencyKey(null);
       await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user.id] });
       await queryClient.invalidateQueries({ queryKey: ['patient-wallet-withdrawals', user.id] });
     } catch (err: unknown) {
@@ -3483,9 +3501,14 @@ const PatientPortal = () => {
               open={withdrawDialogOpen}
               onOpenChange={(open) => {
                 setWithdrawDialogOpen(open);
+                if (open) {
+                  setWithdrawIdempotencyKey((prev) => prev || createWithdrawalIdempotencyKey());
+                  return;
+                }
                 if (!open) {
                   setWithdrawAmount('');
                   setWithdrawNarration('');
+                  setWithdrawIdempotencyKey(null);
                 }
               }}
             >
@@ -3532,6 +3555,7 @@ const PatientPortal = () => {
                       setWithdrawDialogOpen(false);
                       setWithdrawAmount('');
                       setWithdrawNarration('');
+                      setWithdrawIdempotencyKey(null);
                     }}
                   >
                     {t('common.cancel', 'Cancel')}
@@ -3814,7 +3838,10 @@ const PatientPortal = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setWithdrawDialogOpen(true)}
+                        onClick={() => {
+                          setWithdrawIdempotencyKey(createWithdrawalIdempotencyKey());
+                          setWithdrawDialogOpen(true);
+                        }}
                         disabled={patientWalletBalance <= 0}
                       >
                         {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
