@@ -21,6 +21,7 @@ import {
   normalizeDurationMinutes,
   type AppointmentIntervalRow,
 } from '@/lib/appointmentIntervals';
+import { AvailabilityService } from '@/services/AvailabilityService';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -78,6 +79,13 @@ export function SlotSelectionModal({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const { formatDate, formatClockTime, formatCurrency } = useLocaleFormatter();
+
+  const { data: allowedDurations = [] } = useQuery({
+    queryKey: ['allowed-durations-slot-selection-modal'],
+    queryFn: () => AvailabilityService.getAllowedDurations(),
+  });
+
+  const hasConfiguredDurations = allowedDurations.length > 0;
 
   // Fetch blocking appointments for selected doctor and date
   const { data: bookedAppointments = [] } = useQuery({
@@ -150,12 +158,28 @@ export function SlotSelectionModal({
 
   const durationOptions = useMemo(() => {
     if (mode !== 'reschedule') return [];
-    const options = [15, 30, 45, 60, 90];
+    if (!hasConfiguredDurations) return [];
+
+    const options = allowedDurations;
     const floor = typeof currentDurationMinutes === 'number' && Number.isFinite(currentDurationMinutes)
       ? currentDurationMinutes
       : 30;
-    return options.filter((value) => value >= floor);
-  }, [mode, currentDurationMinutes]);
+    const upgraded = options.filter((value) => value >= floor);
+
+    return upgraded;
+  }, [mode, currentDurationMinutes, allowedDurations, hasConfiguredDurations]);
+
+  useEffect(() => {
+    if (mode !== 'reschedule' || !onDurationChange || durationOptions.length === 0) return;
+    if (
+      typeof effectiveDurationMinutes === 'number'
+      && durationOptions.includes(effectiveDurationMinutes)
+    ) {
+      return;
+    }
+
+    onDurationChange(durationOptions[0]);
+  }, [mode, onDurationChange, durationOptions, effectiveDurationMinutes]);
 
   // Get available dates for selected doctor
   // Only show dates where the doctor has schedules that are marked as available
@@ -250,6 +274,9 @@ export function SlotSelectionModal({
     if (!selectedDoctor || !selectedDate || !selectedTime) {
       return;
     }
+    if (mode === 'reschedule' && !durationSelectionValid) {
+      return;
+    }
 
     const doctor = doctors.find((d) => d.id === selectedDoctor);
     if (doctor) {
@@ -265,7 +292,9 @@ export function SlotSelectionModal({
     }
   };
 
-  const canConfirm = selectedDoctor && selectedDate && selectedTime;
+  const durationSelectionValid = mode !== 'reschedule'
+    || (typeof effectiveDurationMinutes === 'number' && allowedDurations.includes(effectiveDurationMinutes));
+  const canConfirm = selectedDoctor && selectedDate && selectedTime && durationSelectionValid;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
   const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
   const minCalendarDate = useMemo(() => {
@@ -352,6 +381,12 @@ export function SlotSelectionModal({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {mode === 'reschedule' && !hasConfiguredDurations && (
+            <div className="rounded border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              No allowed durations are configured.
             </div>
           )}
 
