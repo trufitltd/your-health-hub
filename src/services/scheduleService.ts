@@ -70,7 +70,7 @@ export const upsertSchedule = async (
         .update({
           start_time: schedule.start_time,
           end_time: schedule.end_time,
-          slot_duration_minutes: schedule.slot_duration_minutes || 30,
+          slot_duration_minutes: schedule.slot_duration_minutes || 15,
           max_patients_per_slot: schedule.max_patients_per_slot || 1,
           is_available: schedule.is_available !== false,
           updated_at: new Date().toISOString(),
@@ -91,7 +91,7 @@ export const upsertSchedule = async (
         day_of_week: schedule.day_of_week,
         start_time: schedule.start_time,
         end_time: schedule.end_time,
-        slot_duration_minutes: schedule.slot_duration_minutes || 30,
+        slot_duration_minutes: schedule.slot_duration_minutes || 15,
         max_patients_per_slot: schedule.max_patients_per_slot || 1,
         is_available: schedule.is_available !== false,
       })
@@ -152,7 +152,7 @@ export const toggleDayAvailability = async (
       const created = await upsertSchedule(doctorId, {
         day_of_week: dayOfWeek,
         start_time: '09:00',
-        end_time: '17:00',
+        end_time: '23:00',
         is_available: isAvailable,
       });
       return created || null;
@@ -212,18 +212,18 @@ export const getFormattedSchedule = async (doctorId: string) => {
 };
 
 /**
- * Create default schedule for new doctor (Monday-Friday, 9 AM - 5 PM)
+ * Create default schedule for new doctor (all days, 9 AM - 11 PM)
  */
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
     const defaultSchedules = [
-      { day_of_week: 0, start_time: '09:00', end_time: '17:00' }, // Sunday
-      { day_of_week: 1, start_time: '09:00', end_time: '17:00' }, // Monday
-      { day_of_week: 2, start_time: '09:00', end_time: '17:00' }, // Tuesday
-      { day_of_week: 3, start_time: '09:00', end_time: '17:00' }, // Wednesday
-      { day_of_week: 4, start_time: '09:00', end_time: '17:00' }, // Thursday
-      { day_of_week: 5, start_time: '09:00', end_time: '17:00' }, // Friday
-      { day_of_week: 6, start_time: '09:00', end_time: '17:00' }, // Saturday
+      { day_of_week: 0, start_time: '09:00', end_time: '23:00' }, // Sunday
+      { day_of_week: 1, start_time: '09:00', end_time: '23:00' }, // Monday
+      { day_of_week: 2, start_time: '09:00', end_time: '23:00' }, // Tuesday
+      { day_of_week: 3, start_time: '09:00', end_time: '23:00' }, // Wednesday
+      { day_of_week: 4, start_time: '09:00', end_time: '23:00' }, // Thursday
+      { day_of_week: 5, start_time: '09:00', end_time: '23:00' }, // Friday
+      { day_of_week: 6, start_time: '09:00', end_time: '23:00' }, // Saturday
     ];
 
     // Direct insert without checking for existing schedules
@@ -232,7 +232,7 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
       day_of_week: schedule.day_of_week,
       start_time: schedule.start_time,
       end_time: schedule.end_time,
-      slot_duration_minutes: 30,
+      slot_duration_minutes: 15,
       max_patients_per_slot: 1,
       is_available: true,
     }));
