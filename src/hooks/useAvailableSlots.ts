@@ -1,6 +1,11 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  isSlotBlockedByAppointments,
+  normalizeDurationMinutes,
+  type AppointmentIntervalRow,
+} from '@/lib/appointmentIntervals';
 
 export interface Doctor {
   id: string;
@@ -25,6 +30,10 @@ export interface AvailableSlot {
   booked_count: number;
   available_slots: number;
 }
+
+type AppointmentSlotRow = {
+  id: string;
+} & AppointmentIntervalRow;
 
 /**
  * Fetch all active doctors
@@ -208,20 +217,34 @@ export function getNextDateForDayOfWeek(dayOfWeek: number): Date {
 export const checkSlotAvailability = async (
   doctorId: string,
   date: string, // YYYY-MM-DD format
-  time: string  // HH:MM format
+  time: string,  // HH:MM format
+  durationMinutes: number = 30,
+  excludeAppointmentId?: string,
 ): Promise<boolean> => {
   try {
-    // Query for existing appointments at this time
-    const { data, error } = await supabase
+    // Query appointments for this date, then apply interval overlap logic.
+    let query = supabase
       .from('appointments')
-      .select('id')
+      .select('id,time,duration_minutes,status,slot_locked_until')
       .eq('doctor_id', doctorId)
-      .eq('date', date)
-      .eq('time', time)
-      .not('status', 'in', '(cancelled)');
+      .eq('date', date);
+
+    if (excludeAppointmentId) {
+      query = query.neq('id', excludeAppointmentId);
+    }
+
+    const { data, error } = await query;
     
     if (error) throw error;
-    return (data?.length ?? 0) === 0; // Available if no conflicts
+
+    const safeDuration = normalizeDurationMinutes(durationMinutes, 30);
+    const hasConflict = isSlotBlockedByAppointments(
+      time,
+      safeDuration,
+      (data || []) as AppointmentSlotRow[],
+    );
+
+    return !hasConflict;
   } catch (error) {
     console.error('Error checking slot availability:', error);
     // If there's an error, assume available to allow booking
@@ -237,6 +260,7 @@ export function generateTimeSlots(
   endTime: string,   // HH:MM format
   durationMinutes: number = 30
 ): string[] {
+  const safeDurationMinutes = normalizeDurationMinutes(durationMinutes, 30);
   const slots: string[] = [];
   const [startHour, startMin] = startTime.split(':').map(Number);
   const [endHour, endMin] = endTime.split(':').map(Number);
@@ -247,11 +271,11 @@ export function generateTimeSlots(
   const endDate = new Date();
   endDate.setHours(endHour, endMin, 0, 0);
   
-  while (current < endDate) {
+  while ((current.getTime() + (safeDurationMinutes * 60000)) <= endDate.getTime()) {
     const hours = String(current.getHours()).padStart(2, '0');
     const minutes = String(current.getMinutes()).padStart(2, '0');
     slots.push(`${hours}:${minutes}`);
-    current.setMinutes(current.getMinutes() + durationMinutes);
+    current.setMinutes(current.getMinutes() + safeDurationMinutes);
   }
   
   return slots;

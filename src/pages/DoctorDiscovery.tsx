@@ -15,6 +15,14 @@ import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import {
+  isBlockingAppointmentRow,
+  isTimePointBusyByAppointments,
+  normalizeTimeHHMM,
+  timeToMinutes,
+} from '@/lib/appointmentIntervals';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useLocaleFormatter } from '@/lib/locale';
+import {
   Star, Search, Filter, Clock, MapPin, Award, Heart,
   ChevronRight, Loader
 } from 'lucide-react';
@@ -36,14 +44,75 @@ interface Doctor {
   total_reviews?: number;
   experience_years?: number;
   bio?: string;
+  bio_translations?: Record<string, string> | null;
+  preferred_consultation_languages?: string[] | null;
   is_active?: boolean;
   online_status?: 'online' | 'away' | 'offline';
 }
 
+type SlotStatusRow = {
+  time: string | null;
+  duration_minutes: number | null;
+  status: string | null;
+  slot_locked_until: string | null;
+};
+
+const SUPPORTED_CONSULTATION_LANGUAGES = [
+  'english',
+  'hausa',
+  'igbo',
+  'yoruba',
+  'arabic',
+  'swahili',
+  'fulfulde',
+  'tiv',
+  'pidgin_english',
+  'french',
+  'spanish',
+  'portuguese',
+] as const;
+
+const CONSULTATION_LANGUAGE_LABELS: Record<string, string> = {
+  english: 'English',
+  hausa: 'Hausa',
+  igbo: 'Igbo',
+  yoruba: 'Yoruba',
+  arabic: 'Arabic',
+  swahili: 'Swahili',
+  fulfulde: 'Fulfulde',
+  tiv: 'Tiv',
+  pidgin_english: 'Pidgin English',
+  french: 'French',
+  spanish: 'Spanish',
+  portuguese: 'Portuguese',
+};
+
+const isMissingColumnError = (error: { code?: string; message?: string } | null | undefined) => {
+  if (!error) return false;
+  return error.code === '42703' || error.code === 'PGRST204';
+};
+
+const normalizeConsultationLanguage = (value: string | null | undefined) => {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+};
+
+const formatConsultationLanguageLabel = (value: string) => {
+  const normalized = normalizeConsultationLanguage(value);
+  if (!normalized) return 'Unknown';
+  return CONSULTATION_LANGUAGE_LABELS[normalized]
+    || normalized
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+};
+
 export default function DoctorDiscovery() {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { formatDate, formatTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const queryClient = useQueryClient();
   const { presenceMap } = useDoctorPresence();
   const [doctorTypeFilter, setDoctorTypeFilter] = useState<'all' | 'general' | 'specialist'>('all');
@@ -55,6 +124,7 @@ export default function DoctorDiscovery() {
     minRating: 0,
     minExperience: 0,
     hospital: '',
+    consultationLanguage: '',
   });
   const [availabilityMode, setAvailabilityMode] = useState<'none' | 'now' | 'exact' | 'range'>('none');
   const [availabilityFilters, setAvailabilityFilters] = useState({
@@ -66,6 +136,7 @@ export default function DoctorDiscovery() {
     endTime: '',
   });
   const [showAvailabilityDialog, setShowAvailabilityDialog] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
 
@@ -73,6 +144,12 @@ export default function DoctorDiscovery() {
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
+
+      if (window.innerWidth < 768) {
+        setShowFilters(true);
+        setLastScrollY(currentScrollY);
+        return;
+      }
       
       if (currentScrollY < 50) {
         setShowFilters(true);
@@ -103,40 +180,47 @@ export default function DoctorDiscovery() {
   const { data: availableDoctorIds = [] } = useQuery({
     queryKey: ['available-doctors', availabilityMode, availabilityFilters],
     queryFn: async () => {
-      let checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
+      const checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
 
       if (availabilityMode === 'now') {
         const { date, time } = getNowDatetime();
+        const normalizedTime = normalizeTimeHHMM(time);
+        if (!normalizedTime) return [];
         const dayIndex = new Date(date).getDay();
-        checkTimes.push({ date, time, dayIndex });
+        checkTimes.push({ date, time: normalizedTime, dayIndex });
       } else if (availabilityMode === 'exact') {
         if (!availabilityFilters.date || !availabilityFilters.time) return [];
+        const normalizedTime = normalizeTimeHHMM(availabilityFilters.time);
+        if (!normalizedTime) return [];
         const dayIndex = new Date(availabilityFilters.date).getDay();
         checkTimes.push({ 
           date: availabilityFilters.date, 
-          time: availabilityFilters.time, 
+          time: normalizedTime, 
           dayIndex 
         });
       } else if (availabilityMode === 'range') {
         if (!availabilityFilters.startDate || !availabilityFilters.startTime) return [];
         const endD = availabilityFilters.endDate || availabilityFilters.startDate;
-        const endT = availabilityFilters.endTime || '23:59';
+        const startTime = normalizeTimeHHMM(availabilityFilters.startTime);
+        if (!startTime) return [];
+        const endTime = normalizeTimeHHMM(availabilityFilters.endTime || '23:59') || '23:59';
         
-        let current = new Date(availabilityFilters.startDate);
+        const current = new Date(availabilityFilters.startDate);
         const end = new Date(endD);
         
         while (current <= end) {
           const dateStr = current.toISOString().split('T')[0];
           const dayIndex = current.getDay();
-          checkTimes.push({ date: dateStr, time: availabilityFilters.startTime, dayIndex });
-          if (endT !== availabilityFilters.startTime) {
-            checkTimes.push({ date: dateStr, time: endT, dayIndex });
+          checkTimes.push({ date: dateStr, time: startTime, dayIndex });
+          if (endTime !== startTime) {
+            checkTimes.push({ date: dateStr, time: endTime, dayIndex });
           }
           current.setDate(current.getDate() + 1);
         }
       }
 
       if (checkTimes.length === 0) return [];
+      const uniqueDates = Array.from(new Set(checkTimes.map(({ date }) => date)));
 
       // Get active doctors first
       const { data: activeDoctors, error: doctorError } = await supabase
@@ -155,39 +239,55 @@ export default function DoctorDiscovery() {
         let hasAvailableSlot = false;
 
         // Get all schedules for this doctor
-        const { data: schedules } = await supabase
+        const { data: schedules, error: scheduleError } = await supabase
           .from('doctor_schedules')
           .select('day_of_week, start_time, end_time, slot_duration_minutes')
           .eq('doctor_id', doctorId)
           .eq('is_available', true);
 
+        if (scheduleError) throw scheduleError;
         if (!schedules || schedules.length === 0) continue;
+
+        const appointmentsByDate = new Map<string, SlotStatusRow[]>();
+        for (const date of uniqueDates) {
+          const { data: appointments, error: appointmentsError } = await supabase
+            .from('appointments')
+            .select('time,duration_minutes,status,slot_locked_until')
+            .eq('doctor_id', doctorId)
+            .eq('date', date);
+
+          if (appointmentsError) throw appointmentsError;
+
+          const blockingAppointments = (appointments || [])
+            .filter((row) => isBlockingAppointmentRow(row as SlotStatusRow))
+            .map((row) => row as SlotStatusRow);
+          appointmentsByDate.set(date, blockingAppointments);
+        }
 
         // Check each requested time
         for (const { date, time, dayIndex } of checkTimes) {
-          // Find schedules for this day
-          const daySchedules = schedules.filter(s => s.day_of_week === dayIndex);
+          const daySchedules = schedules.filter((schedule) => Number(schedule.day_of_week) === dayIndex);
           if (daySchedules.length === 0) continue;
 
-          // Check if time falls within any schedule and generate slots
-          for (const schedule of daySchedules) {
-            if (time >= schedule.start_time && time < schedule.end_time) {
-              // Check if this specific time slot exists in the schedule
-              const { data: booking } = await supabase
-                .from('appointments')
-                .select('id')
-                .eq('doctor_id', doctorId)
-                .eq('date', date)
-                .eq('time', time)
-                .in('status', ['pending', 'confirmed'])
-                .limit(1);
+          const requestedMinute = timeToMinutes(time);
+          if (requestedMinute === null) continue;
 
-              if (!booking || booking.length === 0) {
-                hasAvailableSlot = true;
-                break;
-              }
-            }
+          const appointmentsForDate = appointmentsByDate.get(date) || [];
+          if (isTimePointBusyByAppointments(time, appointmentsForDate)) {
+            continue;
           }
+
+          const coveredBySchedule = daySchedules.some((schedule) => {
+            const scheduleStart = timeToMinutes(String(schedule.start_time).slice(0, 5));
+            const scheduleEnd = timeToMinutes(String(schedule.end_time).slice(0, 5));
+            if (scheduleStart === null || scheduleEnd === null) return false;
+            return requestedMinute >= scheduleStart && requestedMinute < scheduleEnd;
+          });
+
+          if (coveredBySchedule) {
+            hasAvailableSlot = true;
+          }
+
           if (hasAvailableSlot) break;
         }
 
@@ -205,7 +305,7 @@ export default function DoctorDiscovery() {
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
     queryKey: ['doctors-discovery'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const doctorsWithLanguagesQuery = await supabase
         .from('doctor_registrations')
         .select(`
           id,
@@ -220,16 +320,65 @@ export default function DoctorDiscovery() {
           city,
           state,
           bio,
-          experience
+          bio_translations,
+          experience,
+          preferred_consultation_languages
         `)
         .eq('verification_status', 'approved')
         .order('full_name');
 
-      if (error) throw error;
+      let registrationRows: Array<{
+        id: string;
+        user_id: string;
+        full_name: string;
+        specialty: string;
+        rate_per_consultation?: number | null;
+        hospital_affiliation: string;
+        profile_picture_url?: string;
+        age: number;
+        verification_status: string;
+        city: string;
+        state: string;
+        bio?: string;
+        bio_translations?: Record<string, unknown> | null;
+        experience?: string | null;
+        preferred_consultation_languages?: string[] | null;
+      }> = [];
+
+      if (doctorsWithLanguagesQuery.error) {
+        if (!isMissingColumnError(doctorsWithLanguagesQuery.error)) {
+          throw doctorsWithLanguagesQuery.error;
+        }
+
+        const doctorsFallbackQuery = await supabase
+          .from('doctor_registrations')
+          .select(`
+            id,
+            user_id,
+            full_name,
+            specialty,
+            rate_per_consultation,
+            hospital_affiliation,
+            profile_picture_url,
+            age,
+            verification_status,
+            city,
+            state,
+            bio,
+            experience
+          `)
+          .eq('verification_status', 'approved')
+          .order('full_name');
+
+        if (doctorsFallbackQuery.error) throw doctorsFallbackQuery.error;
+        registrationRows = (doctorsFallbackQuery.data || []) as typeof registrationRows;
+      } else {
+        registrationRows = (doctorsWithLanguagesQuery.data || []) as typeof registrationRows;
+      }
 
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
-        (data || []).map(async (doctor) => {
+        registrationRows.map(async (doctor) => {
           // Fetch doctor availability status
           const { data: doctorStatus } = await supabase
             .from('doctors')
@@ -257,6 +406,23 @@ export default function DoctorDiscovery() {
 
           const hasAvailableSchedules = (schedules || []).length > 0;
           const isActive = doctorStatus?.is_active !== false;
+          const preferredConsultationLanguages = Array.isArray(doctor.preferred_consultation_languages)
+            ? doctor.preferred_consultation_languages
+              .map((language) => normalizeConsultationLanguage(String(language)))
+              .filter(Boolean)
+            : [];
+          const localizedBioTranslations = (doctor.bio_translations && typeof doctor.bio_translations === 'object')
+            ? Object.entries(doctor.bio_translations as Record<string, unknown>).reduce<Record<string, string>>(
+              (acc, [code, value]) => {
+                if (typeof value !== 'string') return acc;
+                const trimmed = value.trim();
+                if (!trimmed) return acc;
+                acc[code.toLowerCase()] = trimmed;
+                return acc;
+              },
+              {}
+            )
+            : {};
 
           return {
             ...doctor,
@@ -264,6 +430,8 @@ export default function DoctorDiscovery() {
             total_reviews: ratings.length,
             experience_years: doctor.experience ? Number(doctor.experience) : null,
             rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
+            bio_translations: localizedBioTranslations,
+            preferred_consultation_languages: preferredConsultationLanguages,
             is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
           };
         })
@@ -276,7 +444,7 @@ export default function DoctorDiscovery() {
   // Merge presence data with doctors
   const doctorsWithPresence = useMemo(() => {
     console.log('[DoctorDiscovery] Current presence map:', presenceMap);
-    console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, auth_user_id: d.auth_user_id, name: d.full_name })));
+    console.log('[DoctorDiscovery] Doctors:', doctors.map(d => ({ user_id: d.user_id, name: d.full_name })));
     return doctors.map(doctor => {
       // Use user_id which matches the auth user ID
       const status = presenceMap[doctor.user_id] || 'offline';
@@ -349,9 +517,18 @@ export default function DoctorDiscovery() {
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
       const matchesExperience = !filters.minExperience || (doctor.experience_years || 0) >= filters.minExperience;
       const matchesHospital = !filters.hospital || doctor.hospital_affiliation.toLowerCase().includes(filters.hospital.toLowerCase());
+      const matchesLanguage = !filters.consultationLanguage
+        || (doctor.preferred_consultation_languages || []).includes(filters.consultationLanguage);
       const matchesAvailability = availabilityMode === 'none' || availableDoctorIds.includes(doctor.user_id);
 
-      return matchesSearch && matchesDoctorType && matchesSpecialty && matchesRating && matchesExperience && matchesHospital && matchesAvailability;
+      return matchesSearch
+        && matchesDoctorType
+        && matchesSpecialty
+        && matchesRating
+        && matchesExperience
+        && matchesHospital
+        && matchesLanguage
+        && matchesAvailability;
     });
   }, [searchQuery, filters, doctorsWithPresence, availabilityMode, availableDoctorIds, doctorTypeFilter]);
 
@@ -363,6 +540,46 @@ export default function DoctorDiscovery() {
   const hospitals = useMemo(() =>
     [...new Set(doctorsWithPresence.map(d => d.hospital_affiliation))].sort(), [doctorsWithPresence]
   );
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (doctorTypeFilter !== 'all') count += 1;
+    if (filters.specialty) count += 1;
+    if (filters.minRating > 0) count += 1;
+    if (filters.minExperience > 0) count += 1;
+    if (filters.hospital) count += 1;
+    if (filters.consultationLanguage) count += 1;
+    if (availabilityMode !== 'none') count += 1;
+    return count;
+  }, [doctorTypeFilter, filters, availabilityMode]);
+
+  const hasActiveSearch = searchQuery.trim().length > 0;
+  const hasAnyActiveControls = hasActiveSearch || activeFilterCount > 0;
+
+  const clearAllFilters = () => {
+    setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' });
+    setSearchQuery('');
+    setDoctorTypeFilter('all');
+    setAvailabilityMode('none');
+    setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+  };
+
+  const consultationLanguageOptions = useMemo(() => {
+    const languageValues = new Set<string>(SUPPORTED_CONSULTATION_LANGUAGES);
+
+    doctorsWithPresence.forEach((doctor) => {
+      (doctor.preferred_consultation_languages || []).forEach((language) => {
+        const normalizedLanguage = normalizeConsultationLanguage(language);
+        if (normalizedLanguage) {
+          languageValues.add(normalizedLanguage);
+        }
+      });
+    });
+
+    return Array.from(languageValues)
+      .map((value) => ({ value, label: formatConsultationLanguageLabel(value) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [doctorsWithPresence]);
 
   const handleViewProfile = (doctor: Doctor) => {
     setSelectedDoctor(doctor);
@@ -396,17 +613,17 @@ export default function DoctorDiscovery() {
   const formatDateForDisplay = (dateStr: string) => {
     if (!dateStr) return '';
     const date = new Date(dateStr + 'T00:00:00');
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   // Helper: Format time for display
   const formatTimeForDisplay = (timeStr: string) => {
     if (!timeStr) return '';
     const [hours, minutes] = timeStr.split(':');
-    const hour = parseInt(hours);
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    const displayHour = hour % 12 || 12;
-    return `${displayHour}:${minutes} ${ampm}`;
+    return formatTime(new Date(`2000-01-01T${hours}:${minutes}:00`), {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   };
 
   // Helper: Get availability filter display text
@@ -424,6 +641,22 @@ export default function DoctorDiscovery() {
       return `From ${startText}`;
     }
     return null;
+  };
+
+  const getLocalizedDoctorBio = (doctor: Doctor) => {
+    const fallbackBio = doctor.bio?.trim() || '';
+    if (language === 'en') return fallbackBio;
+    const translations = doctor.bio_translations;
+    if (!translations || typeof translations !== 'object') return fallbackBio;
+    const localized = translations[language];
+    if (typeof localized === 'string' && localized.trim().length > 0) {
+      return localized.trim();
+    }
+    const englishTranslation = translations.en;
+    if (typeof englishTranslation === 'string' && englishTranslation.trim().length > 0) {
+      return englishTranslation.trim();
+    }
+    return fallbackBio;
   };
 
   const handleBookNow = (doctor: Doctor) => {
@@ -476,8 +709,203 @@ export default function DoctorDiscovery() {
               <p className="text-lg text-muted-foreground">Browse our network of qualified healthcare professionals</p>
             </div>
 
+            {/* Mobile Search + Filters */}
+            <div className="md:hidden sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-3 mb-4 -mx-4 px-4">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search doctors..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="relative gap-2"
+                  onClick={() => setMobileFiltersOpen(true)}
+                >
+                  <Filter className="w-4 h-4" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="inline-flex min-w-5 h-5 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] leading-none">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </Button>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground truncate">
+                  <span className="font-semibold text-foreground">{filteredDoctors.length}</span> doctors
+                  {activeFilterCount > 0 ? ` • ${activeFilterCount} active` : ''}
+                </p>
+                {hasAnyActiveControls && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={clearAllFilters}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <Dialog open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
+              <DialogContent className="md:hidden w-[calc(100%-1rem)] max-w-lg rounded-2xl p-0 overflow-hidden">
+                <DialogHeader className="px-4 pt-4 pb-2">
+                  <DialogTitle>Filter Doctors</DialogTitle>
+                  <DialogDescription>Refine results by specialty, language, and availability.</DialogDescription>
+                </DialogHeader>
+
+                <div className="px-4 pb-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Doctor Type</label>
+                    <select
+                      value={doctorTypeFilter}
+                      onChange={(e) => setDoctorTypeFilter(e.target.value as 'all' | 'general' | 'specialist')}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="all">All Doctors</option>
+                      <option value="general">General Practice</option>
+                      <option value="specialist">Specialists</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Specialty</label>
+                    <select
+                      value={filters.specialty}
+                      onChange={(e) => setFilters({ ...filters, specialty: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">All Specialties</option>
+                      {specialties.map(specialty => (
+                        <option key={specialty} value={specialty}>{specialty}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Consultation Language</label>
+                    <select
+                      value={filters.consultationLanguage}
+                      onChange={(e) => setFilters({ ...filters, consultationLanguage: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">Any Language</option>
+                      {consultationLanguageOptions.map((languageOption) => (
+                        <option key={languageOption.value} value={languageOption.value}>
+                          {languageOption.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Minimum Rating</label>
+                      <select
+                        value={filters.minRating}
+                        onChange={(e) => setFilters({ ...filters, minRating: parseFloat(e.target.value) })}
+                        className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                      >
+                        <option value={0}>Any Rating</option>
+                        <option value={3}>3+ ⭐</option>
+                        <option value={4}>4+ ⭐</option>
+                        <option value={4.5}>4.5+ ⭐</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Experience</label>
+                      <select
+                        value={filters.minExperience}
+                        onChange={(e) => setFilters({ ...filters, minExperience: parseFloat(e.target.value) })}
+                        className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                      >
+                        <option value={0}>Any Experience</option>
+                        <option value={5}>{formatNumber(5)}+ Years</option>
+                        <option value={10}>{formatNumber(10)}+ Years</option>
+                        <option value={15}>{formatNumber(15)}+ Years</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Hospital</label>
+                    <select
+                      value={filters.hospital}
+                      onChange={(e) => setFilters({ ...filters, hospital: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">All Hospitals</option>
+                      {hospitals.map(hospital => (
+                        <option key={hospital} value={hospital}>{hospital}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={availabilityMode === 'now'}
+                        onChange={(e) => setAvailabilityMode(e.target.checked ? 'now' : 'none')}
+                        className="w-4 h-4 cursor-pointer"
+                      />
+                      <span className="text-sm font-medium">Available Now</span>
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setMobileFiltersOpen(false);
+                        setShowAvailabilityDialog(true);
+                      }}
+                      className="w-full justify-start gap-2"
+                    >
+                      <Clock className="w-4 h-4" />
+                      {getAvailabilityFilterText() || 'Choose date/time'}
+                    </Button>
+                    {(availabilityMode === 'exact' || availabilityMode === 'range') && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setAvailabilityMode('none');
+                          setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+                        }}
+                        className="w-full justify-start text-xs"
+                      >
+                        Clear date/time filter
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-border px-4 py-3 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={clearAllFilters}
+                  >
+                    Clear All
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    onClick={() => setMobileFiltersOpen(false)}
+                  >
+                    Show {filteredDoctors.length}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
             {/* Sticky Filter Bar */}
-            <div className={`sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-4 mb-6 -mx-4 px-4 transition-transform duration-300 ${showFilters ? 'translate-y-0' : '-translate-y-full'}`}>
+            <div className={`hidden md:block sticky top-12 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-y border-border py-4 mb-6 -mx-4 px-4 transition-transform duration-300 ${showFilters ? 'translate-y-0' : '-translate-y-full'}`}>
               <div className="space-y-4">
                 {/* Primary Filters */}
                 <div className="flex flex-wrap gap-3">
@@ -552,9 +980,9 @@ export default function DoctorDiscovery() {
                     className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
                     <option value={0}>Any Experience</option>
-                    <option value={5}>5+ Years</option>
-                    <option value={10}>10+ Years</option>
-                    <option value={15}>15+ Years</option>
+                    <option value={5}>{formatNumber(5)}+ Years</option>
+                    <option value={10}>{formatNumber(10)}+ Years</option>
+                    <option value={15}>{formatNumber(15)}+ Years</option>
                   </select>
 
                   <select
@@ -565,6 +993,19 @@ export default function DoctorDiscovery() {
                     <option value="">All Hospitals</option>
                     {hospitals.map(hospital => (
                       <option key={hospital} value={hospital}>{hospital}</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={filters.consultationLanguage}
+                    onChange={(e) => setFilters({ ...filters, consultationLanguage: e.target.value })}
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                  >
+                    <option value="">Any Language</option>
+                    {consultationLanguageOptions.map((languageOption) => (
+                      <option key={languageOption.value} value={languageOption.value}>
+                        {languageOption.label}
+                      </option>
                     ))}
                   </select>
 
@@ -583,17 +1024,11 @@ export default function DoctorDiscovery() {
                     </Button>
                   )}
 
-                  {(Object.values(filters).some(v => v) || searchQuery || doctorTypeFilter !== 'all' || availabilityMode !== 'none') && (
+                  {hasAnyActiveControls && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' });
-                        setSearchQuery('');
-                        setDoctorTypeFilter('all');
-                        setAvailabilityMode('none');
-                        setAvailabilityFilters({ date: '', time: '', startDate: '', startTime: '', endDate: '', endTime: '' });
-                      }}
+                      onClick={clearAllFilters}
                       className="gap-1 text-destructive hover:text-destructive"
                     >
                       <Filter className="w-4 h-4" />
@@ -624,7 +1059,7 @@ export default function DoctorDiscovery() {
                   <p className="text-muted-foreground mb-4">Try adjusting your filters or search query</p>
                   <Button
                     variant="outline"
-                    onClick={() => setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '' })}
+                    onClick={clearAllFilters}
                   >
                     Clear All Filters
                   </Button>
@@ -632,96 +1067,118 @@ export default function DoctorDiscovery() {
               </Card>
             ) : (
               <div className="grid md:grid-cols-3 gap-6">
-                {filteredDoctors.map(doctor => (
-                  <motion.div
-                    key={doctor.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
-                      <CardContent className="p-6 flex-1 flex flex-col">
-                        <div className="flex items-start justify-between mb-4">
-                            <div className="relative">
-                              <Avatar className="w-16 h-16">
-                                <AvatarImage src={doctor.profile_picture_url} />
-                                <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                                  {doctor.full_name.split(' ').map(n => n[0]).join('')}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
-                            </div>
-                            <div className="flex gap-2 flex-col">
-                              <Badge variant="outline" className="text-xs">
-                                {doctor.experience_years ? `${doctor.experience_years}y exp` : 'Experience N/A'}
-                              </Badge>
-                              <Badge className="text-xs bg-blue-100 text-blue-800">
-                                {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
-                              </Badge>
-                              {!doctor.is_active && (
-                                <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
-                                  Unavailable
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-
-                          <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
-                          <p className="text-sm text-primary font-medium mb-2">{formatSpecialtyLabel(doctor.specialty)}</p>
-                          {doctor.bio && (
-                            <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{doctor.bio}</p>
-                          )}
-
-                          <div className="space-y-2 mb-4 flex-1">
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <MapPin className="w-4 h-4" />
-                              {doctor.city}, {doctor.state}
-                            </div>
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Award className="w-4 h-4" />
-                              {doctor.hospital_affiliation}
-                            </div>
-                          </div>
-
-                          {doctor.rating !== undefined && (
-                            <div className="flex items-center gap-2 mb-4">
-                              <div className="flex gap-1">
-                                {renderStars(doctor.rating)}
+                {filteredDoctors.map(doctor => {
+                  const localizedDoctorBio = getLocalizedDoctorBio(doctor);
+                  return (
+                    <motion.div
+                      key={doctor.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
+                        <CardContent className="p-6 flex-1 flex flex-col">
+                          <div className="flex items-start justify-between mb-4">
+                              <div className="relative">
+                                <Avatar className="w-16 h-16">
+                                  <AvatarImage src={doctor.profile_picture_url} />
+                                  <AvatarFallback className="bg-primary/10 text-primary text-lg">
+                                    {doctor.full_name.split(' ').map(n => n[0]).join('')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
                               </div>
-                              <span className="text-sm font-medium">{doctor.rating?.toFixed(1)}</span>
-                              <span className="text-xs text-muted-foreground">({doctor.total_reviews})</span>
+                              <div className="flex gap-2 flex-col">
+                                <Badge variant="outline" className="text-xs">
+                                  {doctor.experience_years
+                                    ? `${doctor.experience_years}y exp`
+                                    : `${t('specialists.card.experience', 'Experience')} ${t('specialists.defaults.notAvailable', 'N/A')}`}
+                                </Badge>
+                                <Badge className="text-xs bg-blue-100 text-blue-800">
+                                  {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
+                                </Badge>
+                                {!doctor.is_active && (
+                                  <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                    Unavailable
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
-                          )}
 
-                          <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                            <p className="text-sm font-semibold text-success">₦{getConsultationFee(doctor).toLocaleString()}</p>
-                            <p className="text-xs text-muted-foreground">Consultation Fee</p>
-                          </div>
+                            <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
+                            <p className="text-sm text-primary font-medium mb-2">{doctor.specialty}</p>
+                            {localizedDoctorBio && (
+                              <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{localizedDoctorBio}</p>
+                            )}
+                            {doctor.preferred_consultation_languages && doctor.preferred_consultation_languages.length > 0 && (
+                              <div className="mb-3">
+                                <p className="text-xs text-muted-foreground mb-2">Consultation Languages</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {doctor.preferred_consultation_languages.slice(0, 3).map((language, index) => (
+                                    <Badge key={`${doctor.id}-language-${language}-${index}`} variant="secondary" className="text-[11px]">
+                                      {formatConsultationLanguageLabel(language)}
+                                    </Badge>
+                                  ))}
+                                  {doctor.preferred_consultation_languages.length > 3 && (
+                                    <Badge variant="outline" className="text-[11px]">
+                                      +{doctor.preferred_consultation_languages.length - 3}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            )}
 
-                          <div className="flex gap-2 pt-4 border-t">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => handleViewProfile(doctor)}
-                              disabled={!doctor.is_active}
-                            >
-                              View Profile
-                            </Button>
-                            <Button
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => handleBookNow(doctor)}
-                              disabled={!doctor.is_active}
-                            >
-                              {doctor.is_active ? 'Book Now' : 'Unavailable'}
-                            </Button>
-                          </div>
-                        </CardContent>
+                            <div className="space-y-2 mb-4 flex-1">
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <MapPin className="w-4 h-4" />
+                                {doctor.city}, {doctor.state}
+                              </div>
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Award className="w-4 h-4" />
+                                {doctor.hospital_affiliation}
+                              </div>
+                            </div>
+
+                            {doctor.rating !== undefined && (
+                              <div className="flex items-center gap-2 mb-4">
+                                <div className="flex gap-1">
+                                  {renderStars(doctor.rating)}
+                                </div>
+                                <span className="text-sm font-medium">{doctor.rating?.toFixed(1)}</span>
+                                <span className="text-xs text-muted-foreground">({doctor.total_reviews})</span>
+                              </div>
+                            )}
+
+                            <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
+                              <p className="text-sm font-semibold text-success">{formatCurrency(getConsultationFee(doctor))}</p>
+                              <p className="text-xs text-muted-foreground">Consultation Fee</p>
+                            </div>
+
+                            <div className="flex gap-2 pt-4 border-t">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => handleViewProfile(doctor)}
+                                disabled={!doctor.is_active}
+                              >
+                                View Profile
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => handleBookNow(doctor)}
+                                disabled={!doctor.is_active}
+                              >
+                                {doctor.is_active ? 'Book Now' : 'Unavailable'}
+                              </Button>
+                            </div>
+                          </CardContent>
                       </Card>
                     </motion.div>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
+            )}
           </motion.div>
         </div>
 
@@ -751,7 +1208,16 @@ export default function DoctorDiscovery() {
                         <h2 className="text-2xl font-bold">Dr. {selectedDoctor.full_name}</h2>
                         <Badge variant="outline" className="text-xs">{getStatusColor(selectedDoctor.online_status).text}</Badge>
                       </div>
-                      <p className="text-lg text-primary font-medium mb-3">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
+                      <p className="text-lg text-primary font-medium mb-3">{selectedDoctor.specialty}</p>
+                      {selectedDoctor.preferred_consultation_languages && selectedDoctor.preferred_consultation_languages.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {selectedDoctor.preferred_consultation_languages.map((language, index) => (
+                            <Badge key={`profile-language-${language}-${index}`} variant="secondary" className="text-xs">
+                              {formatConsultationLanguageLabel(language)}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="flex items-center gap-4 mb-4">
                         {selectedDoctor.rating !== undefined && (
@@ -793,7 +1259,7 @@ export default function DoctorDiscovery() {
                   <div>
                     <h3 className="font-semibold mb-3">Professional Biography</h3>
                     <p className="text-muted-foreground leading-relaxed">
-                      {selectedDoctor.bio || `Dr. ${selectedDoctor.full_name} is a highly skilled ${formatSpecialtyLabel(selectedDoctor.specialty)} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
+                      {getLocalizedDoctorBio(selectedDoctor) || `Dr. ${selectedDoctor.full_name} is a highly skilled ${selectedDoctor.specialty} with ${selectedDoctor.experience_years ?? 'several'} years of professional experience. Currently practicing at ${selectedDoctor.hospital_affiliation}, dedicated to providing excellent patient care and maintaining the highest standards of medical practice.`}
                     </p>
                   </div>
 

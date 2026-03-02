@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -9,8 +9,9 @@ import type { DateClickArg, EventClickArg, EventInput, DayCellMountArg, EventMou
 import { Link } from 'react-router-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { useAppointments } from '@/hooks/useAppointments';
-import { useDoctors, useAvailableSlots, checkSlotAvailability } from '@/hooks/useAvailableSlots';
+import { useDoctors, useAvailableSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { SlotSelectionModal } from '@/components/SlotSelectionModal';
@@ -24,11 +25,11 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
-  Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download, Menu, X, List
+  Heart, Activity, Pill, Phone, Plus, Search, Upload, Trash2, Download, Menu, X, List,
+  Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -55,10 +56,23 @@ import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
+import { LanguageSelector } from '@/components/LanguageSelector';
+import { PatientWalletService } from '@/services/PatientWalletService';
+import { AvailabilityService } from '@/services/AvailabilityService';
+import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
+import {
+  formatAppointmentStatusLabel,
+  normalizeAppointmentStatus,
+  normalizeRescheduleRequestStatus,
+  type AppointmentStatus,
+  type PatientWalletTransaction,
+} from '@/services/marketplaceTypes';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import { formatSpecialtyLabel } from '@/lib/utils';
+import { useLocaleFormatter } from '@/lib/locale';
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -67,10 +81,23 @@ const formatDateKey = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const createWithdrawalIdempotencyKey = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `wallet-withdrawal:${crypto.randomUUID()}`;
+  }
+
+  return `wallet-withdrawal:${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+};
+
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
-  pending: {
+  pending_payment: {
     dot: '#d97706',
     bg: '#d97706',
+    text: '#ffffff'
+  },
+  pending_approval: {
+    dot: '#b45309',
+    bg: '#b45309',
     text: '#ffffff'
   },
   confirmed: {
@@ -78,19 +105,24 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     bg: '#0f8f76',
     text: '#ffffff'
   },
+  in_progress: {
+    dot: '#2563eb',
+    bg: '#2563eb',
+    text: '#ffffff'
+  },
   completed: {
     dot: '#16a34a',
     bg: '#16a34a',
     text: '#ffffff'
   },
-  rejected: {
-    dot: '#dc2626',
-    bg: '#dc2626',
-    text: '#ffffff'
-  },
   cancelled: {
     dot: '#6b7280',
     bg: '#6b7280',
+    text: '#ffffff'
+  },
+  no_show: {
+    dot: '#dc2626',
+    bg: '#dc2626',
     text: '#ffffff'
   },
   default: {
@@ -99,6 +131,31 @@ const APPOINTMENT_STATUS_CALENDAR_STYLES = {
     text: '#ffffff'
   }
 } as const;
+
+const PAST_CONFIRMED_CALENDAR_STYLE = {
+  dot: '#d97706',
+  bg: '#f59e0b',
+  text: '#ffffff',
+} as const;
+
+const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
+  en: { key: 'auth.values.languages.english', fallback: 'English' },
+  ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
+  ig: { key: 'auth.values.languages.igbo', fallback: 'Igbo' },
+  yo: { key: 'auth.values.languages.yoruba', fallback: 'Yoruba' },
+  sw: { key: 'auth.values.languages.swahili', fallback: 'Swahili' },
+  ar: { key: 'auth.values.languages.arabic', fallback: 'Arabic' },
+  fr: { key: 'auth.values.languages.french', fallback: 'French' },
+  es: { key: 'auth.values.languages.spanish', fallback: 'Spanish' },
+  pt: { key: 'auth.values.languages.portuguese', fallback: 'Portuguese' },
+  nl: { key: 'common.language.dutch', fallback: 'Dutch' },
+  zh: { key: 'common.language.chinese', fallback: 'Chinese' },
+  de: { key: 'common.language.german', fallback: 'German' },
+};
+
+const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
+  typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
+);
 
 const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
   return rows.reduce((total, row) => {
@@ -139,6 +196,101 @@ interface PatientPrescription {
   isDownloaded: boolean;
 }
 
+interface PatientInvestigationRequest {
+  id: string;
+  noteId: string;
+  noteIds: string[];
+  doctor: string;
+  doctorId: string | null;
+  sessionId: string | null;
+  date: string;
+  details: string;
+}
+
+interface PatientPaymentTransactionRow {
+  id: string;
+  appointment_id: string | null;
+  amount: number;
+  status: string | null;
+  provider: string | null;
+  payment_method: string | null;
+  payment_reference: string | null;
+  provider_reference: string | null;
+  created_at: string;
+  verified_at: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+const INVESTIGATION_SECTION_HEADERS = [
+  'Investigations',
+  'Gwaje-gwaje',
+  'Nnyocha Lab',
+  'Àwọn Ìdánwò',
+  'Vipimo',
+  'الفحوصات',
+  'Investigaciones',
+  'Exames',
+  'Onderzoeken',
+  '检查项目',
+  'Untersuchungen',
+];
+
+const NEXT_SECTION_HEADERS = [
+  'E-Prescription',
+  'Prescription',
+  'Prescriptions',
+  'E-Magani',
+  'Ntuziaka Ọgwụ',
+  'E-Òògùn',
+  'Dawa (E-Rx)',
+  'الوصفة الإلكترونية',
+  'E-Ordonnance',
+  'E-Receta',
+  'E-Prescrição',
+  'E-Recept',
+  '电子处方',
+  'E-Rezept',
+];
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const extractInvestigationsFromClerkingNote = (note: string | null | undefined): string => {
+  if (!note) return '';
+  const source = note.trim();
+  if (!source) return '';
+
+  for (const header of INVESTIGATION_SECTION_HEADERS) {
+    const escapedNextHeaders = NEXT_SECTION_HEADERS.map(escapeRegExp).join('|');
+    const pattern = new RegExp(
+      `(?:^|\\n)${escapeRegExp(header)}:\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:${escapedNextHeaders})\\s*:|$)`,
+      'i'
+    );
+    const match = source.match(pattern);
+    if (match?.[1]) {
+      // Defensive cleanup in case older notes use inconsistent spacing before next section.
+      // Handles both:
+      // 1) "\nE-Prescription: ..."
+      // 2) "E-Prescription: ..." immediately at start of captured block.
+      const cleanupPattern = new RegExp(`(?:^|\\n)\\s*(?:${escapedNextHeaders})\\s*:[\\s\\S]*$`, 'i');
+      const extracted = match[1].replace(cleanupPattern, '').trim();
+      if (!extracted) continue;
+
+      // Extra guard: ignore blocks that still begin with prescription headers.
+      const startsWithPrescriptionHeader = new RegExp(`^\\s*(?:${escapedNextHeaders})\\s*:`, 'i').test(extracted);
+      if (startsWithPrescriptionHeader) continue;
+
+      return extracted;
+    }
+  }
+
+  return '';
+};
+
+const isMissingColumnError = (error: { code?: string; message?: string } | null | undefined) => {
+  if (!error) return false;
+  return error.code === '42703' || error.code === 'PGRST204';
+};
+
 const PatientPortal = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -150,12 +302,17 @@ const PatientPortal = () => {
   const [isUploadingRecord, setIsUploadingRecord] = useState(false);
   const [uploadNotes, setUploadNotes] = useState('');
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
+  const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
+  const [selectedInvestigationRequest, setSelectedInvestigationRequest] = useState<PatientInvestigationRequest | null>(null);
+  const [investigationDetailsOpen, setInvestigationDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
   const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
+  const { t, language, setLanguage } = useLanguage();
+  const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   
   // Track patient presence
   useTrackUserPresence(user?.id, 'patient');
@@ -163,6 +320,72 @@ const PatientPortal = () => {
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
   useRealtimeMessageNotifications(user?.id, 'patient');
+
+  const getMessageReadState = useCallback(() => {
+    if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
+    const storageKey = `patient-messages-read-${user.id}`;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      );
+    } catch {
+      return {};
+    }
+  }, [user?.id]);
+
+  const refreshUnreadMessagesCount = useCallback(async () => {
+    if (!user?.id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const { data: sessions, error: sessionError } = await supabase
+      .from('consultation_sessions')
+      .select('id')
+      .eq('patient_id', user.id);
+
+    if (sessionError || !sessions || sessions.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const sessionIds = sessions
+      .map((row) => row.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (sessionIds.length === 0) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const readState = getMessageReadState();
+    const { data: messages, error: messageError } = await supabase
+      .from('consultation_messages')
+      .select('session_id, created_at, sender_role')
+      .in('session_id', sessionIds)
+      .eq('sender_role', 'doctor')
+      .order('created_at', { ascending: true });
+
+    if (messageError || !messages) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    const total = messages.reduce((count, row: any) => {
+      const sessionId = String(row.session_id || '');
+      const createdAt = String(row.created_at || '');
+      if (!sessionId || !createdAt) return count;
+      const lastReadAt = readState[sessionId];
+      if (lastReadAt && new Date(createdAt).getTime() <= new Date(lastReadAt).getTime()) return count;
+      return count + 1;
+    }, 0);
+
+    setUnreadMessagesCount(total);
+  }, [getMessageReadState, user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -182,7 +405,6 @@ const PatientPortal = () => {
           if (!message?.session_id || !message.sender_id) return;
           if (message.sender_id === user.id) return;
           if (message.sender_role !== 'doctor') return;
-          if (activeTab === 'messages') return;
 
           let session = sessionParticipantsCacheRef.current.get(message.session_id);
           if (!session) {
@@ -200,7 +422,7 @@ const PatientPortal = () => {
           }
 
           if (session.patient_id !== user.id) return;
-          setUnreadMessagesCount((prev) => prev + 1);
+          refreshUnreadMessagesCount();
         }
       )
       .subscribe();
@@ -208,20 +430,129 @@ const PatientPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, activeTab]);
+  }, [user?.id, refreshUnreadMessagesCount]);
 
   useEffect(() => {
-    if (activeTab === 'messages' && unreadMessagesCount > 0) {
-      setUnreadMessagesCount(0);
-    }
-  }, [activeTab, unreadMessagesCount]);
+    refreshUnreadMessagesCount();
+  }, [activeTab, messagesJumpToUnreadSignal, refreshUnreadMessagesCount]);
+
+  useEffect(() => {
+    if (activeTab !== 'messages') return;
+    const timer = window.setInterval(() => {
+      refreshUnreadMessagesCount();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [activeTab, refreshUnreadMessagesCount]);
   
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
+  const { data: patientWallet } = useQuery({
+    queryKey: ['patient-wallet', user?.id],
+    queryFn: () => PatientWalletService.getPatientWallet(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: walletWithdrawalRequests = [] } = useQuery({
+    queryKey: ['patient-wallet-withdrawals', user?.id],
+    queryFn: () => PatientWalletService.getWalletWithdrawalRequests(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: walletTransactions = [], isLoading: walletTransactionsLoading } = useQuery({
+    queryKey: ['patient-wallet-transactions', user?.id],
+    queryFn: () => PatientWalletService.getWalletTransactions(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
+  const { data: paymentTransactions = [], isLoading: paymentTransactionsLoading } = useQuery({
+    queryKey: ['patient-payments', user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('payments')
+        .select('id, appointment_id, amount, status, provider, payment_method, payment_reference, provider_reference, created_at, verified_at, metadata')
+        .eq('patient_id', user!.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      return (data || []) as PatientPaymentTransactionRow[];
+    },
+    enabled: !!user?.id,
+    refetchInterval: 30000,
+  });
   const { data: recentConsultations = [], isLoading: consultationsLoading } = useRecentConsultations();
   const { data: notifications = [], isLoading: notificationsLoading } = useNotifications();
   const { data: patientRegistration } = usePatientRegistration();
   const { records: healthRecords, isLoading: recordsLoading, uploadRecord, deleteRecord } = useHealthRecords(user?.id);
   const queryClient = useQueryClient();
+  const { initializePayment } = usePaystackPayment();
+  const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
+  const patientWalletBalance = Number(patientWallet?.available_balance || 0);
+  const pendingWalletWithdrawalsCount = useMemo(
+    () => walletWithdrawalRequests.filter((row) => {
+      const status = String(row.status || '').trim().toLowerCase();
+      return status === 'pending' || status === 'processing';
+    }).length,
+    [walletWithdrawalRequests],
+  );
+  const paymentSummary = useMemo(() => {
+    const successfulStatuses = new Set(['completed', 'success', 'paid', 'succeeded']);
+    const failedStatuses = new Set(['failed', 'error', 'abandoned']);
+
+    let successfulCount = 0;
+    let failedCount = 0;
+    let pendingCount = 0;
+    let successfulAmount = 0;
+
+    paymentTransactions.forEach((row) => {
+      const amount = Number(row.amount || 0);
+      const status = String(row.status || '').trim().toLowerCase();
+      if (successfulStatuses.has(status)) {
+        successfulCount += 1;
+        successfulAmount += Number.isFinite(amount) ? amount : 0;
+        return;
+      }
+      if (failedStatuses.has(status)) {
+        failedCount += 1;
+        return;
+      }
+      pendingCount += 1;
+    });
+
+    return {
+      successfulCount,
+      failedCount,
+      pendingCount,
+      successfulAmount,
+      totalCount: paymentTransactions.length,
+    };
+  }, [paymentTransactions]);
+  const walletSummary = useMemo(() => {
+    let creditTotal = 0;
+    let debitTotal = 0;
+
+    walletTransactions.forEach((tx) => {
+      const amount = Number(tx.amount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      const direction = String(tx.direction || '').toLowerCase();
+      if (direction === 'credit') {
+        creditTotal += amount;
+      } else if (direction === 'debit') {
+        debitTotal += amount;
+      }
+    });
+
+    return {
+      creditTotal,
+      debitTotal,
+      net: creditTotal - debitTotal,
+      totalCount: walletTransactions.length,
+    };
+  }, [walletTransactions]);
+  const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawNarration, setWithdrawNarration] = useState('');
+  const [withdrawIdempotencyKey, setWithdrawIdempotencyKey] = useState<string | null>(null);
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -231,6 +562,7 @@ const PatientPortal = () => {
     phone: '',
     age: '',
     bloodType: '',
+    preferredLanguage: language as AppLanguage,
   });
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
@@ -245,6 +577,9 @@ const PatientPortal = () => {
         phone: patientRegistration.phone_number || '',
         age: patientRegistration.age?.toString() || '',
         bloodType: patientRegistration.blood_type || '',
+        preferredLanguage: isSupportedAppLanguage((patientRegistration as { preferred_language?: unknown })?.preferred_language)
+          ? ((patientRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
+          : language,
       });
     }
   }, [patientRegistration]);
@@ -522,6 +857,236 @@ const PatientPortal = () => {
     enabled: !!user?.id,
   });
 
+  const { data: fetchedInvestigationRequests = [], isLoading: investigationRequestsLoading } = useQuery({
+    queryKey: ['investigation-requests', user?.id, language],
+    queryFn: async () => {
+      if (!user?.id) return [];
+
+      const notesWithTranslationsQuery = await supabase
+        .from('doctor_consultation_notes')
+        .select(`
+          id,
+          follow_up_notes,
+          follow_up_notes_translations,
+          created_at,
+          consultation_sessions!inner(
+            id,
+            doctor_id,
+            appointments!inner(specialist_name)
+          )
+        `)
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      let notes = notesWithTranslationsQuery.data;
+      if (notesWithTranslationsQuery.error) {
+        if (!isMissingColumnError(notesWithTranslationsQuery.error)) {
+          console.error('Error fetching investigation requests:', notesWithTranslationsQuery.error);
+          return [];
+        }
+
+        const legacyNotesQuery = await supabase
+          .from('doctor_consultation_notes')
+          .select(`
+            id,
+            follow_up_notes,
+            created_at,
+            consultation_sessions!inner(
+              id,
+              doctor_id,
+              appointments!inner(specialist_name)
+            )
+          `)
+          .eq('patient_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (legacyNotesQuery.error) {
+          console.error('Error fetching legacy investigation requests:', legacyNotesQuery.error);
+          return [];
+        }
+
+        notes = (legacyNotesQuery.data || []).map((note: any) => ({
+          ...note,
+          follow_up_notes_translations: null,
+        }));
+      }
+
+      const doctorIds = Array.from(
+        new Set(
+          (notes || [])
+            .map((note: any) => note.consultation_sessions?.doctor_id)
+            .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+        )
+      );
+
+      const doctorNameMap = new Map<string, string>();
+      if (doctorIds.length > 0) {
+        const { data: doctorRows } = await supabase
+          .from('doctors')
+          .select('id, name')
+          .in('id', doctorIds);
+
+        (doctorRows || []).forEach((doctor: any) => {
+          if (doctor.id && doctor.name) doctorNameMap.set(doctor.id, doctor.name);
+        });
+      }
+
+      const grouped = new Map<string, PatientInvestigationRequest>();
+      (notes || []).forEach((note: any) => {
+        const noteTranslations = (note.follow_up_notes_translations as Record<string, string> | null) ?? null;
+        const localizedNote =
+          (language === 'en' ? null : noteTranslations?.[language]) ||
+          noteTranslations?.en ||
+          note.follow_up_notes ||
+          '';
+        const extracted = extractInvestigationsFromClerkingNote(localizedNote);
+        if (!extracted) return;
+
+        const doctorId = note.consultation_sessions?.doctor_id ?? null;
+        const sessionId = note.consultation_sessions?.id ?? null;
+        const resolvedDoctorName =
+          (doctorId ? doctorNameMap.get(doctorId) : null) ||
+          note.consultation_sessions?.appointments?.specialist_name ||
+          'Doctor';
+        const dayKey = new Date(note.created_at).toISOString().slice(0, 10);
+        const groupKey = sessionId
+          ? `session:${sessionId}`
+          : `fallback:${doctorId || 'unknown'}:${dayKey}`;
+
+        const existing = grouped.get(groupKey);
+        if (!existing) {
+          grouped.set(groupKey, {
+            id: groupKey,
+            noteId: note.id,
+            noteIds: [note.id],
+            doctor: resolvedDoctorName,
+            doctorId,
+            sessionId,
+            date: note.created_at,
+            details: extracted,
+          });
+          return;
+        }
+
+        const existingLines = new Set(
+          existing.details
+            .split(/\r?\n/)
+            .map((line) => line.trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const mergedLines = [...existing.details.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)];
+        extracted
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((line) => {
+            const key = line.toLowerCase();
+            if (!existingLines.has(key)) {
+              mergedLines.push(line);
+              existingLines.add(key);
+            }
+          });
+
+        existing.details = mergedLines.join('\n');
+        if (!existing.noteIds.includes(note.id)) existing.noteIds.push(note.id);
+        if (new Date(note.created_at).getTime() > new Date(existing.date).getTime()) {
+          existing.date = note.created_at;
+        }
+        grouped.set(groupKey, existing);
+      });
+
+      return Array.from(grouped.values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+    },
+    enabled: !!user?.id,
+  });
+
+  const { data: requiredInvestigations = '', isLoading: investigationsLoading } = useQuery({
+    queryKey: ['patient-folder-investigations', user?.id, language],
+    queryFn: async () => {
+      if (!user?.id) return '';
+
+      const { data: folderRows, error: folderError } = await supabase
+        .from('patient_folders')
+        .select('investigations, investigations_translations, updated_at')
+        .eq('patient_id', user.id)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (folderError && !isMissingColumnError(folderError)) {
+        console.error('Error fetching required investigations from patient_folders:', folderError);
+      }
+
+      const latestFolder = (folderRows ?? [])[0] as
+        | { investigations?: string | null; investigations_translations?: Record<string, string> | null }
+        | undefined;
+      const translations = (latestFolder?.investigations_translations as Record<string, string> | null) ?? null;
+      const translatedValue = language === 'en' ? null : translations?.[language]?.trim();
+      const folderInvestigations =
+        translatedValue?.trim() ||
+        translations?.en?.trim() ||
+        latestFolder?.investigations?.trim() ||
+        '';
+
+      if (folderInvestigations) return folderInvestigations;
+
+      // Fallback for older DB states where investigations are not persisted in patient_folders:
+      // parse the investigations section from latest clerking note text.
+      const { data: notesWithTranslations, error: notesWithTranslationsError } = await supabase
+        .from('doctor_consultation_notes')
+        .select('follow_up_notes, follow_up_notes_translations, created_at')
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (notesWithTranslationsError && !isMissingColumnError(notesWithTranslationsError)) {
+        console.error('Error fetching clerking notes with translations:', notesWithTranslationsError);
+      }
+
+      const candidateNotes = (notesWithTranslations ?? []) as Array<{
+        follow_up_notes?: string | null;
+        follow_up_notes_translations?: Record<string, string> | null;
+      }>;
+
+      for (const note of candidateNotes) {
+        const noteTranslations = (note.follow_up_notes_translations as Record<string, string> | null) ?? null;
+        const localizedNote =
+          (language === 'en' ? null : noteTranslations?.[language]) ||
+          noteTranslations?.en ||
+          note.follow_up_notes ||
+          '';
+        const extracted = extractInvestigationsFromClerkingNote(localizedNote);
+        if (extracted) return extracted;
+      }
+
+      if (candidateNotes.length > 0) return '';
+
+      // Final fallback: if translation columns do not exist at all, read legacy follow_up_notes only.
+      const { data: legacyNotes, error: legacyNotesError } = await supabase
+        .from('doctor_consultation_notes')
+        .select('follow_up_notes, created_at')
+        .eq('patient_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (legacyNotesError) {
+        console.error('Error fetching legacy clerking notes:', legacyNotesError);
+        return '';
+      }
+
+      for (const note of (legacyNotes ?? []) as Array<{ follow_up_notes?: string | null }>) {
+        const extracted = extractInvestigationsFromClerkingNote(note.follow_up_notes ?? '');
+        if (extracted) return extracted;
+      }
+
+      return '';
+    },
+    enabled: !!user?.id,
+  });
+
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
@@ -554,9 +1119,9 @@ const PatientPortal = () => {
     try {
       await uploadRecord.mutateAsync({ file, notes: uploadNotes });
       setUploadNotes('');
-      toast({ title: 'Success', description: 'Health record uploaded successfully!' });
+      toast({ title: 'Success', description: 'Investigation uploaded successfully!' });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to upload health record.' });
+      toast({ title: 'Error', description: 'Failed to upload investigation.' });
     } finally {
       setIsUploadingRecord(false);
     }
@@ -565,9 +1130,9 @@ const PatientPortal = () => {
   const handleDeleteRecord = async (recordId: string) => {
     try {
       await deleteRecord.mutateAsync(recordId);
-      toast({ title: 'Success', description: 'Health record deleted successfully!' });
+      toast({ title: 'Success', description: 'Investigation deleted successfully!' });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to delete health record.' });
+      toast({ title: 'Error', description: 'Failed to delete investigation.' });
     }
   };
 
@@ -629,7 +1194,7 @@ const PatientPortal = () => {
       const content = [
         `Patient: ${displayName}`,
         `Prescribed by: ${prescription.doctor}`,
-        `Date: ${new Date(prescription.date).toLocaleString()}`,
+        `Date: ${formatDateTime(prescription.date)}`,
         `Verification Code: ${verificationCode || 'Pending/Unavailable'}`,
         '',
         'Items:',
@@ -697,7 +1262,7 @@ const PatientPortal = () => {
       const itemsSummary = prescription.items
         .map((item) => `${item.medication} (${item.dosage})`)
         .join('; ');
-      const content = `Prescription refill request: ${itemsSummary}. Original prescription date: ${new Date(prescription.date).toLocaleDateString()}.`;
+      const content = `Prescription refill request: ${itemsSummary}. Original prescription date: ${formatDate(prescription.date)}.`;
       const { error } = await supabase.from('consultation_messages').insert({
         session_id: prescription.sessionId,
         sender_id: user.id,
@@ -730,6 +1295,59 @@ const PatientPortal = () => {
     }
   };
 
+  const handleViewInvestigationDetails = (request: PatientInvestigationRequest) => {
+    setSelectedInvestigationRequest(request);
+    setInvestigationDetailsOpen(true);
+  };
+
+  const handleDownloadInvestigationRequest = async (request: PatientInvestigationRequest) => {
+    try {
+      const detailLines = request.details
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      const lines = [
+        `Patient: ${displayName}`,
+        `Requested by: ${request.doctor}`,
+        `Date: ${formatDateTime(request.date)}`,
+        '',
+        'Requested Investigations:',
+        ...(detailLines.length > 0 ? detailLines.map((line, index) => `${index + 1}. ${line}`) : ['None recorded']),
+      ];
+
+      const blob = await createPrescriptionPdfBlob({
+        title: 'MYE-DOCTOR INVESTIGATION REQUEST',
+        lines,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeDoctor = request.doctor
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase();
+      link.href = url;
+      link.download = `investigation-request-${safeDoctor || 'doctor'}-${new Date(request.date).toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Downloaded',
+        description: 'Investigation request downloaded successfully.',
+      });
+    } catch (error) {
+      console.error('Failed to download investigation request:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to download investigation request.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const displayName = patientRegistration?.full_name ?? user?.user_metadata?.full_name ?? user?.email ?? 'Patient';
   const profilePicture = patientRegistration?.profile_picture_url ?? user?.user_metadata?.avatar ?? '';
   const initials = displayName
@@ -759,17 +1377,6 @@ const PatientPortal = () => {
     return true;
   };
 
-  const handleBookAppointment = () => {
-    if (!requireAuthForBooking()) return;
-    // TODO: Open booking modal or navigate to detailed booking flow
-    toast({ title: 'Booking', description: 'Booking flow not implemented yet.' });
-  };
-
-  const handleNewAppointment = () => {
-    if (!requireAuthForBooking()) return;
-    navigate('/doctor-discovery');
-  };
-
   // Booking modal state
   const [bookingOpen, setBookingOpen] = useState(false);
   const [slotSelectionOpen, setSlotSelectionOpen] = useState(false);
@@ -777,44 +1384,124 @@ const PatientPortal = () => {
   const [specialistName, setSpecialistName] = useState('');
   const [bookingDate, setBookingDate] = useState('');
   const [bookingTime, setBookingTime] = useState('');
-  // appointment type removed - all bookings are generic
-  const [bookingNotes, setBookingNotes] = useState('');
+  const [rescheduleDurationMinutes, setRescheduleDurationMinutes] = useState<number>(30);
+  const [rescheduleConsultationType, setRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [currentRescheduleConsultationType, setCurrentRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
+  const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'confirmed' | 'completed' | 'rejected' | 'all'>('confirmed');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all' | 'closed'>('all');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [isMobileAppointmentsLayout, setIsMobileAppointmentsLayout] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [calendarDayDialogOpen, setCalendarDayDialogOpen] = useState(false);
   const [calendarEventDialogOpen, setCalendarEventDialogOpen] = useState(false);
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
+  const appliedPreferredLanguageRef = useRef(false);
+  const withdrawalAmountValue = Number(withdrawAmount.replace(/,/g, '').trim());
+  const canSubmitWithdrawal = Number.isFinite(withdrawalAmountValue) &&
+    withdrawalAmountValue > 0 &&
+    withdrawalAmountValue <= patientWalletBalance &&
+    !isSubmittingWithdrawal;
 
-  // Pricing logic (single uniform consultation price)
-  const getPricing = (specialty: string) => {
-    const isSpecialist = specialty && specialty.toLowerCase() !== 'general practice';
-    return isSpecialist ? 8000 : 4000;
+  const getWithdrawalStatusLabel = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') return 'Completed';
+    if (normalized === 'processing') return 'Processing';
+    if (normalized === 'rejected') return 'Rejected';
+    if (normalized === 'cancelled') return 'Cancelled';
+    return 'Pending';
   };
 
-  const formatPrice = (price: number) => `₦${price.toLocaleString()}`;
+  const getWithdrawalStatusBadgeClass = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed' || normalized === 'paid' || normalized === 'approved') {
+      return 'bg-success/10 text-success border-success/20';
+    }
+    if (normalized === 'processing') {
+      return 'bg-primary/10 text-primary border-primary/20';
+    }
+    if (normalized === 'rejected' || normalized === 'cancelled') {
+      return 'bg-destructive/10 text-destructive border-destructive/20';
+    }
+    return 'bg-warning/10 text-warning border-warning/20';
+  };
 
-  // Handle external booking requests
+  const getPaymentStatusLabel = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (['completed', 'success', 'paid', 'succeeded'].includes(normalized)) return 'Successful';
+    if (['failed', 'error', 'abandoned'].includes(normalized)) return 'Failed';
+    if (!normalized) return 'Pending';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const getPaymentStatusBadgeClass = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (['completed', 'success', 'paid', 'succeeded'].includes(normalized)) {
+      return 'bg-success/10 text-success border-success/20';
+    }
+    if (['failed', 'error', 'abandoned'].includes(normalized)) {
+      return 'bg-destructive/10 text-destructive border-destructive/20';
+    }
+    return 'bg-warning/10 text-warning border-warning/20';
+  };
+
+  const getWalletTransactionLabel = (tx: PatientWalletTransaction) => {
+    const type = String(tx.transaction_type || '').trim().toLowerCase();
+    if (type === 'refund') return 'Refund';
+    if (type === 'booking_wallet_use') return 'Appointment Payment';
+    if (type === 'adjustment') return 'Adjustment';
+    return type ? type.replace(/_/g, ' ') : 'Wallet Transaction';
+  };
+
+  // Legacy deep-link support: previous booking links opened an in-portal dialog.
   useEffect(() => {
     if (searchParams.get('action') === 'book') {
-      setSlotSelectionOpen(true);
-      // Clean up the URL without refreshing
-      setSearchParams(params => {
-        const newParams = new URLSearchParams(params);
-        newParams.delete('action');
-        return newParams;
-      }, { replace: true });
+      navigate('/doctor-discovery', { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobileAppointmentsLayout(event.matches);
+    };
+
+    setIsMobileAppointmentsLayout(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (appliedPreferredLanguageRef.current) return;
+    if (!patientRegistration) return;
+    appliedPreferredLanguageRef.current = true;
+
+    const preferredLanguage = (patientRegistration as { preferred_language?: unknown })?.preferred_language;
+    if (isSupportedAppLanguage(preferredLanguage) && preferredLanguage !== language) {
+      setLanguage(preferredLanguage);
+    }
+  }, [patientRegistration, language, setLanguage]);
 
   // Handle post-consultation review deep-link
   useEffect(() => {
@@ -877,145 +1564,535 @@ const PatientPortal = () => {
     });
   }, [appointments, appointmentsLoading, searchParams, setSearchParams, user?.id]);
 
+  // Load actual paid amount for the appointment from payments table when reschedule target selected
+  useEffect(() => {
+    let mounted = true;
+    const loadPaid = async () => {
+      if (!rescheduleAppointmentId) {
+        setReschedulePaidAmount(null);
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from('payments')
+          .select('amount,status')
+          .eq('appointment_id', rescheduleAppointmentId);
+        if (error) throw error;
+        const rows = (data || []);
+        const successStates = new Set(['completed', 'success', 'paid', 'succeeded']);
+        const successful = rows.filter((p: any) => {
+          const st = String(p.status || '').toLowerCase();
+          return successStates.has(st);
+        });
+        let sum = successful.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+        // Normalize kobo -> naira if amounts look like kobo (heuristic)
+        const storedFinal = Number((rescheduleAppointment as any)?.final_price || 0);
+        if (storedFinal > 0 && sum > storedFinal * 1.5 && sum > 1000) {
+          sum = Math.round(sum / 100);
+        }
+        if (mounted) setReschedulePaidAmount(Number.isFinite(sum) ? sum : 0);
+      } catch (err) {
+        if (mounted) setReschedulePaidAmount(null);
+      }
+    };
+
+    loadPaid();
+    return () => { mounted = false; };
+  }, [rescheduleAppointmentId]);
+
   const resetBookingState = () => {
     setSpecialistName('');
     setBookingDate('');
     setBookingTime('');
-    setBookingNotes('');
+    setRescheduleDurationMinutes(30);
+    setRescheduleRequestNote('');
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
     setRescheduleDoctorId(null);
+    setReschedulePaymentMethod('paystack');
     setBookingOpen(false);
+    setSlotSelectionOpen(false);
   };
 
   // Fetch available slots and doctors
   const { data: allSlots = [], isLoading: slotsLoading } = useAvailableSlots();
   const { data: doctors = [], isLoading: doctorsLoading } = useDoctors();
+  const rescheduleAppointment = useMemo(
+    () => appointments.find((apt) => apt.id === rescheduleAppointmentId) || null,
+    [appointments, rescheduleAppointmentId],
+  );
+  const currentRescheduleDurationMinutes = useMemo(() => {
+    if (!rescheduleAppointment) return 30;
+    const value = Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30);
+    return Number.isFinite(value) && value > 0 ? value : 30;
+  }, [rescheduleAppointment]);
+  const currentRescheduleFinalPrice = useMemo(() => {
+    if (!rescheduleAppointment) return 0;
+    const value = Number((rescheduleAppointment as { final_price?: number | null }).final_price || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, [rescheduleAppointment]);
+  const getConsultationTypeForPricing = (apt: { price_breakdown?: Record<string, unknown> | null }) => {
+    const type = String((apt.price_breakdown as Record<string, unknown> | null)?.consultation_type || 'video').toLowerCase();
+    if (type === 'chat' || type === 'voice' || type === 'video') return type;
+    return 'video';
+  };
+  const {
+    data: reschedulePreviewFinalPrice,
+    isLoading: reschedulePreviewLoading,
+    isFetching: reschedulePreviewFetching,
+    refetch: refetchReschedulePrice,
+  } = useQuery({
+    queryKey: [
+      'patient-reschedule-preview',
+      rescheduleAppointmentId,
+      selectedDoctorId,
+      rescheduleDurationMinutes,
+      rescheduleConsultationType,
+    ],
+    queryFn: () =>
+      AvailabilityService.calculatePricePreview({
+        doctorId: selectedDoctorId!,
+        duration: rescheduleDurationMinutes,
+        consultationType: rescheduleConsultationType,
+      }),
+    enabled:
+      !!rescheduleAppointment &&
+      !!selectedDoctorId &&
+      (bookingOpen || slotSelectionOpen),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  // Refetch price whenever duration or consultation type changes during reschedule
+  useEffect(() => {
+    if (bookingOpen && selectedDoctorId && rescheduleAppointment) {
+      refetchReschedulePrice();
+    }
+  }, [rescheduleDurationMinutes, rescheduleConsultationType, bookingOpen, selectedDoctorId, rescheduleAppointment, refetchReschedulePrice]);
+  const proposedRescheduleFinalPrice = useMemo(() => {
+    if (!rescheduleAppointment) return 0;
+    if (typeof reschedulePreviewFinalPrice === 'number' && Number.isFinite(reschedulePreviewFinalPrice)) {
+      return reschedulePreviewFinalPrice;
+    }
+    return currentRescheduleFinalPrice;
+  }, [rescheduleAppointment, reschedulePreviewFinalPrice, currentRescheduleFinalPrice]);
+  const rescheduleUpgradeAmount = useMemo(
+    () => {
+      // Amount to pay = max(0, ProposedPrice - AlreadyPaid)
+      const alreadyPaid = reschedulePaidAmount !== null ? reschedulePaidAmount : 0;
+      return Math.max(0, proposedRescheduleFinalPrice - alreadyPaid);
+    },
+    [proposedRescheduleFinalPrice, reschedulePaidAmount],
+  );
+  const rescheduleHybridWalletApplied = useMemo(
+    () => (rescheduleUpgradeAmount > 0 ? Math.min(patientWalletBalance, rescheduleUpgradeAmount) : 0),
+    [patientWalletBalance, rescheduleUpgradeAmount],
+  );
+  const rescheduleHybridPaystackDue = useMemo(
+    () => Math.max(rescheduleUpgradeAmount - rescheduleHybridWalletApplied, 0),
+    [rescheduleUpgradeAmount, rescheduleHybridWalletApplied],
+  );
+  const effectiveReschedulePaymentMethod = useMemo<'paystack' | 'wallet' | 'hybrid'>(
+    () => {
+      if (reschedulePaymentMethod === 'wallet') {
+        return rescheduleHybridPaystackDue > 0 ? 'hybrid' : 'wallet';
+      }
+      return 'paystack';
+    },
+    [reschedulePaymentMethod, rescheduleHybridPaystackDue],
+  );
 
   const openBooking = () => {
     if (!requireAuthForBooking()) return;
+    resetBookingState();
     navigate('/doctor-discovery');
   };
 
-  const handleSlotSelect = async (doctor: { id: string; name: string }, date: string, time: string) => {
-    // Check if slot is available (conflict check)
+  const handleSlotSelect = (
+    doctor: { id: string; name: string },
+    date: string,
+    time: string,
+    options?: { durationMinutes?: number },
+  ) => {
+    if (!rescheduleAppointmentId) {
+      toast({
+        title: 'Reschedule context missing',
+        description: 'Use Doctor Discovery for new appointments.',
+        variant: 'destructive',
+      });
+      setSlotSelectionOpen(false);
+      return;
+    }
+
+    setSelectedDoctorId(doctor.id);
+    setSpecialistName(doctor.name);
+    setBookingDate(date);
+    setBookingTime(time);
+    if (typeof options?.durationMinutes === 'number' && Number.isFinite(options.durationMinutes)) {
+      setRescheduleDurationMinutes(options.durationMinutes);
+    }
+    setSlotSelectionOpen(false);
+    setBookingOpen(true);
+  };
+
+  const initReschedule = (apt: unknown) => {
+    if (!requireAuthForBooking()) return;
+    const aptData = apt as {
+      id?: string;
+      doctor_id?: string;
+      specialist_name?: string;
+      status?: string;
+      reschedule_request_status?: string | null;
+    };
+    if (!aptData.id || !aptData.doctor_id) {
+      toast({
+        title: 'Cannot reschedule',
+        description: 'Appointment details are incomplete.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const normalizedStatus = normalizeAppointmentStatus(aptData.status);
+    if (normalizeRescheduleRequestStatus(aptData.reschedule_request_status) === 'pending') {
+      toast({
+        title: 'Request already pending',
+        description: 'There is already a reschedule request awaiting action.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const canReschedule =
+      normalizedStatus === 'pending_approval' ||
+      normalizedStatus === 'confirmed' ||
+      normalizedStatus === 'no_show';
+
+    if (!canReschedule) {
+      toast({
+        title: 'Cannot reschedule',
+        description: 'Only pending approval, confirmed, or no-show appointments can be rescheduled.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setRescheduleAppointmentId(aptData.id);
+    setRescheduleDoctorId(aptData.doctor_id);
+    setSelectedDoctorId(aptData.doctor_id);
+    setSpecialistName(getDoctorNameById(aptData.doctor_id, aptData.specialist_name || 'Doctor'));
+    setBookingDate('');
+    setBookingTime('');
+    
+    // Extract current duration and consultation type from appointment
+    const currentDuration = Number((apt as { duration_minutes?: number | null }).duration_minutes || 30) || 30;
+    const currentConsultType = getConsultationTypeForPricing(apt as { price_breakdown?: Record<string, unknown> | null });
+    
+    setRescheduleDurationMinutes(currentDuration);
+    setCurrentRescheduleConsultationType(currentConsultType);
+    setRescheduleConsultationType(currentConsultType);
+    setRescheduleRequestNote('');
+    setReschedulePaymentMethod('paystack');
+    setBookingOpen(false);
+    setSlotSelectionOpen(true);
+  };
+
+  const openMessagesForAppointment = async (apt: any) => {
+    if (!user?.id) return;
+    const appointmentId = (apt as { id?: string | null }).id;
+    const doctorId = (apt as { doctor_id?: string | null }).doctor_id;
+    if (!appointmentId || !doctorId) {
+      toast({
+        title: t('patientPortal.messaging.unavailableTitle', 'Messaging unavailable'),
+        description: t('patientPortal.messaging.missingDoctorContext', 'Doctor details are missing for this appointment.'),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const consultationTypeCandidate = String(
+      (apt as { consultation_type?: string | null }).consultation_type ||
+      ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
+      (apt as { consultationType?: string | null }).consultationType ||
+      (apt as { consultation_mode?: string | null }).consultation_mode ||
+      'video'
+    ).toLowerCase();
+    const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
+      ? consultationTypeCandidate
+      : 'video';
+
     try {
-      const isAvailable = await checkSlotAvailability(doctor.id, date, time);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        return;
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointmentId)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      let sessionId = existingSession?.id ?? null;
+      if (!sessionId) {
+        const { data: createdSession, error: createSessionError } = await supabase
+          .from('consultation_sessions')
+          .insert({
+            appointment_id: appointmentId,
+            patient_id: user.id,
+            doctor_id: doctorId,
+            consultation_type: consultationType,
+          })
+          .select('id')
+          .single();
+
+        if (createSessionError) throw createSessionError;
+        sessionId = createdSession.id;
       }
 
-      setSelectedDoctorId(doctor.id);
-      setSpecialistName(doctor.name);
-      setBookingDate(date);
-      setBookingTime(time);
-      setSlotSelectionOpen(false);
-      setBookingOpen(true);
-    } catch (err: unknown) {
-      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : 'Failed to check slot availability';
-      toast({ title: 'Error', description: String(message) });
+      setMessagesFocusSessionId(null);
+      setTimeout(() => setMessagesFocusSessionId(sessionId), 0);
+      setActiveTab('messages');
+      setSidebarOpen(false);
+    } catch (err) {
+      console.error('Failed to open appointment messages:', err);
+      toast({
+        title: t('patientPortal.messaging.failedTitle', 'Unable to open messages'),
+        description: t('patientPortal.messaging.failedDescription', 'Please try again in a moment.'),
+        variant: 'destructive',
+      });
     }
   };
 
-  const createBooking = async () => {
+  const rescheduleBooking = async () => {
     if (!requireAuthForBooking()) return;
-    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId) {
-      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
+    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId || !rescheduleAppointment) {
+      toast({
+        title: 'Missing fields',
+        description: 'Please select a new date and time.',
+        variant: 'destructive',
+      });
       return;
+    }
+
+    const currentDoctorId = (rescheduleAppointment as { doctor_id?: string }).doctor_id || null;
+    if (!currentDoctorId || selectedDoctorId !== currentDoctorId) {
+      toast({
+        title: 'Invalid reschedule request',
+        description: 'Reschedule keeps the original doctor. Please pick another date/time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const normalizedTime = /^\d{2}:\d{2}$/.test(bookingTime) ? `${bookingTime}:00` : bookingTime;
+    const targetDateTime = new Date(`${bookingDate}T${normalizedTime}`);
+    if (Number.isNaN(targetDateTime.getTime()) || targetDateTime.getTime() <= Date.now()) {
+      toast({
+        title: 'Invalid date/time',
+        description: 'Please choose a future time slot.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (
+      (reschedulePreviewLoading || reschedulePreviewFetching || !Number.isFinite(reschedulePreviewFinalPrice))
+    ) {
+      toast({
+        title: 'Pricing unavailable',
+        description: 'Still calculating the new price. Please wait a moment and try again.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (rescheduleUpgradeAmount > 0) {
+      if (effectiveReschedulePaymentMethod === 'paystack' || effectiveReschedulePaymentMethod === 'hybrid') {
+        if (!paystackPublicKey) {
+          toast({
+            title: 'Payment not configured',
+            description: 'Payment gateway not configured. Contact support.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        // Initialize payment via Paystack for the server-calculated upgrade amount.
+        try {
+          const proposedTimeForPayment = normalizedTime.slice(0, 5);
+          const { data, error } = await supabase.functions.invoke('reschedule-payment-initiate', {
+            body: {
+              appointmentId: rescheduleAppointmentId,
+              proposedDate: bookingDate,
+              proposedTime: proposedTimeForPayment,
+              proposedDuration: rescheduleDurationMinutes,
+              proposedConsultationType: rescheduleConsultationType,
+              paymentMethod: effectiveReschedulePaymentMethod,
+            },
+          });
+          if (error) throw error;
+          const paymentInit = data as any;
+          const walletChargedAmount = Number(paymentInit?.walletChargedAmount || 0);
+          const paystackAmountDue = Number(
+            paymentInit?.paystackAmountDue
+            ?? (paymentInit?.amountInKobo ? Number(paymentInit.amountInKobo) / 100 : 0),
+          );
+
+          if (!paymentInit?.reference) throw new Error('Payment initialization failed');
+          if (!Number.isFinite(paystackAmountDue) || paystackAmountDue <= 0) {
+            throw new Error('Invalid Paystack amount for reschedule payment');
+          }
+
+          setIsBooking(true);
+          // Close the confirmation dialog before opening Paystack.
+          // Radix modal overlay can intercept pointer events above Paystack iframe.
+          setBookingOpen(false);
+          await new Promise((resolve) => setTimeout(resolve, 220));
+          let paymentCompleted = false;
+          initializePayment({
+            email: paymentInit.email || user?.email || '',
+            amount: paymentInit.amountInKobo,
+            reference: paymentInit.reference,
+            publicKey: paystackPublicKey,
+            metadata: paymentInit.metadata,
+            onSuccess: async (response: any) => {
+              paymentCompleted = true;
+              const paidReference = String(response?.reference || paymentInit.reference || '').trim();
+
+              try {
+                let confirmResult: { error?: string; alreadyFinalized?: boolean } | null = null;
+                let lastConfirmError: any = null;
+
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                  try {
+                    const { data: confirmData, error: confirmError } = await supabase.functions.invoke('reschedule-payment-confirm', {
+                      body: { reference: paidReference },
+                    });
+                    if (confirmError) throw confirmError;
+
+                    const parsed = (confirmData || {}) as { error?: string; alreadyFinalized?: boolean };
+                    if (parsed.error) throw new Error(parsed.error);
+                    confirmResult = parsed;
+                    lastConfirmError = null;
+                    break;
+                  } catch (attemptError: any) {
+                    lastConfirmError = attemptError;
+                    if (attempt < 2) {
+                      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                    }
+                  }
+                }
+
+                if (!confirmResult) {
+                  throw lastConfirmError || new Error('Reschedule payment confirmation failed');
+                }
+
+                toast({
+                  title: 'Payment successful',
+                  description: confirmResult.alreadyFinalized
+                    ? 'Your paid reschedule request is already pending doctor approval.'
+                    : walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your reschedule request is pending doctor approval.`
+                    : 'Your reschedule request has been submitted and is pending doctor approval.',
+                });
+              } catch (confirmErr: any) {
+                console.warn('[reschedule] client confirmation fallback failed:', confirmErr);
+                toast({
+                  title: 'Payment successful',
+                  description: walletChargedAmount > 0
+                    ? `Wallet applied ₦${walletChargedAmount.toLocaleString()} and Paystack paid ₦${paystackAmountDue.toLocaleString()}. Your request will appear under Pending Approval once webhook processing completes.`
+                    : 'Payment succeeded. Your request will appear under Pending Approval once webhook processing completes.',
+                });
+              } finally {
+                setIsBooking(false);
+                resetBookingState();
+                invalidateAppointments();
+                await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
+                setTimeout(() => {
+                  invalidateAppointments();
+                  queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
+                }, 2000);
+              }
+            },
+            onClose: () => {
+              if (paymentCompleted) return;
+              setIsBooking(false);
+              setBookingOpen(true);
+              toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
+            },
+          });
+        } catch (err: any) {
+          toast({ title: 'Payment initialization failed', description: err?.message || 'Could not start payment.', variant: 'destructive' });
+          setIsBooking(false);
+          setBookingOpen(true);
+        }
+        return;
+      }
+      // if user chose wallet but has insufficient funds, block
+      if (effectiveReschedulePaymentMethod === 'wallet' && patientWalletBalance < rescheduleUpgradeAmount) {
+        toast({
+          title: 'Insufficient wallet balance',
+          description: `You need ₦${rescheduleUpgradeAmount.toLocaleString()} in wallet for this upgrade.`,
+          variant: 'destructive',
+        });
+        return;
+      }
     }
 
     setIsBooking(true);
     try {
-      // Final conflict check before insertion
-      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        setIsBooking(false);
-        return;
-      }
+      await AppointmentRescheduleService.requestReschedule({
+        appointmentId: rescheduleAppointmentId,
+        proposedDate: bookingDate,
+        proposedTime: normalizedTime,
+        proposedDurationMinutes: rescheduleDurationMinutes,
+        proposedFinalPrice: proposedRescheduleFinalPrice,
+        proposedConsultationType: rescheduleConsultationType,
+        requestNote: rescheduleRequestNote || null,
+      });
 
-      const payload: Record<string, unknown> = {
-        patient_id: user?.id,
-        patient_name: displayName,
-        specialist_name: specialistName,
-        doctor_id: selectedDoctorId,
-        date: bookingDate,
-        time: bookingTime,
-        notes: bookingNotes,
-        status: 'pending',
-      };
-
-      const { data, error } = await supabase.from('appointments').insert([payload]).select();
-      if (error) {
-        throw error;
-      }
-
-      toast({ title: 'Booked', description: 'Your appointment request has been submitted.' });
+      toast({
+        title: 'Reschedule requested',
+        description: 'Your request has been sent for approval.',
+      });
       resetBookingState();
-      // Refresh appointments list
       invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
-      toast({ title: 'Booking failed', description: message });
+      toast({ title: 'Reschedule failed', description: message, variant: 'destructive' });
     } finally {
       setIsBooking(false);
     }
   };
 
-  const initReschedule = (apt: unknown) => {
+  const respondToRescheduleRequest = async (appointmentId: string, action: 'approve' | 'decline') => {
     if (!requireAuthForBooking()) return;
-    const aptData = apt as unknown as { id?: string; doctor_id?: string };
-    setRescheduleAppointmentId(aptData.id ?? null);
-    setRescheduleDoctorId(aptData.doctor_id ?? null);
-    // We don't pre-fill doctor/date/time because the user wants to CHANGE them.
-    // But we could pre-fill the doctor if we wanted to restrict rescheduling to the same doctor.
-    // For now, let's allow full flexibility as per the "Book Appointment" flow.
-    setSlotSelectionOpen(true);
-  };
-
-  const rescheduleBooking = async () => {
-    if (!requireAuthForBooking()) return;
-    if (!specialistName || !bookingDate || !bookingTime || !selectedDoctorId || !rescheduleAppointmentId) {
-      toast({ title: 'Missing fields', description: 'Please select a specialist, date and time.' });
-      return;
-    }
 
     setIsBooking(true);
     try {
-      // Final conflict check before update
-      const isAvailable = await checkSlotAvailability(selectedDoctorId, bookingDate, bookingTime);
-      if (!isAvailable) {
-        toast({ title: 'Slot unavailable', description: 'This time slot has been booked. Please select another.' });
-        setIsBooking(false);
-        return;
-      }
+      const response = await AppointmentRescheduleService.respondToReschedule({
+        appointmentId,
+        action,
+      });
 
-      const payload = {
-        doctor_id: selectedDoctorId,
-        specialist_name: specialistName,
-        date: bookingDate,
-        time: bookingTime,
-        notes: bookingNotes,
-        status: 'pending', // Reset to pending on reschedule
-      };
-
-      const { error } = await supabase
-        .from('appointments')
-        .update(payload)
-        .eq('id', rescheduleAppointmentId);
-
-      if (error) {
-        throw error;
-      }
-
-      toast({ title: 'Rescheduled', description: 'Your appointment has been rescheduled.' });
-      resetBookingState();
-      // Refresh appointments list
+      toast({
+        title: action === 'approve' ? 'Reschedule approved' : 'Reschedule declined',
+        description:
+          action === 'approve'
+            ? response.charged_upgrade_amount > 0
+              ? `New slot confirmed. ₦${Number(response.charged_upgrade_amount || 0).toLocaleString()} charged from wallet.`
+              : 'New slot confirmed.'
+            : 'The reschedule request was declined.',
+      });
       invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
-      toast({ title: 'Reschedule failed', description: message });
+      toast({
+        title: 'Request update failed',
+        description: message,
+        variant: 'destructive',
+      });
     } finally {
       setIsBooking(false);
     }
@@ -1025,21 +2102,77 @@ const PatientPortal = () => {
     if (!cancelAppointmentId) return;
     setIsBooking(true);
     try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ status: 'cancelled' })
-        .eq('id', cancelAppointmentId);
-
-      if (error) throw error;
-
-      toast({ title: 'Cancelled', description: 'Appointment has been cancelled.' });
+      const result = await PatientWalletService.cancelAppointmentWithRefund(cancelAppointmentId);
+      const refunded = Number(result?.refund_amount || 0);
+      toast({
+        title: 'Appointment cancelled',
+        description: refunded > 0
+          ? `Refunded ₦${refunded.toLocaleString()} to your wallet balance.`
+          : 'Appointment was cancelled successfully.',
+      });
       setCancelAppointmentId(null);
       invalidateAppointments();
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
       toast({ title: 'Cancellation failed', description: message });
     } finally {
       setIsBooking(false);
+    }
+  };
+
+  const submitWalletWithdrawalRequest = async () => {
+    if (!user?.id) return;
+    const amount = Number(withdrawAmount.replace(/,/g, '').trim());
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({
+        title: 'Invalid amount',
+        description: 'Enter a withdrawal amount greater than zero.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (amount > patientWalletBalance) {
+      toast({
+        title: 'Insufficient wallet balance',
+        description: `Available wallet balance is ₦${patientWalletBalance.toLocaleString()}.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmittingWithdrawal(true);
+    try {
+      const requestIdempotencyKey = withdrawIdempotencyKey || createWithdrawalIdempotencyKey();
+      if (!withdrawIdempotencyKey) {
+        setWithdrawIdempotencyKey(requestIdempotencyKey);
+      }
+      const response = await PatientWalletService.requestWalletWithdrawal(
+        amount,
+        withdrawNarration || undefined,
+        requestIdempotencyKey,
+      );
+      toast({
+        title: 'Withdrawal request submitted',
+        description: `₦${Number(response.amount || amount).toLocaleString()} has been reserved from your wallet. Admin processing target is within 48 hours.`,
+      });
+      setWithdrawDialogOpen(false);
+      setWithdrawAmount('');
+      setWithdrawNarration('');
+      setWithdrawIdempotencyKey(null);
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user.id] });
+      await queryClient.invalidateQueries({ queryKey: ['patient-wallet-withdrawals', user.id] });
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
+      toast({
+        title: 'Withdrawal request failed',
+        description: message || 'Unable to submit wallet withdrawal request.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmittingWithdrawal(false);
     }
   };
 
@@ -1089,23 +2222,45 @@ const PatientPortal = () => {
     setIsSavingProfile(true);
     
     try {
+      const preferredLanguageToSave = isSupportedAppLanguage(profileFormData.preferredLanguage)
+        ? profileFormData.preferredLanguage
+        : language;
+      const baseProfilePayload = {
+        full_name: profileFormData.fullName,
+        email: profileFormData.email,
+        phone_number: profileFormData.phone,
+        age: parseInt(profileFormData.age) || null,
+        blood_type: profileFormData.bloodType,
+      };
       const { error } = await supabase
         .from('patient_registrations')
         .update({
-          full_name: profileFormData.fullName,
-          email: profileFormData.email,
-          phone_number: profileFormData.phone,
-          age: parseInt(profileFormData.age) || null,
-          blood_type: profileFormData.bloodType,
+          ...baseProfilePayload,
+          preferred_language: preferredLanguageToSave,
         })
         .eq('user_id', user.id);
 
-      if (error) throw error;
+      if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+        const { error: fallbackError } = await supabase
+          .from('patient_registrations')
+          .update(baseProfilePayload)
+          .eq('user_id', user.id);
+        if (fallbackError) throw fallbackError;
+      } else if (error) {
+        throw error;
+      }
 
       queryClient.invalidateQueries({ queryKey: ['patient-registration'] });
-      toast({ title: 'Success', description: 'Profile updated successfully!' });
+      setLanguage(preferredLanguageToSave);
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.profileUpdated', 'Profile updated successfully!'),
+      });
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to update profile.' });
+      toast({
+        title: t('common.error', 'Error'),
+        description: t('common.profileUpdateFailed', 'Failed to update profile.'),
+      });
     } finally {
       setIsSavingProfile(false);
     }
@@ -1116,15 +2271,23 @@ const PatientPortal = () => {
     const confirmPassword = passwordFormData.confirmPassword.trim();
 
     if (!newPassword || !confirmPassword) {
-      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      toast({
+        title: t('common.missingFields', 'Missing fields'),
+        description: t('common.enterAndConfirmNewPassword', 'Enter and confirm your new password.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword.length < 8) {
-      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({
+        title: t('common.weakPassword', 'Weak password'),
+        description: t('common.passwordMinimumLength', 'Password must be at least 8 characters.'),
+        variant: 'destructive',
+      });
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      toast({ title: t('common.passwordsDoNotMatch', 'Passwords do not match'), variant: 'destructive' });
       return;
     }
 
@@ -1134,11 +2297,14 @@ const PatientPortal = () => {
       if (error) throw error;
 
       setPasswordFormData({ newPassword: '', confirmPassword: '' });
-      toast({ title: 'Success', description: 'Password changed successfully.' });
+      toast({
+        title: t('common.success', 'Success'),
+        description: t('common.passwordChanged', 'Password changed successfully.'),
+      });
     } catch (error: any) {
       toast({
-        title: 'Error',
-        description: error?.message || 'Failed to change password.',
+        title: t('common.error', 'Error'),
+        description: error?.message || t('common.passwordChangeFailed', 'Failed to change password.'),
         variant: 'destructive',
       });
     } finally {
@@ -1148,19 +2314,34 @@ const PatientPortal = () => {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'pending_payment':
+        return <Badge className="bg-warning/10 text-warning border-warning/20">{t('appointmentStatus.pendingPayment', 'Pending Payment')}</Badge>;
+      case 'pending_approval':
+        return <Badge className="bg-amber-100 text-amber-700 border-amber-300">{t('appointmentStatus.pendingApproval', 'Pending Approval')}</Badge>;
       case 'confirmed':
-        return <Badge className="bg-success/10 text-success border-success/20">Confirmed</Badge>;
-      case 'pending':
-        return <Badge className="bg-warning/10 text-warning border-warning/20">Pending</Badge>;
+        return <Badge className="bg-success/10 text-success border-success/20">{t('appointmentStatus.confirmed', 'Confirmed')}</Badge>;
+      case 'in_progress':
+        return <Badge className="bg-primary/10 text-primary border-primary/20">{t('appointmentStatus.inProgress', 'In Progress')}</Badge>;
       case 'completed':
-        return <Badge className="bg-destructive/10 text-destructive border-destructive/20">Completed</Badge>;
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">{t('appointmentStatus.completed', 'Completed')}</Badge>;
       case 'cancelled':
-        return <Badge variant="destructive">Cancelled</Badge>;
-      case 'rejected':
-        return <Badge variant="destructive">Rejected</Badge>;
+        return <Badge className="bg-slate-100 text-slate-700 border-slate-300">{t('appointmentStatus.cancelled', 'Cancelled')}</Badge>;
+      case 'no_show':
+        return <Badge variant="destructive">{t('appointmentStatus.noShow', 'No Show')}</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{formatAppointmentStatusLabel(status)}</Badge>;
     }
+  };
+
+  const getRescheduleRequestBadge = (apt: {
+    reschedule_request_status?: string | null;
+    reschedule_requested_by?: string | null;
+  }) => {
+    if (!isPendingRescheduleRequest(apt)) return null;
+    if (isDoctorRequestedReschedule(apt)) {
+      return <Badge className="bg-blue-100 text-blue-700 border-blue-300">{t('patientPortal.badges.doctorRescheduleRequest', 'Doctor Reschedule Request')}</Badge>;
+    }
+    return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-300">{t('patientPortal.badges.rescheduleRequestSent', 'Reschedule Request Sent')}</Badge>;
   };
 
   const getDoctorPresenceIndicator = (doctorId: string) => {
@@ -1173,26 +2354,100 @@ const PatientPortal = () => {
     return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
+  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
+    getAppointmentDateTime(apt).getTime() <= Date.now();
+  const isPendingRescheduleRequest = (apt: {
+    reschedule_request_status?: string | null;
+  }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isDoctorRequestedReschedule = (apt: {
+    reschedule_requested_by?: string | null;
+  }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
+  const isPatientRequestedReschedule = (apt: {
+    reschedule_requested_by?: string | null;
+  }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'patient';
+  const getCalendarAppointmentDate = (apt: {
+    date: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_date || apt.date)
+      : apt.date
+  );
+  const getCalendarAppointmentTime = (apt: {
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => (
+    isPendingRescheduleRequest(apt)
+      ? String(apt.reschedule_proposed_time || apt.time)
+      : apt.time
+  );
+  const getCalendarDisplayStatus = useCallback((apt: {
+    status: string;
+    reschedule_request_status?: string | null;
+  }) => (
+    normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending' ? 'pending_approval' : apt.status
+  ), []);
+  const hasEffectiveAppointmentTimePassed = (apt: {
+    date: string;
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => {
+    const dateValue = getCalendarAppointmentDate(apt);
+    const timeValue = getCalendarAppointmentTime(apt);
+    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    if (!Number.isNaN(effectiveDateTime.getTime())) {
+      return effectiveDateTime.getTime() <= Date.now();
+    }
+    return hasAppointmentTimePassed(apt);
+  };
   const filteredAppointmentsByStatus = useMemo(() => {
     if (!appointments) return [];
-    const now = new Date();
     
     let filtered;
     switch (appointmentStatusFilter) {
-      case 'pending':
-        filtered = appointments.filter(apt => apt.status === 'pending');
+      case 'pending_payment':
+        filtered = appointments.filter((apt) => apt.status === 'pending_payment');
+        break;
+      case 'pending_approval':
+        filtered = appointments.filter(
+          (apt) =>
+            apt.status === 'pending_approval' ||
+            apt.status === 'pending_payment' ||
+            isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'confirmed':
-        filtered = appointments.filter(apt => {
-          const aptDateTime = new Date(`${apt.date}T${apt.time}`);
-          return aptDateTime > now && apt.status === 'confirmed';
-        });
+        filtered = appointments.filter(
+          (apt) =>
+            (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'in_progress':
+        filtered = appointments.filter((apt) => apt.status === 'in_progress');
         break;
       case 'completed':
         filtered = appointments.filter(apt => apt.status === 'completed');
         break;
-      case 'rejected':
-        filtered = appointments.filter(apt => apt.status === 'rejected');
+      case 'cancelled':
+        filtered = appointments.filter(apt => apt.status === 'cancelled');
+        break;
+      case 'no_show':
+        filtered = appointments.filter(
+          (apt) => apt.status === 'no_show' && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
+        break;
+      case 'closed':
+        filtered = appointments.filter(
+          (apt) =>
+            (apt.status === 'cancelled' || apt.status === 'no_show') &&
+            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+        );
         break;
       case 'all':
       default:
@@ -1200,19 +2455,45 @@ const PatientPortal = () => {
     }
     
     return filtered.sort((a, b) => {
-      if (appointmentStatusFilter === 'pending') {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      } else if (appointmentStatusFilter === 'confirmed') {
+      if (appointmentStatusFilter === 'pending_payment' || appointmentStatusFilter === 'pending_approval') {
+        const aRescheduleAt = (a as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const bRescheduleAt = (b as { reschedule_requested_at?: string | null }).reschedule_requested_at;
+        const aTs = new Date(aRescheduleAt || a.created_at).getTime();
+        const bTs = new Date(bRescheduleAt || b.created_at).getTime();
+        return bTs - aTs;
+      }
+
+      if (appointmentStatusFilter === 'confirmed') {
+        const nowTs = Date.now();
+        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const aIsPast = dateTimeA < nowTs;
+        const bIsPast = dateTimeB < nowTs;
+
+        if (aIsPast !== bIsPast) {
+          return aIsPast ? 1 : -1;
+        }
+
+        return aIsPast ? (dateTimeB - dateTimeA) : (dateTimeA - dateTimeB);
+      }
+
+      if (appointmentStatusFilter === 'in_progress') {
         const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
         const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
         return dateTimeA - dateTimeB;
-      } else {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
-        return dateTimeB - dateTimeA;
       }
+
+      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
+      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      return dateTimeB - dateTimeA;
     });
   }, [appointments, appointmentStatusFilter]);
+
+  useEffect(() => {
+    if (appointmentStatusFilter === 'pending_payment' || appointmentStatusFilter === 'in_progress') {
+      setAppointmentStatusFilter('confirmed');
+    }
+  }, [appointmentStatusFilter]);
 
   useEffect(() => {
     if (appointmentViewMode !== 'calendar') return;
@@ -1222,33 +2503,69 @@ const PatientPortal = () => {
       return;
     }
 
-    setSelectedCalendarDate(filteredAppointmentsByStatus[0].date);
+    setSelectedCalendarDate(getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    }));
   }, [appointmentStatusFilter, appointmentViewMode, filteredAppointmentsByStatus]);
 
   const appointmentsByDate = useMemo(() => {
     return filteredAppointmentsByStatus.reduce<Record<string, any[]>>((acc, apt) => {
-      if (!acc[apt.date]) {
-        acc[apt.date] = [];
+      const dateKey = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
       }
-      acc[apt.date].push(apt);
+      acc[dateKey].push(apt);
       return acc;
     }, {});
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, getCalendarDisplayStatus]);
 
   const calendarStatusLegend = useMemo(() => {
     const seen = new Set<string>();
     return filteredAppointmentsByStatus
-      .filter((apt) => {
-        if (seen.has(apt.status)) return false;
-        seen.add(apt.status);
+      .map((apt) => getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      }))
+      .filter((status) => {
+        if (seen.has(status)) return false;
+        seen.add(status);
         return true;
-      })
-      .map((apt) => apt.status);
+      });
   }, [filteredAppointmentsByStatus]);
+  const hasPastConfirmedInCalendar = useMemo(
+    () => appointmentStatusFilter === 'confirmed' && filteredAppointmentsByStatus.some(
+      (apt) => apt.status === 'confirmed'
+        && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })
+        && hasAppointmentTimePassed(apt),
+    ),
+    [filteredAppointmentsByStatus, appointmentStatusFilter],
+  );
+  const hasPendingRescheduleInCalendar = useMemo(
+    () => filteredAppointmentsByStatus.some((apt) => isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null })),
+    [filteredAppointmentsByStatus],
+  );
 
   const calendarDialogDayAppointments = useMemo(() => {
     if (!calendarDialogDate) return [];
-    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => a.time.localeCompare(b.time));
+    return [...(appointmentsByDate[calendarDialogDate] || [])].sort((a, b) => {
+      const timeA = getCalendarAppointmentTime(a as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const timeB = getCalendarAppointmentTime(b as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      return timeA.localeCompare(timeB);
+    });
   }, [appointmentsByDate, calendarDialogDate]);
 
   const calendarFocusedAppointment = useMemo(() => {
@@ -1275,25 +2592,57 @@ const PatientPortal = () => {
 
   const fullCalendarEvents = useMemo<EventInput[]>(() => {
     return filteredAppointmentsByStatus.map((apt) => {
-      const styles = APPOINTMENT_STATUS_CALENDAR_STYLES[apt.status as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default;
+      const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+      const displayStatus = getCalendarDisplayStatus(apt as {
+        status: string;
+        reschedule_request_status?: string | null;
+      });
+      const isPastConfirmed = appointmentStatusFilter === 'confirmed'
+        && apt.status === 'confirmed'
+        && !pendingReschedule
+        && hasAppointmentTimePassed(apt);
+      const eventDate = getCalendarAppointmentDate(apt as {
+        date: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+      });
+      const eventTime = getCalendarAppointmentTime(apt as {
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+      const styles = pendingReschedule
+        ? { dot: '#2563eb', bg: '#2563eb', text: '#ffffff' }
+        : isPastConfirmed
+        ? PAST_CONFIRMED_CALENDAR_STYLE
+        : (APPOINTMENT_STATUS_CALENDAR_STYLES[displayStatus as keyof typeof APPOINTMENT_STATUS_CALENDAR_STYLES] || APPOINTMENT_STATUS_CALENDAR_STYLES.default);
       const doctorName = getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name);
       return {
         id: apt.id,
         title: doctorName,
-        start: `${apt.date}T${normalizeTime(apt.time)}`,
+        start: `${eventDate}T${normalizeTime(eventTime)}`,
         allDay: false,
         backgroundColor: styles.bg,
         borderColor: styles.dot,
         textColor: styles.text,
         extendedProps: {
-          status: apt.status,
-          appointmentDate: apt.date
+          status: displayStatus,
+          sourceStatus: apt.status,
+          appointmentDate: eventDate,
+          isPastConfirmed,
+          isPendingReschedule: pendingReschedule,
         }
       };
     });
-  }, [filteredAppointmentsByStatus]);
+  }, [filteredAppointmentsByStatus, appointmentStatusFilter, getCalendarDisplayStatus]);
 
-  const calendarRenderKey = `${appointmentStatusFilter}-${filteredAppointmentsByStatus[0]?.date || 'empty'}`;
+  const calendarRenderKey = `${appointmentStatusFilter}-${isMobileAppointmentsLayout ? 'mobile' : 'desktop'}-${filteredAppointmentsByStatus[0]
+    ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+      date: string;
+      reschedule_request_status?: string | null;
+      reschedule_proposed_date?: string | null;
+    })
+    : 'empty'}`;
   const handleCalendarDayClick = (dateStr: string) => {
     const dayKey = dateStr.slice(0, 10);
     setSelectedCalendarDate(dayKey);
@@ -1312,7 +2661,7 @@ const PatientPortal = () => {
   };
 
   const handleCalendarDayCellMount = (arg: DayCellMountArg) => {
-    const dateLabel = arg.date.toLocaleDateString('en-US', {
+    const dateLabel = formatDate(arg.date, {
       weekday: 'long',
       month: 'long',
       day: 'numeric',
@@ -1324,11 +2673,22 @@ const PatientPortal = () => {
 
   const handleCalendarEventMount = (arg: EventMountArg) => {
     const eventTime = arg.event.start
-      ? arg.event.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      ? formatTime(arg.event.start, { hour: 'numeric', minute: '2-digit' })
       : '';
     const eventStatus = String(arg.event.extendedProps.status || '').trim();
-    const eventStatusLabel = eventStatus ? eventStatus[0].toUpperCase() + eventStatus.slice(1) : 'Appointment';
-    arg.el.setAttribute('title', `${arg.event.title} • ${eventTime} • ${eventStatusLabel}`);
+    const isPastConfirmed = Boolean(arg.event.extendedProps.isPastConfirmed);
+    const isPendingReschedule = Boolean(arg.event.extendedProps.isPendingReschedule);
+    const eventStatusLabel = eventStatus ? formatAppointmentStatusLabel(eventStatus) : 'Appointment';
+    const pendingRescheduleSuffix = t('patientPortal.calendar.reschedulePendingSuffix', ' (Reschedule Pending)');
+    const timePassedSuffix = t('patientPortal.calendar.timePassedSuffix', ' (Time Passed)');
+    arg.el.setAttribute(
+      'title',
+      `${arg.event.title} • ${eventTime} • ${eventStatusLabel}${isPendingReschedule ? pendingRescheduleSuffix : ''}${isPastConfirmed ? timePassedSuffix : ''}`,
+    );
+    if (isPastConfirmed) {
+      arg.el.style.boxShadow = 'inset 0 0 0 1px rgba(120, 53, 15, 0.35)';
+      arg.el.style.opacity = '0.9';
+    }
     arg.el.style.cursor = 'pointer';
   };
 
@@ -1346,7 +2706,7 @@ const PatientPortal = () => {
     }
 
     const calendarDialogDateLabel = calendarDialogDate
-      ? new Date(`${calendarDialogDate}T00:00:00`).toLocaleDateString('en-US', {
+      ? formatDate(new Date(`${calendarDialogDate}T00:00:00`), {
         weekday: 'long',
         month: 'long',
         day: 'numeric',
@@ -1363,10 +2723,22 @@ const PatientPortal = () => {
               return (
                 <div key={status} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: styles.dot }} />
-                  <span className="capitalize">{status}</span>
+                  <span>{formatAppointmentStatusLabel(status)}</span>
                 </div>
               );
             })}
+            {hasPastConfirmedInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PAST_CONFIRMED_CALENDAR_STYLE.dot }} />
+                <span>{t('patientPortal.calendar.confirmedTimePassed', 'Confirmed (Time Passed)')}</span>
+              </div>
+            )}
+            {hasPendingRescheduleInCalendar && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#2563eb' }} />
+                <span>{t('patientPortal.calendar.reschedulePending', 'Reschedule Pending')}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -1375,21 +2747,37 @@ const PatientPortal = () => {
             key={calendarRenderKey}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
-            initialDate={selectedCalendarDate || filteredAppointmentsByStatus[0]?.date}
+            initialDate={selectedCalendarDate || (
+              filteredAppointmentsByStatus[0]
+                ? getCalendarAppointmentDate(filteredAppointmentsByStatus[0] as {
+                  date: string;
+                  reschedule_request_status?: string | null;
+                  reschedule_proposed_date?: string | null;
+                })
+                : undefined
+            )}
             headerToolbar={{
               left: 'prev,next today',
               center: 'title',
               right: 'dayGridMonth,timeGridWeek,timeGridDay'
             }}
+            buttonText={{
+              today: t('common.today', 'Today'),
+              month: t('patientPortal.calendar.monthShort', 'Month'),
+              week: t('patientPortal.calendar.weekShort', 'Week'),
+              day: t('patientPortal.calendar.dayShort', 'Day'),
+            }}
             events={fullCalendarEvents}
-            dayMaxEvents={2}
+            dayMaxEvents={isMobileAppointmentsLayout ? 2 : 3}
             eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
             slotMinTime="06:00:00"
             slotMaxTime="23:00:00"
             slotDuration="00:30:00"
             allDaySlot={false}
             nowIndicator
+            stickyHeaderDates
             height="auto"
+            expandRows
             dayCellDidMount={handleCalendarDayCellMount}
             eventDidMount={handleCalendarEventMount}
             dateClick={(arg: DateClickArg) => {
@@ -1405,28 +2793,41 @@ const PatientPortal = () => {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>
-                {calendarDialogDateLabel ? `Appointments on ${calendarDialogDateLabel}` : 'Appointments'}
+                {calendarDialogDateLabel
+                  ? `${t('common.appointments', 'Appointments')} ${calendarDialogDateLabel}`
+                  : t('common.appointments', 'Appointments')}
               </DialogTitle>
               <DialogDescription>
-                Review appointments for the selected day.
+                {t('patientPortal.calendar.reviewAppointmentsForDay', 'Review appointments for the selected day.')}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {calendarDialogDayAppointments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No appointments on this date.</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('patientPortal.empty.noAppointmentsFound', 'No appointments found')}
+                </p>
               ) : (
                 calendarDialogDayAppointments.map((apt) => (
                   <div key={apt.id} className="rounded-lg border p-3 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{apt.time}</span>
+                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
                         {getStatusBadge(apt.status)}
+                        {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
                       </div>
                       <p className="text-sm font-semibold mt-1 truncate">
                         {getDoctorNameById((apt as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || 'No notes'}</p>
+                      {isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) && (
+                        <p className="text-xs text-blue-700 mt-1 truncate">
+                          {t('patientPortal.calendar.proposedSlotPrefix', 'Proposed')}:{' '}
+                          {new Date(
+                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                          ).toLocaleDateString()} {t('common.at', 'at')} {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('patientPortal.notes.none', 'No notes')}</p>
                     </div>
                     <Button
                       size="sm"
@@ -1437,7 +2838,7 @@ const PatientPortal = () => {
                         setCalendarEventDialogOpen(true);
                       }}
                     >
-                      View
+                      {t('common.view', 'View')}
                     </Button>
                   </div>
                 ))
@@ -1455,8 +2856,8 @@ const PatientPortal = () => {
         >
           <DialogContent className="max-w-xl">
             <DialogHeader>
-              <DialogTitle>Appointment Details</DialogTitle>
-              <DialogDescription>Manage the selected appointment.</DialogDescription>
+              <DialogTitle>{t('common.appointments', 'Appointments')}</DialogTitle>
+              <DialogDescription>{t('patientPortal.calendar.manageSelectedAppointment', 'Manage the selected appointment.')}</DialogDescription>
             </DialogHeader>
             {calendarFocusedAppointment && (
               <div className="space-y-4">
@@ -1465,16 +2866,36 @@ const PatientPortal = () => {
                     {getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>{new Date(calendarFocusedAppointment.date).toLocaleDateString()}</span>
+                    <span>{formatDate(calendarFocusedAppointment.date)}</span>
                     <span>•</span>
-                    <span>{calendarFocusedAppointment.time}</span>
+                    <span>{formatClockTime(calendarFocusedAppointment.time)}</span>
                   </div>
                   <div>{getStatusBadge(calendarFocusedAppointment.status)}</div>
-                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || 'No notes provided.'}</p>
+                  {getRescheduleRequestBadge(calendarFocusedAppointment as {
+                    reschedule_request_status?: string | null;
+                    reschedule_requested_by?: string | null;
+                  })}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50/60 p-2 text-xs text-blue-900">
+                      <p className="font-medium">{t('patientPortal.calendar.proposedSlot', 'Proposed Slot')}</p>
+                      <p>
+                        {new Date(
+                          String((calendarFocusedAppointment as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || calendarFocusedAppointment.date)
+                        ).toLocaleDateString()}{' '}
+                        {t('common.at', 'at')} {(calendarFocusedAppointment as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || '--:--'}
+                      </p>
+                    </div>
+                  )}
+                  {calendarFocusedAppointment.status === 'confirmed' && hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    <p className="text-xs font-medium text-amber-700">
+                      {t('patientPortal.calendar.appointmentTimePassedHint', 'Appointment time has passed. It remains confirmed until your doctor marks no-show or follow-up.')}
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || t('patientPortal.notes.noneProvided', 'No notes provided.')}</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
-                  {calendarFocusedAppointment.status === 'confirmed' && (
+                  {(calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') && (
                     <JoinConsultationButton
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
@@ -1482,6 +2903,19 @@ const PatientPortal = () => {
                       variant="default"
                       size="sm"
                     />
+                  )}
+                  {(calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'completed') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        openMessagesForAppointment(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      {t('patientPortal.actions.message', 'Message')}
+                    </Button>
                   )}
                   {calendarFocusedAppointment.status === 'completed' && !(calendarFocusedAppointment as any).rating && (
                     <Button
@@ -1492,32 +2926,77 @@ const PatientPortal = () => {
                         setCalendarEventDialogOpen(false);
                       }}
                     >
-                      Leave Review
+                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
                     </Button>
                   )}
-                  {calendarFocusedAppointment.status === 'pending' && (
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'pending_approval' ||
+                      calendarFocusedAppointment.status === 'confirmed' ||
+                      calendarFocusedAppointment.status === 'no_show') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        initReschedule(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      Reschedule
+                    </Button>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'pending_approval' ||
+                      calendarFocusedAppointment.status === 'confirmed') && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    isDoctorRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
                     <>
                       <Button
                         size="sm"
-                        variant="outline"
                         onClick={() => {
-                          initReschedule(calendarFocusedAppointment);
+                          respondToRescheduleRequest(calendarFocusedAppointment.id, 'approve');
                           setCalendarEventDialogOpen(false);
                         }}
+                        disabled={isBooking}
                       >
-                        Reschedule
+                        Accept New Slot
                       </Button>
                       <Button
                         size="sm"
-                        variant="destructive"
+                        variant="outline"
+                        className="text-destructive border-destructive/30"
                         onClick={() => {
-                          setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                          respondToRescheduleRequest(calendarFocusedAppointment.id, 'decline');
                           setCalendarEventDialogOpen(false);
                         }}
+                        disabled={isBooking}
                       >
-                        Cancel
+                        Decline Request
                       </Button>
                     </>
+                  )}
+                  {calendarFocusedAppointment.status === 'no_show' &&
+                    !isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCalendarEventDialogOpen(false);
+                        openBooking();
+                      }}
+                    >
+                      Book Another Doctor
+                    </Button>
                   )}
                 </div>
               </div>
@@ -1528,7 +3007,171 @@ const PatientPortal = () => {
     );
   };
 
-  const pendingCount = appointments.filter(apt => apt.status === 'pending').length;
+  const pendingApprovalCount = appointments.filter((apt) => {
+    const status = apt.status;
+    const isPending = status === 'pending_approval' || status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+    if (!isPending) return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }
+    return true;
+  }).length;
+
+  const confirmedCount = appointments.filter((apt) => {
+    if (apt.status !== 'confirmed') return false;
+    if ((apt as any).date && (apt as any).time) {
+      return !hasAppointmentTimePassed(apt as { date: string; time: string });
+    }
+    return true;
+  }).length;
+  const closedCount = appointments.filter((apt) =>
+    (apt.status === 'cancelled' || apt.status === 'no_show')
+    && !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+  ).length;
+  const overviewKpis = useMemo(() => {
+    const upcomingAppointments = appointments.filter((apt) => {
+      const status = String(apt.status || '').trim().toLowerCase();
+      const isUpcomingStatus = ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(status);
+      if (!isUpcomingStatus) return false;
+      return !hasEffectiveAppointmentTimePassed(apt as {
+        date: string;
+        time: string;
+        reschedule_request_status?: string | null;
+        reschedule_proposed_date?: string | null;
+        reschedule_proposed_time?: string | null;
+      });
+    }).length;
+    const completedAppointments = appointments.filter((apt) => apt.status === 'completed').length;
+    const pendingApprovalAppointments = appointments.filter((apt) => apt.status === 'pending_approval').length;
+    const pendingPaymentAppointments = appointments.filter((apt) => apt.status === 'pending_payment').length;
+    const rescheduleResponseNeeded = appointments.filter((apt) =>
+      isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }) &&
+      isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null }),
+    ).length;
+    const missedAppointments = appointments.filter((apt) =>
+      apt.status === 'no_show' &&
+      !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+    ).length;
+    const actionNeeded = pendingPaymentAppointments + rescheduleResponseNeeded;
+    const activePrescriptions = fetchedPrescriptions.filter((prescription) => prescription.status === 'active').length;
+
+    return {
+      upcomingAppointments,
+      completedAppointments,
+      pendingApprovalAppointments,
+      pendingPaymentAppointments,
+      rescheduleResponseNeeded,
+      missedAppointments,
+      actionNeeded,
+      activePrescriptions,
+    };
+  }, [
+    appointments,
+    fetchedPrescriptions,
+    hasEffectiveAppointmentTimePassed,
+    isPendingRescheduleRequest,
+    isDoctorRequestedReschedule,
+  ]);
+
+  const handlePayNow = async (apt: any) => {
+    if (!user) {
+      toast({ title: 'Please sign in', description: 'You must be signed in to pay for this appointment.' });
+      navigate('/auth');
+      return;
+    }
+    if (!paystackPublicKey) {
+      toast({ title: 'Payment not configured', description: 'Payment gateway not configured. Contact support.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      // For existing pending_payment appointments, use PaymentService to initialize payment
+      const { data: paymentInitData, error: paymentInitError } = await supabase.functions.invoke('payment-initialize', {
+        body: {
+          appointmentId: apt.id,
+          patientId: user.id,
+          type: 'appointment_confirmation',
+        }
+      });
+
+      if (paymentInitError) throw paymentInitError;
+      const paymentInit = paymentInitData as any;
+
+      let paymentCompleted = false;
+      initializePayment({
+        email: paymentInit?.email || user.email || '',
+        amount: paymentInit?.amountInKobo,
+        reference: paymentInit?.reference,
+        publicKey: paystackPublicKey,
+        metadata: paymentInit?.metadata,
+        onSuccess: async (response: any) => {
+          paymentCompleted = true;
+          const paidReference = String(response?.reference || paymentInit?.reference || '').trim();
+
+          try {
+            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+            let lastConfirmError: any = null;
+
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                  body: { reference: paidReference },
+                });
+                if (confirmError) throw confirmError;
+
+                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                if (parsed.error) throw new Error(parsed.error);
+                confirmResult = parsed;
+                lastConfirmError = null;
+                break;
+              } catch (attemptError: any) {
+                lastConfirmError = attemptError;
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                }
+              }
+            }
+
+            if (!confirmResult) {
+              throw lastConfirmError || new Error('Payment confirmation failed');
+            }
+
+            toast({
+              title: 'Payment successful',
+              description: confirmResult.alreadyProcessed
+                ? 'This payment was already processed and your appointment remains pending approval.'
+                : 'Your appointment has been confirmed.',
+            });
+          } catch (confirmErr: any) {
+            console.warn('[patient-portal] booking payment client confirmation failed:', confirmErr);
+            toast({
+              title: 'Payment successful',
+              description: 'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+            });
+          } finally {
+            invalidateAppointments();
+            setTimeout(() => navigate('/patient-portal?tab=appointments'), 600);
+          }
+        },
+        onClose: () => {
+          if (paymentCompleted) return;
+          toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
+        },
+      });
+    } catch (err: any) {
+      console.error('Payment init error', err);
+      toast({ title: 'Payment error', description: err?.message || 'Unable to start payment.', variant: 'destructive' });
+    }
+  };
+
+  const appointmentViewToggleButtonBaseClass = 'h-8 flex-1 sm:flex-none gap-1';
+  const appointmentStatusTriggerClass = 'relative h-10 w-full border border-transparent px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-background/70 sm:text-sm data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:border-border data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border';
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -1536,54 +3179,35 @@ const PatientPortal = () => {
       <header className="bg-card border-b border-border sticky top-0 z-50">
         <div className="container mx-auto px-2 sm:px-4">
           <div className="flex items-center justify-between h-14 sm:h-16">
-            <Link to="/" className="flex items-center gap-2">
-              <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
-              <div className="flex flex-col">
-                <span className="text-xl font-bold leading-tight">
-                  MyE-<span className="text-primary">Doctor</span>
-                </span>
-                <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+            <div className="flex items-center gap-3">
+              <Link to="/" className="flex items-center gap-2">
+                <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
+                <div className="flex flex-col">
+                  <span className="text-xl font-bold leading-tight">
+                    MyE-<span className="text-primary">Doctor</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
+                </div>
+              </Link>
+              <div className="hidden lg:block">
+                <LanguageSelector />
               </div>
-            </Link>
+            </div>
 
             <div className="flex items-center gap-2 sm:gap-4">
               <div className="relative hidden sm:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search doctors, appointments..."
+                  placeholder={t('patientPortal.searchPlaceholder', 'Search doctors, appointments...')}
                   className="pl-10 w-48 sm:w-64 bg-muted/50"
                 />
               </div>
-
-              {!isPwaInstalled && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="hidden md:inline-flex"
-                    onClick={handleInstallApp}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Install App
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="md:hidden"
-                    onClick={handleInstallApp}
-                    aria-label="Install app"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </>
-              )}
 
               <Button variant="ghost" size="icon" className="relative" onClick={() => setActiveTab('overview')}>
                 <Bell className="w-5 h-5" />
                 {notifications.filter(n => !n.read).length > 0 && (
                   <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent text-[10px] text-accent-foreground rounded-full flex items-center justify-center">
-                    {notifications.filter(n => !n.read).length}
+                    {formatNumber(notifications.filter(n => !n.read).length)}
                   </span>
                 )}
               </Button>
@@ -1606,7 +3230,7 @@ const PatientPortal = () => {
                     </Avatar>
                     <div className="hidden sm:block text-left">
                       <p className="text-sm font-medium">{displayName}</p>
-                      <p className="text-xs text-muted-foreground">Patient</p>
+                      <p className="text-xs text-muted-foreground">{t('patientPortal.rolePatient', 'Patient')}</p>
                     </div>
                   </button>
                 </DropdownMenuTrigger>
@@ -1618,11 +3242,11 @@ const PatientPortal = () => {
                     }}
                   >
                     <Settings className="w-4 h-4 mr-2" />
-                    Profile Settings
+                    {t('common.profileSettings', 'Profile Settings')}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleSignOut}>
                     <LogOut className="w-4 h-4 mr-2" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1646,24 +3270,37 @@ const PatientPortal = () => {
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold truncate">{displayName}</p>
-                      <p className="text-sm text-muted-foreground">Patient</p>
+                      <p className="text-sm text-muted-foreground">{t('patientPortal.rolePatient', 'Patient')}</p>
                     </div>
                   </div>
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                  <div className="lg:hidden px-3 pb-2">
+                    <LanguageSelector />
+                  </div>
                   {[
-                    { id: 'overview', label: 'Overview', icon: Activity },
-                    { id: 'appointments', label: 'Appointments', icon: Calendar },
-                    { id: 'prescriptions', label: 'Prescriptions', icon: Pill },
-                    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : unreadMessagesCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'records', label: 'Health Records', icon: FileText },
+                    { id: 'overview', label: t('common.overview', 'Overview'), icon: Activity },
+                    { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar },
+                    { id: 'prescriptions', label: t('common.prescriptions', 'Prescriptions'), icon: Pill },
+                    {
+                      id: 'messages',
+                      label: t('common.messages', 'Messages'),
+                      icon: MessageSquare,
+                      badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
+                      badgeTone: 'danger' as const
+                    },
+                    { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
+                    { id: 'payments', label: t('common.payments', 'Payments'), icon: Wallet },
                     { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
-                    { id: 'settings', label: 'Settings', icon: Settings },
+                    { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
                       key={item.id}
                       onClick={() => {
+                        if (item.id === 'messages' && unreadMessagesCount > 0) {
+                          setMessagesJumpToUnreadSignal(Date.now());
+                        }
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -1695,7 +3332,7 @@ const PatientPortal = () => {
                     className="w-full justify-start gap-3 text-muted-foreground"
                   >
                     <LogOut className="w-5 h-5" />
-                    Sign Out
+                    {t('common.signOut', 'Sign Out')}
                   </Button>
                 </div>
               </CardContent>
@@ -1713,38 +3350,25 @@ const PatientPortal = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
                 <div>
                   <h1 className="text-lg sm:text-2xl md:text-3xl font-bold mb-1 md:mb-2">
-                    Welcome back, {displayName.split(' ')[0]}! 👋
+                    {t('patientPortal.welcomeBackUser', 'Welcome back, {name}! 👋')
+                      .replace('{name}', displayName.split(' ')[0])}
                   </h1>
                   <p className="text-xs sm:text-sm text-primary-foreground/80">
                     You have {appointments.filter(apt => {
                       const appointmentDate = new Date(apt.date);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                      return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                     }).length} upcoming appointments.
                   </p>
                 </div>
                 <Button onClick={openBooking} variant="secondary" size="sm" className="gap-1 text-xs sm:text-sm">
                   <Plus className="w-4 sm:w-5 h-4 sm:h-5" />
-                  <span className="hidden sm:inline">Book Appointment</span>
-                  <span className="sm:hidden">Book</span>
+                  <span className="hidden sm:inline">{t('patientPortal.bookAppointment', 'Book Appointment')}</span>
+                  <span className="sm:hidden">{t('patientPortal.bookShort', 'Book')}</span>
                 </Button>
               </div>
             </motion.div>
-
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <p className="text-sm">
-                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
-                </p>
-                <Link to="/install">
-                  <Button size="sm" className="gap-2">
-                    <Download className="w-4 h-4" />
-                    Open Install Page
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
 
             {/* Slot Selection Modal */}
             <SlotSelectionModal
@@ -1754,53 +3378,189 @@ const PatientPortal = () => {
               isLoading={slotsLoading || doctorsLoading}
               onSlotSelect={handleSlotSelect}
               doctorId={rescheduleDoctorId}
+              mode="reschedule"
+              currentDurationMinutes={currentRescheduleDurationMinutes}
+              selectedDurationMinutes={rescheduleDurationMinutes}
+              onDurationChange={setRescheduleDurationMinutes}
+              currentConsultationType={currentRescheduleConsultationType}
+              selectedConsultationType={rescheduleConsultationType}
+              onConsultationTypeChange={setRescheduleConsultationType}
+              reschedulePricingPreview={{
+                proposedFinalPrice: proposedRescheduleFinalPrice,
+                previewLoading: reschedulePreviewLoading || reschedulePreviewFetching,
+                alreadyPaidAmount: reschedulePaidAmount !== null ? reschedulePaidAmount : currentRescheduleFinalPrice,
+                upgradeAmount: rescheduleUpgradeAmount,
+                walletAppliedIfSelected: rescheduleHybridWalletApplied,
+                paystackDueIfSelected: rescheduleHybridPaystackDue,
+              }}
             />
 
-            {/* Booking Confirmation Modal */}
+            {/* Reschedule Confirmation Modal */}
             <Dialog open={bookingOpen} onOpenChange={setBookingOpen}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>{rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Appointment'}</DialogTitle>
-                  <DialogDescription>Review and confirm your appointment details.</DialogDescription>
+              <DialogContent className="w-[95vw] max-w-3xl max-h-[92vh] overflow-hidden p-0">
+                <DialogHeader className="px-5 pt-5 pb-1 sm:px-6 sm:pt-6">
+                  <DialogTitle>{t('patientPortal.reschedule.confirmTitle', 'Confirm Reschedule Request')}</DialogTitle>
+                  <DialogDescription>
+                    {rescheduleUpgradeAmount > 0 
+                      ? t('patientPortal.reschedule.reviewChangesAndPayment', 'Review the appointment changes and payment details')
+                      : t('patientPortal.reschedule.reviewAndConfirmNewTime', 'Review and confirm your new appointment time')}
+                  </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid gap-4 py-4">
-                  <div className="p-3 rounded-lg bg-muted/50">
-                    <p className="text-sm font-medium">Selected Slot</p>
-                    <div className="mt-2 space-y-1 text-sm">
-                      <div><span className="text-muted-foreground">Doctor:</span> {specialistName}</div>
-                      <div><span className="text-muted-foreground">Date:</span> {new Date(bookingDate).toLocaleDateString()}</div>
-                      <div><span className="text-muted-foreground">Time:</span> {bookingTime}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <Label>Consultation Fee</Label>
-                    <div className="p-2 text-sm">
-                      {formatPrice(getPricing(doctors.find(d => d.id === selectedDoctorId)?.specialty || 'General Practice'))}
-                    </div>
-                  </div>
-                  <div>
-                    <Label>Additional Notes (Optional)</Label>
-                    <textarea
-                      className="w-full p-2 border rounded text-sm"
-                      rows={3}
-                      value={bookingNotes}
-                      onChange={(e) => setBookingNotes(e.target.value)}
-                      placeholder="Any additional information for the doctor..."
-                    />
-                  </div>
+                <div className="grid max-h-[calc(92vh-160px)] gap-4 overflow-y-auto px-5 py-4 sm:px-6">
+                  {rescheduleAppointment && (
+                    <>
+                      <div className="p-3 rounded-lg border border-border bg-background/60">
+                        <p className="text-sm font-medium mb-2">{t('patientPortal.reschedule.currentAppointment', 'Current Appointment')}</p>
+                        <div className="space-y-1 text-sm text-muted-foreground">
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.doctorLabel', 'Doctor')}:</span>{' '}
+                            {getDoctorNameById((rescheduleAppointment as { doctor_id?: string }).doctor_id, rescheduleAppointment.specialist_name)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.dateTimeLabel', 'Date & Time')}:</span>{' '}
+                            {new Date(rescheduleAppointment.date).toLocaleDateString()} {t('common.at', 'at')} {rescheduleAppointment.time}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.durationLabel', 'Duration')}:</span>{' '}
+                            {currentRescheduleDurationMinutes} min
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.modeLabel', 'Mode')}:</span>{' '}
+                            {currentRescheduleConsultationType.charAt(0).toUpperCase() + currentRescheduleConsultationType.slice(1)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.pricePaidLabel', 'Price Paid')}:</span>{' '}
+                            ₦{(reschedulePaidAmount !== null ? reschedulePaidAmount : currentRescheduleFinalPrice).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+                        <p className="text-sm font-medium mb-2">{t('patientPortal.reschedule.newAppointment', 'New Appointment')}</p>
+                        <div className="space-y-1 text-sm text-muted-foreground">
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.doctorLabel', 'Doctor')}:</span>{' '}
+                            {specialistName}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.dateTimeLabel', 'Date & Time')}:</span>{' '}
+                            {new Date(bookingDate).toLocaleDateString()} {t('common.at', 'at')} {bookingTime}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.durationLabel', 'Duration')}:</span>{' '}
+                            {rescheduleDurationMinutes} min
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.modeLabel', 'Mode')}:</span>{' '}
+                            {rescheduleConsultationType.charAt(0).toUpperCase() + rescheduleConsultationType.slice(1)}
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">{t('patientPortal.reschedule.newPriceLabel', 'New Price')}:</span>{' '}
+                            {reschedulePreviewLoading || reschedulePreviewFetching
+                              ? t('patientPortal.reschedule.calculating', 'Calculating...')
+                              : `₦${proposedRescheduleFinalPrice.toLocaleString()}`}
+                          </div>
+                        </div>
+                      </div>
+
+                      {rescheduleUpgradeAmount > 0 && (
+                        <>
+                          <div className="rounded-lg border border-border bg-background/60 p-3">
+                            <div className="space-y-2 text-sm">
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">{t('patientPortal.reschedule.newPriceLabel', 'New Price')}</span>
+                                <span className="font-medium">₦{proposedRescheduleFinalPrice.toLocaleString()}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">{t('patientPortal.reschedule.alreadyPaidLabel', 'Already Paid')}</span>
+                                <span className="font-medium">₦{(reschedulePaidAmount !== null ? reschedulePaidAmount : 0).toLocaleString()}</span>
+                              </div>
+                              <div className="border-t pt-2 flex items-center justify-between">
+                                <span className="font-medium">{t('patientPortal.reschedule.balanceToPayLabel', 'Balance to Pay')}</span>
+                                <span className="font-semibold text-amber-700">₦{rescheduleUpgradeAmount.toLocaleString()}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-2">
+                            <p className="text-sm font-medium mb-2">{t('patientPortal.reschedule.paymentMethod', 'Payment Method')}</p>
+                            <div className="flex items-center gap-3 text-sm">
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="paystack"
+                                  checked={reschedulePaymentMethod === 'paystack'}
+                                  onChange={() => setReschedulePaymentMethod('paystack')}
+                                />
+                                <span>{t('patientPortal.reschedule.paystackRecommended', 'Paystack (recommended)')}</span>
+                              </label>
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="reschedule-payment-method"
+                                  value="wallet"
+                                  checked={reschedulePaymentMethod === 'wallet'}
+                                  onChange={() => setReschedulePaymentMethod('wallet')}
+                                />
+                                <span>{t('patientPortal.reschedule.useWallet', 'Use Wallet')}</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {reschedulePaymentMethod === 'wallet' && (
+                            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary">
+                              {rescheduleHybridPaystackDue > 0
+                                ? `Wallet applies ₦${rescheduleHybridWalletApplied.toLocaleString()} and remaining ₦${rescheduleHybridPaystackDue.toLocaleString()} continues via Paystack automatically.`
+                                : `Wallet covers the full upgrade amount of ₦${rescheduleUpgradeAmount.toLocaleString()}.`}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      <div>
+                        <label className="text-sm font-medium">{t('patientPortal.reschedule.noteOptional', 'Note (optional)')}</label>
+                        <textarea
+                          className="mt-1 w-full rounded-md border border-input bg-background p-2 text-sm"
+                          rows={2}
+                          value={rescheduleRequestNote}
+                          onChange={(e) => setRescheduleRequestNote(e.target.value)}
+                          placeholder={t('patientPortal.reschedule.notePlaceholder', 'Add any context about this reschedule request...')}
+                        />
+                      </div>
+
+                      <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-xs text-emerald-900">
+                        {t('patientPortal.reschedule.submitHint', 'This submits a reschedule request for doctor approval. Your current appointment remains scheduled until the request is approved.')}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                <DialogFooter>
+                <DialogFooter className="border-t bg-background px-5 py-4 sm:px-6">
                   <Button variant="outline" onClick={() => {
                     setBookingOpen(false);
                     setSlotSelectionOpen(true);
                   }}>
-                    Back
+                    {t('patientPortal.back', 'Back')}
                   </Button>
-                  <Button variant="outline" onClick={() => setBookingOpen(false)}>Cancel</Button>
-                  <Button onClick={rescheduleAppointmentId ? rescheduleBooking : createBooking} disabled={isBooking}>
-                    {isBooking ? 'Submitting...' : (rescheduleAppointmentId ? 'Confirm Reschedule' : 'Confirm Booking')}
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setBookingOpen(false)}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                  <Button
+                    onClick={rescheduleBooking}
+                    disabled={isBooking}
+                  >
+                    {isBooking
+                      ? t('common.submitting', 'Submitting...')
+                      : rescheduleUpgradeAmount > 0
+                      ? (effectiveReschedulePaymentMethod === 'wallet'
+                        ? t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')
+                        : t('patientPortal.reschedule.proceedToPayment', 'Proceed to Payment'))
+                      : t('patientPortal.reschedule.confirmReschedule', 'Confirm Reschedule')}
                   </Button>
                 </DialogFooter>
                 <DialogClose />
@@ -1812,12 +3572,88 @@ const PatientPortal = () => {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Cancel Appointment</DialogTitle>
-                  <DialogDescription>Are you sure you want to cancel this appointment? This action cannot be undone.</DialogDescription>
+                  <DialogDescription>
+                    Are you sure you want to cancel this appointment? Paid appointments are refunded to your wallet balance.
+                  </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>No, Keep It</Button>
+                  <Button variant="outline" onClick={() => setCancelAppointmentId(null)}>{t('patientPortal.noKeepIt', 'No, Keep It')}</Button>
                   <Button variant="destructive" onClick={cancelAppointment} disabled={isBooking}>
-                    {isBooking ? 'Cancelling...' : 'Yes, Cancel Appointment'}
+                    {isBooking
+                      ? t('patientPortal.cancelling', 'Cancelling...')
+                      : t('patientPortal.yesCancelAppointment', 'Yes, Cancel Appointment')}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={withdrawDialogOpen}
+              onOpenChange={(open) => {
+                setWithdrawDialogOpen(open);
+                if (open) {
+                  setWithdrawIdempotencyKey((prev) => prev || createWithdrawalIdempotencyKey());
+                  return;
+                }
+                if (!open) {
+                  setWithdrawAmount('');
+                  setWithdrawNarration('');
+                  setWithdrawIdempotencyKey(null);
+                }
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}</DialogTitle>
+                  <DialogDescription>
+                    {t('patientPortal.wallet.withdrawalDescription', 'Submit a withdrawal request from your available wallet balance. Include your bank details in the note if needed.')}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2">
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    {t('patientPortal.wallet.availableBalance', 'Available Balance')}: <span className="font-semibold">₦{patientWalletBalance.toLocaleString()}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.amountLabel', 'Amount (₦)')}</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">{t('patientPortal.wallet.noteOptional', 'Note (optional)')}</label>
+                    <textarea
+                      className="w-full rounded-md border border-input bg-background p-2 text-sm"
+                      rows={3}
+                      value={withdrawNarration}
+                      onChange={(e) => setWithdrawNarration(e.target.value)}
+                      placeholder={t('patientPortal.wallet.notePlaceholder', 'Add payout account details or note for this request')}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t('patientPortal.wallet.withdrawalProcessingHint', 'Withdrawal requests are processed manually within 48 hours and marked completed after transfer.')}
+                  </p>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setWithdrawDialogOpen(false);
+                      setWithdrawAmount('');
+                      setWithdrawNarration('');
+                      setWithdrawIdempotencyKey(null);
+                    }}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                  <Button onClick={submitWalletWithdrawalRequest} disabled={!canSubmitWithdrawal}>
+                    {isSubmittingWithdrawal
+                      ? t('common.submitting', 'Submitting...')
+                      : t('patientPortal.wallet.submitWithdrawalRequest', 'Submit Request')}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -1826,40 +3662,108 @@ const PatientPortal = () => {
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="appointments">Appointments</TabsTrigger>
-                <TabsTrigger value="prescriptions">Prescriptions</TabsTrigger>
+                <TabsTrigger value="overview">{t('common.overview', 'Overview')}</TabsTrigger>
+                <TabsTrigger value="payments">{t('common.payments', 'Payments')}</TabsTrigger>
+                <TabsTrigger value="appointments">{t('common.appointments', 'Appointments')}</TabsTrigger>
+                <TabsTrigger value="prescriptions">{t('common.prescriptions', 'Prescriptions')}</TabsTrigger>
               </TabsList>
 
               {/* Overview Tab */}
               <TabsContent value="overview" className="space-y-6">
+                <Card className="border-primary/15">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base">{t('patientPortal.kpi.careSnapshot', 'Care Snapshot')}</CardTitle>
+                        <CardDescription>{t('patientPortal.kpi.careSnapshotHint', 'A quick view of your appointment and treatment journey.')}</CardDescription>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-2"
+                        onClick={() => setActiveTab('appointments')}
+                      >
+                        {t('common.appointments', 'Appointments')}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.upcomingAppointments', 'Upcoming')}</p>
+                        <p className="text-lg font-semibold">{overviewKpis.upcomingAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.actionNeeded', 'Action Needed')}</p>
+                        <p className="text-lg font-semibold text-amber-700">{overviewKpis.actionNeeded}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.pendingApproval', 'Pending Approval')}</p>
+                        <p className="text-lg font-semibold text-blue-700">{overviewKpis.pendingApprovalAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.completedAppointments', 'Completed')}</p>
+                        <p className="text-lg font-semibold">{overviewKpis.completedAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.missedAppointments', 'Missed (No-show)')}</p>
+                        <p className="text-lg font-semibold text-destructive">{overviewKpis.missedAppointments}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.kpi.activePrescriptions', 'Active Prescriptions')}</p>
+                        <p className="text-lg font-semibold text-emerald-700">{overviewKpis.activePrescriptions}</p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {t(
+                        'patientPortal.kpi.actionNeededHint',
+                        'Action Needed includes pending payments and doctor-proposed reschedule requests awaiting your response.',
+                      )}
+                    </p>
+                  </CardContent>
+                </Card>
+
+                {!isPwaInstalled ? (
+                  <Card className="border-primary/20 bg-primary/5">
+                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <p className="text-sm">
+                        {t('patientPortal.installBannerTextPrefix', 'Install our mobile app for faster access. Click')} <span className="font-semibold">{t('patientPortal.downloadApp', 'Download App')}</span> {t('patientPortal.installBannerTextSuffix', 'to install on your phone.')}
+                      </p>
+                      <Button size="sm" className="gap-2" onClick={handleInstallApp}>
+                        <Download className="w-4 h-4" />
+                        {t('common.installApp', 'Install App')}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
                 {/* Upcoming Appointments */}
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <div>
-                      <CardTitle>Upcoming Appointments</CardTitle>
-                      <CardDescription>Your scheduled consultations</CardDescription>
+                      <CardTitle>{t('patientPortal.headers.upcomingAppointments', 'Upcoming Appointments')}</CardTitle>
+                      <CardDescription>{t('patientPortal.headers.scheduledConsultations', 'Your scheduled consultations')}</CardDescription>
                     </div>
                     <Button variant="ghost" size="sm" onClick={() => setActiveTab('appointments')}>
-                      View All <ChevronRight className="w-4 h-4 ml-1" />
+                      {t('common.viewAll', 'View All')} <ChevronRight className="w-4 h-4 ml-1" />
                     </Button>
                   </CardHeader>
                   <CardContent>
                     {appointmentsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading appointments...</p>
+                        <p className="text-muted-foreground">{t('patientPortal.loading.appointments', 'Loading appointments...')}</p>
                       </div>
                     ) : appointments.filter(apt => {
                       const appointmentDate = new Date(apt.date);
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
-                      return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                      return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                     }).length === 0 ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">No upcoming appointments</p>
+                        <p className="text-muted-foreground">{t('patientPortal.empty.noUpcomingAppointments', 'No upcoming appointments')}</p>
                         <Button onClick={openBooking} variant="outline" size="sm" className="mt-4 gap-2">
                           <Plus className="w-4 h-4" />
-                          Book Now
+                          {t('common.bookNow', 'Book Now')}
                         </Button>
                       </div>
                     ) : (
@@ -1868,7 +3772,7 @@ const PatientPortal = () => {
                           const appointmentDate = new Date(apt.date);
                           const today = new Date();
                           today.setHours(0, 0, 0, 0);
-                          return appointmentDate >= today && (apt.status === 'confirmed' || apt.status === 'pending');
+                          return appointmentDate >= today && ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(apt.status);
                         }).slice(0, 3).map((apt) => (
                           <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-muted/50 hover:bg-muted transition-colors">
                             <div className="flex items-center gap-4 mb-3 sm:mb-0">
@@ -1889,20 +3793,20 @@ const PatientPortal = () => {
                               </div>
                               <div>
                                 <p className="font-medium">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                <p className="text-sm text-muted-foreground">Appointment</p>
+                                <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                               </div>
                             </div>
                             <div className="flex flex-col gap-2">
                               <div className="flex items-center gap-2">
                                 <Calendar className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                <span className="text-sm">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</span>
                                 <Clock className="w-4 h-4 text-muted-foreground ml-2" />
-                                <span className="text-sm">{apt.time}</span>
+                                <span className="text-sm">{formatClockTime(apt.time)}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
                               </div>
-                              {apt.status === 'confirmed' && (
+                              {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                 <JoinConsultationButton
                                   appointmentId={apt.id}
                                   participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
@@ -1911,6 +3815,17 @@ const PatientPortal = () => {
                                   size="sm"
                                   className="w-full sm:w-auto"
                                 />
+                              )}
+                              {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full sm:w-auto"
+                                  onClick={() => openMessagesForAppointment(apt)}
+                                >
+                                  <MessageSquare className="w-4 h-4 mr-2" />
+                                  {t('patientPortal.actions.message', 'Message')}
+                                </Button>
                               )}
                             </div>
                           </div>
@@ -1925,16 +3840,16 @@ const PatientPortal = () => {
                   {/* Past Consultations */}
                   <Card>
                     <CardHeader>
-                      <CardTitle className="text-lg">Recent Consultations</CardTitle>
+                      <CardTitle className="text-lg">{t('patientPortal.headers.recentConsultations', 'Recent Consultations')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {consultationsLoading ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">Loading consultations...</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.loading.consultations', 'Loading consultations...')}</p>
                         </div>
                       ) : recentConsultations.length === 0 ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">No recent consultations</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.empty.noRecentConsultations', 'No recent consultations')}</p>
                         </div>
                       ) : (
                         <div className="space-y-4">
@@ -1944,7 +3859,7 @@ const PatientPortal = () => {
                                 <p className="font-medium text-sm">{consultation.doctor_name}</p>
                                 <p className="text-xs text-muted-foreground">{consultation.diagnosis}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                  {new Date(consultation.date).toLocaleDateString()}
+                                  {formatDate(consultation.date)}
                                 </p>
                               </div>
                               <div className="flex items-center gap-1">
@@ -1959,7 +3874,7 @@ const PatientPortal = () => {
                                     />
                                   ))
                                 ) : (
-                                  <span className="text-xs text-muted-foreground">No rating</span>
+                                  <span className="text-xs text-muted-foreground">{t('patientPortal.empty.noRating', 'No rating')}</span>
                                 )}
                               </div>
                             </div>
@@ -1972,16 +3887,16 @@ const PatientPortal = () => {
                   {/* Notifications */}
                   <Card>
                     <CardHeader>
-                      <CardTitle className="text-lg">Notifications</CardTitle>
+                      <CardTitle className="text-lg">{t('patientPortal.headers.notifications', 'Notifications')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {notificationsLoading ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">Loading notifications...</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.loading.notifications', 'Loading notifications...')}</p>
                         </div>
                       ) : notifications.length === 0 ? (
                         <div className="text-center py-4">
-                          <p className="text-muted-foreground text-sm">No new notifications</p>
+                          <p className="text-muted-foreground text-sm">{t('patientPortal.empty.noNewNotifications', 'No new notifications')}</p>
                         </div>
                       ) : (
                         <div className="space-y-4">
@@ -2001,39 +3916,221 @@ const PatientPortal = () => {
                 </div>
               </TabsContent>
 
+              {/* Payments Tab */}
+              <TabsContent value="payments" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <CardTitle>{t('common.payments', 'Payments')}</CardTitle>
+                        <CardDescription>{t('patientPortal.payments.manageWalletAndTransactions', 'View wallet balance, transactions, and withdrawal requests in one place.')}</CardDescription>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setWithdrawIdempotencyKey(createWithdrawalIdempotencyKey());
+                          setWithdrawDialogOpen(true);
+                        }}
+                        disabled={patientWalletBalance <= 0}
+                      >
+                        {t('patientPortal.wallet.requestWithdrawal', 'Request Withdrawal')}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                      <div className="rounded-lg border border-border p-3 bg-primary/5">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.balance', 'Wallet Balance')}</p>
+                        <p className="text-xl font-semibold">₦{patientWalletBalance.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.wallet.pendingWithdrawals', 'Pending Withdrawals')}</p>
+                        <p className="text-xl font-semibold">{pendingWalletWithdrawalsCount}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalCredits', 'Wallet Credits')}</p>
+                        <p className="text-xl font-semibold text-emerald-700">₦{walletSummary.creditTotal.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalDebits', 'Wallet Debits')}</p>
+                        <p className="text-xl font-semibold text-amber-700">₦{walletSummary.debitTotal.toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-lg border border-border p-4 bg-muted/10">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.totalTransactions', 'Payment Transactions')}</p>
+                          <p className="font-semibold">{paymentSummary.totalCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.successful', 'Successful')}</p>
+                          <p className="font-semibold text-emerald-700">{paymentSummary.successfulCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.pending', 'Pending')}</p>
+                          <p className="font-semibold text-amber-700">{paymentSummary.pendingCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t('patientPortal.payments.failed', 'Failed')}</p>
+                          <p className="font-semibold text-destructive">{paymentSummary.failedCount}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <div className="grid lg:grid-cols-2 gap-6">
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{t('patientPortal.payments.paymentTransactions', 'Payment Transactions')}</CardTitle>
+                      <CardDescription>{t('patientPortal.payments.paymentTransactionsHint', 'Paystack and wallet-linked payment intents for your appointments.')}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {paymentTransactionsLoading ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.loading.transactions', 'Loading transactions...')}</p>
+                      ) : paymentTransactions.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noPaymentTransactions', 'No payment transactions yet.')}</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {paymentTransactions.map((payment) => (
+                            <div key={payment.id} className="rounded-lg border border-border p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <Badge className={getPaymentStatusBadgeClass(payment.status)}>
+                                    {getPaymentStatusLabel(payment.status)}
+                                  </Badge>
+                                  <Badge variant="outline">
+                                    {String(payment.provider || payment.payment_method || 'Unknown').toUpperCase()}
+                                  </Badge>
+                                </div>
+                                <p className="font-semibold">₦{Number(payment.amount || 0).toLocaleString()}</p>
+                              </div>
+                              <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                <p>{t('common.createdAt', 'Created')}: {formatDateTime(payment.created_at)}</p>
+                                {payment.verified_at ? <p>{t('common.verified', 'Verified')}: {formatDateTime(payment.verified_at)}</p> : null}
+                                {payment.payment_reference ? <p>{t('patientPortal.payments.reference', 'Reference')}: {payment.payment_reference}</p> : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{t('patientPortal.wallet.ledger', 'Wallet Ledger')}</CardTitle>
+                      <CardDescription>{t('patientPortal.wallet.ledgerHint', 'All wallet credits and debits linked to your account.')}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {walletTransactionsLoading ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.loading.walletTransactions', 'Loading wallet ledger...')}</p>
+                      ) : walletTransactions.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noWalletTransactions', 'No wallet ledger entries yet.')}</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {walletTransactions.map((tx) => {
+                            const isCredit = String(tx.direction || '').toLowerCase() === 'credit';
+                            return (
+                              <div key={tx.id} className="rounded-lg border border-border p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={isCredit ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
+                                      {isCredit ? t('patientPortal.wallet.credit', 'Credit') : t('patientPortal.wallet.debit', 'Debit')}
+                                    </Badge>
+                                    <span className="text-sm font-medium">{getWalletTransactionLabel(tx)}</span>
+                                  </div>
+                                  <p className={`font-semibold ${isCredit ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                    {isCredit ? '+' : '-'}₦{Number(tx.amount || 0).toLocaleString()}
+                                  </p>
+                                </div>
+                                <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                  <p>{t('common.createdAt', 'Created')}: {formatDateTime(tx.created_at)}</p>
+                                  {tx.narration ? <p>{tx.narration}</p> : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">{t('patientPortal.wallet.requestWithdrawal', 'Withdrawal Requests')}</CardTitle>
+                    <CardDescription>{t('patientPortal.wallet.withdrawalRequestsHint', 'Track payout processing status and transfer references.')}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {walletWithdrawalRequests.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noWithdrawalRequests', 'No withdrawal requests yet.')}</p>
+                    ) : (
+                      <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                        {walletWithdrawalRequests.map((request) => (
+                          <div key={request.id} className="rounded-lg border border-border p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <Badge className={getWithdrawalStatusBadgeClass(request.status)}>
+                                {getWithdrawalStatusLabel(request.status)}
+                              </Badge>
+                              <span className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                              <p>{t('common.createdAt', 'Requested')}: {formatDateTime(request.created_at)}</p>
+                              {request.sla_due_at ? <p>{t('patientPortal.wallet.expectedBy', 'Expected by')}: {formatDateTime(request.sla_due_at)}</p> : null}
+                              {request.completed_at ? <p>{t('common.completed', 'Completed')}: {formatDateTime(request.completed_at)}</p> : null}
+                              {request.payout_reference ? <p>{t('patientPortal.wallet.transferReference', 'Transfer ref')}: {request.payout_reference}</p> : null}
+                              {request.admin_note ? <p>{request.admin_note}</p> : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
               {/* Appointments Tab */}
               <TabsContent value="appointments" className="space-y-6">
                 <Card>
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <CardTitle>Appointments</CardTitle>
-                        <CardDescription>Manage all your appointments in one place</CardDescription>
+                        <CardTitle>{t('common.appointments', 'Appointments')}</CardTitle>
+                        <CardDescription>{t('patientPortal.headers.manageAppointments', 'Manage all your appointments in one place')}</CardDescription>
                       </div>
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                        <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+                      <div className="flex w-full flex-col sm:w-auto sm:flex-row sm:items-center gap-2">
+                        <div className="inline-flex w-full sm:w-auto items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
                           <Button
                             size="sm"
-                            variant={appointmentViewMode === 'list' ? 'default' : 'ghost'}
-                            className="h-8 gap-1"
+                            variant="ghost"
+                            className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'list'
+                              ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                              }`}
                             onClick={() => setAppointmentViewMode('list')}
                           >
                             <List className="w-4 h-4" />
-                            List
+                            {t('common.list', 'List')}
                           </Button>
                           <Button
                             size="sm"
-                            variant={appointmentViewMode === 'calendar' ? 'default' : 'ghost'}
-                            className="h-8 gap-1"
+                            variant="ghost"
+                            className={`${appointmentViewToggleButtonBaseClass} ${appointmentViewMode === 'calendar'
+                              ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                              }`}
                             onClick={() => setAppointmentViewMode('calendar')}
                           >
                             <Calendar className="w-4 h-4" />
-                            Calendar
+                            {t('common.calendar', 'Calendar')}
                           </Button>
                         </div>
-                        <Button onClick={openBooking} className="gap-2">
+                        <Button onClick={openBooking} className="w-full sm:w-auto gap-2">
                           <Plus className="w-4 h-4" />
-                          New Appointment
+                          {t('patientPortal.headers.newAppointment', 'New Appointment')}
                         </Button>
                       </div>
                     </div>
@@ -2041,36 +4138,61 @@ const PatientPortal = () => {
                   <CardContent>
                     {/* Status Sub-tabs */}
                     <Tabs value={appointmentStatusFilter} onValueChange={(v) => setAppointmentStatusFilter(v as any)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-5 mb-6">
-                        <TabsTrigger value="pending" className="relative">
-                          Pending
-                          {pendingCount > 0 && (
-                            <Badge className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-[10px]">
-                              {pendingCount}
+                      <TabsList className="mb-6 grid h-auto w-full grid-cols-2 gap-1 rounded-xl bg-muted/40 p-1 sm:grid-cols-3 lg:grid-cols-5">
+                        <TabsTrigger value="pending_approval" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.pending', 'Pending')}
+                          {pendingApprovalCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {pendingApprovalCount}
                             </Badge>
                           )}
                         </TabsTrigger>
-                        <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
-                        <TabsTrigger value="completed">Completed</TabsTrigger>
-                        <TabsTrigger value="rejected">Rejected</TabsTrigger>
-                        <TabsTrigger value="all">All</TabsTrigger>
+                        <TabsTrigger value="confirmed" className={appointmentStatusTriggerClass}>
+                          {t('appointmentStatus.confirmed', 'Confirmed')}
+                          {confirmedCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {confirmedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="completed" className={appointmentStatusTriggerClass}>{t('appointmentStatus.completed', 'Completed')}</TabsTrigger>
+                        <TabsTrigger value="closed" className={appointmentStatusTriggerClass}>
+                          {t('patientPortal.appointments.closed', 'Closed')}
+                          {closedCount > 0 && (
+                            <Badge className="ml-1 h-5 min-w-5 rounded-full px-1 flex items-center justify-center text-[10px]">
+                              {closedCount}
+                            </Badge>
+                          )}
+                        </TabsTrigger>
+                        <TabsTrigger value="all" className={appointmentStatusTriggerClass}>{t('common.all', 'All')}</TabsTrigger>
                       </TabsList>
 
-                      {/* Pending Tab Content */}
-                      <TabsContent value="pending" className="space-y-4">
+                      {/* Pending Approval Tab Content */}
+                      <TabsContent value="pending_approval" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No pending appointments', 'Pending appointments await doctor confirmation')
+                          renderAppointmentsCalendar(
+                            'No pending approvals',
+                            'Includes new bookings awaiting doctor approval and reschedule requests awaiting action.'
+                          )
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No pending appointments</p>
-                                <p className="text-sm text-muted-foreground mt-2">Pending appointments await doctor confirmation</p>
+                                <p className="text-muted-foreground">No pending approvals</p>
+                                <p className="text-sm text-muted-foreground mt-2">Includes new bookings and reschedule requests awaiting action.</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-warning/30 bg-warning/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/40' : 'border-amber-300/30 bg-amber-50/30'
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="relative">
                                       <Avatar className="w-12 h-12">
@@ -2090,21 +4212,50 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {new Date(apt.date).toLocaleDateString()} at {apt.time}
+                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
                                       </p>
+                                      {pendingReschedule && (
+                                        <p className="text-xs font-medium text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
+                                      {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
                                       <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
-                                    <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                      Reschedule
-                                    </Button>
-                                    <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
-                                      Cancel
-                                    </Button>
+                                    {pendingReschedule && doctorRequested ? (
+                                      <>
+                                        <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking}>
+                                          Accept New Slot
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-destructive border-destructive/30"
+                                          onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                          disabled={isBooking}
+                                        >
+                                          Decline
+                                        </Button>
+                                      </>
+                                    ) : pendingReschedule ? (
+                                      <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                    ) : (
+                                      <>
+                                        <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                          Reschedule
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                          Cancel
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2113,21 +4264,25 @@ const PatientPortal = () => {
                       {/* Confirmed Tab Content */}
                       <TabsContent value="confirmed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No confirmed appointments')
+                          renderAppointmentsCalendar('No confirmed or in-progress appointments')
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No confirmed appointments</p>
+                                <p className="text-muted-foreground">No confirmed or in-progress appointments</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-primary/30 bg-primary/5">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isPastConfirmed = hasAppointmentTimePassed(apt);
+                                return (
+                                <div key={apt.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                  isPastConfirmed ? 'border-amber-300/40 bg-amber-50/40' : 'border-primary/30 bg-primary/5'
+                                }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -2148,18 +4303,38 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">Appointment</p>
+                                      {isPastConfirmed && (
+                                        <p className="text-xs font-medium text-amber-700 mt-1">
+                                          Appointment time passed. Waiting for doctor action (no-show or follow-up).
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  <JoinConsultationButton
-                                    appointmentId={apt.id}
-                                    participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                                    status={apt.status}
-                                    variant="default"
-                                    size="sm"
-                                    className="gradient-primary"
-                                  />
+                                  <div className="flex flex-col sm:flex-row gap-2">
+                                    <JoinConsultationButton
+                                      appointmentId={apt.id}
+                                      participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                      status={apt.status}
+                                      variant="default"
+                                      size="sm"
+                                      className="gradient-primary"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
+                                    </Button>
+                                    {apt.status === 'confirmed' && (
+                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                        Reschedule
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2168,21 +4343,21 @@ const PatientPortal = () => {
                       {/* Completed Tab Content */}
                       <TabsContent value="completed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No completed consultations')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noCompletedConsultations', 'No completed consultations'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Video className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No completed consultations</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noCompletedConsultations', 'No completed consultations')}</p>
                               </div>
                             ) : (
                               filteredAppointmentsByStatus.map((apt) => (
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2197,7 +4372,7 @@ const PatientPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                       {(apt as any).rating && (
                                         <div className="flex items-center gap-1 mt-1">
                                           {[...Array(5)].map((_, i) => (
@@ -2210,17 +4385,27 @@ const PatientPortal = () => {
                                       )}
                                     </div>
                                   </div>
-                                  {!(apt as any).rating && (
+                                  <div className="flex gap-2">
                                     <Button
                                       size="sm"
-                                      onClick={() => {
-                                        setSelectedAppointment(apt);
-                                        setReviewModalOpen(true);
-                                      }}
+                                      variant="outline"
+                                      onClick={() => openMessagesForAppointment(apt)}
                                     >
-                                      Leave Review
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
                                     </Button>
-                                  )}
+                                    {!(apt as any).rating && (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => {
+                                          setSelectedAppointment(apt);
+                                          setReviewModalOpen(true);
+                                        }}
+                                      >
+                                        {t('patientPortal.actions.leaveReview', 'Leave Review')}
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
                               ))
                             )}
@@ -2228,45 +4413,65 @@ const PatientPortal = () => {
                         )}
                       </TabsContent>
 
-                      {/* Rejected Tab Content */}
-                      <TabsContent value="rejected" className="space-y-4">
+                      {/* Closed Tab Content (Cancelled + No Show) */}
+                      <TabsContent value="closed" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No rejected appointments')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noClosedAppointments', 'No closed appointments'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No rejected appointments</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noClosedAppointments', 'No closed appointments')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
-                                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                                    <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const isNoShow = apt.status === 'no_show';
+                                return (
+                                  <div
+                                    key={apt.id}
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                      isNoShow ? 'border-destructive/30 bg-destructive/5' : 'border-muted-foreground/30 bg-muted/40'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                      <div className="text-center w-20">
+                                        <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                        <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      </div>
+                                      <div className="w-px h-12 bg-border" />
+                                      <Avatar className="w-12 h-12">
+                                        <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
+                                        <AvatarFallback className="bg-primary/10 text-primary">
+                                          {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
+                                            .split(' ')
+                                            .map((n) => n[0])
+                                            .join('')
+                                            .slice(0, 2)}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div>
+                                        <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
+                                        <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                      </div>
                                     </div>
-                                    <div className="w-px h-12 bg-border" />
-                                    <Avatar className="w-12 h-12">
-                                      <AvatarImage src={(apt as any).doctor_profile_picture || ''} />
-                                      <AvatarFallback className="bg-primary/10 text-primary">
-                                        {getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)
-                                          .split(' ')
-                                          .map((n) => n[0])
-                                          .join('')
-                                          .slice(0, 2)}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                      <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
-                                      <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant={isNoShow ? 'destructive' : 'secondary'}>
+                                        {isNoShow ? t('appointmentStatus.noShow', 'No Show') : t('appointmentStatus.cancelled', 'Cancelled')}
+                                      </Badge>
+                                      {isNoShow && (
+                                        <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                          {t('patientPortal.actions.reschedule', 'Reschedule')}
+                                        </Button>
+                                      )}
+                                      <Button size="sm" variant="outline" onClick={openBooking}>
+                                        {t('patientPortal.actions.bookAnotherDoctor', 'Book Another Doctor')}
+                                      </Button>
                                     </div>
                                   </div>
-                                  <Badge variant="destructive">Rejected</Badge>
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </>
                         )}
@@ -2275,21 +4480,29 @@ const PatientPortal = () => {
                       {/* All Tab Content */}
                       <TabsContent value="all" className="space-y-4">
                         {appointmentViewMode === 'calendar' ? (
-                          renderAppointmentsCalendar('No appointments found')
+                          renderAppointmentsCalendar(t('patientPortal.empty.noAppointmentsFound', 'No appointments found'))
                         ) : (
                           <>
                             {filteredAppointmentsByStatus.length === 0 ? (
                               <div className="text-center py-12">
                                 <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                                <p className="text-muted-foreground">No appointments found</p>
+                                <p className="text-muted-foreground">{t('patientPortal.empty.noAppointmentsFound', 'No appointments found')}</p>
                               </div>
                             ) : (
-                              filteredAppointmentsByStatus.map((apt) => (
-                                <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border">
+                              filteredAppointmentsByStatus.map((apt) => {
+                                const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+                                const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                return (
+                                <div
+                                  key={apt.id}
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border ${
+                                    pendingReschedule ? 'border-blue-300/40 bg-blue-50/30' : ''
+                                  }`}
+                                >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{apt.time}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(apt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -2304,17 +4517,32 @@ const PatientPortal = () => {
                                     </Avatar>
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
-                                      <p className="text-sm text-muted-foreground">Appointment</p>
+                                      <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
                                       <Badge className="mt-1" variant={
-                                        apt.status === 'pending' ? 'default' :
+                                        apt.status === 'pending_payment' ? 'default' :
+                                        apt.status === 'pending_approval' ? 'default' :
                                         apt.status === 'confirmed' ? 'outline' :
+                                        apt.status === 'in_progress' ? 'secondary' :
                                         apt.status === 'completed' ? 'secondary' : 'destructive'
                                       }>
-                                        {apt.status}
+                                        {formatAppointmentStatusLabel(apt.status)}
                                       </Badge>
+                                      <div className="mt-1">
+                                        {getRescheduleRequestBadge(apt as {
+                                          reschedule_request_status?: string | null;
+                                          reschedule_requested_by?: string | null;
+                                        })}
+                                      </div>
+                                      {pendingReschedule && (
+                                        <p className="text-xs text-blue-700 mt-1">
+                                          Proposed: {new Date(
+                                            String((apt as { reschedule_proposed_date?: string | null }).reschedule_proposed_date || apt.date)
+                                          ).toLocaleDateString()} at {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
-                                  {apt.status === 'confirmed' && (
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                     <JoinConsultationButton
                                       appointmentId={apt.id}
                                       participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
@@ -2322,6 +4550,12 @@ const PatientPortal = () => {
                                       variant="default"
                                       size="sm"
                                     />
+                                  )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'completed') && (
+                                    <Button size="sm" variant="outline" onClick={() => openMessagesForAppointment(apt)}>
+                                      <MessageSquare className="w-4 h-4 mr-2" />
+                                      {t('patientPortal.actions.message', 'Message')}
+                                    </Button>
                                   )}
                                   {apt.status === 'completed' && !(apt as any).rating && (
                                     <Button
@@ -2331,21 +4565,65 @@ const PatientPortal = () => {
                                         setReviewModalOpen(true);
                                       }}
                                     >
-                                      Leave Review
+                                      {t('patientPortal.actions.leaveReview', 'Leave Review')}
                                     </Button>
                                   )}
-                                  {apt.status === 'pending' && (
+                                  {apt.status === 'pending_payment' && (
                                     <div className="flex gap-2">
-                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
-                                        Reschedule
+                                      <Button size="sm" onClick={() => handlePayNow(apt)}>
+                                        Pay Now
                                       </Button>
                                       <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
                                         Cancel
                                       </Button>
                                     </div>
                                   )}
+                                  {!pendingReschedule && apt.status === 'pending_approval' && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                        {t('patientPortal.actions.reschedule', 'Reschedule')}
+                                      </Button>
+                                      <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                        {t('patientPortal.actions.cancel', 'Cancel')}
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {!pendingReschedule && apt.status === 'confirmed' && (
+                                    <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                      Reschedule
+                                    </Button>
+                                  )}
+                                  {!pendingReschedule && apt.status === 'no_show' && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
+                                        Reschedule
+                                      </Button>
+                                      <Button size="sm" variant="outline" onClick={openBooking}>
+                                        Book Another Doctor
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && doctorRequested && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking}>
+                                        Accept New Slot
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-destructive border-destructive/30"
+                                        onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                        disabled={isBooking}
+                                      >
+                                        Decline
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {pendingReschedule && !doctorRequested && (
+                                    <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                  )}
                                 </div>
-                              ))
+                              )})
                             )}
                           </>
                         )}
@@ -2358,19 +4636,19 @@ const PatientPortal = () => {
               <TabsContent value="prescriptions" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>My Prescriptions</CardTitle>
-                    <CardDescription>Active and past prescriptions from your consultations</CardDescription>
+                    <CardTitle>{t('patientPortal.headers.myPrescriptions', 'My Prescriptions')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.prescriptionsDescription', 'Active and past prescriptions from your consultations')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {prescriptionsLoading ? (
                       <div className="text-center py-8">
-                        <p className="text-muted-foreground">Loading prescriptions...</p>
+                        <p className="text-muted-foreground">{t('patientPortal.loading.prescriptions', 'Loading prescriptions...')}</p>
                       </div>
                     ) : fetchedPrescriptions.length === 0 ? (
                       <div className="text-center py-12">
                         <Pill className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground">No prescriptions yet</p>
-                        <p className="text-sm text-muted-foreground mt-2">Prescriptions from your doctor consultations will appear here</p>
+                        <p className="text-muted-foreground">{t('patientPortal.empty.noPrescriptionsYet', 'No prescriptions yet')}</p>
+                        <p className="text-sm text-muted-foreground mt-2">{t('patientPortal.empty.prescriptionsWillAppear', 'Prescriptions from your doctor consultations will appear here')}</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
@@ -2383,10 +4661,13 @@ const PatientPortal = () => {
                                 </div>
                                 <div>
                                   <p className="font-semibold">
-                                    {prescription.items.length} prescription item{prescription.items.length > 1 ? 's' : ''}
+                                    {prescription.items.length}{' '}
+                                    {prescription.items.length > 1
+                                      ? t('patientPortal.labels.prescriptionItems', 'prescription items')
+                                      : t('patientPortal.labels.prescriptionItem', 'prescription item')}
                                   </p>
                                   <p className="text-xs text-muted-foreground mt-1">
-                                    Prescribed by {prescription.doctor} • {new Date(prescription.date).toLocaleDateString()}
+                                    {t('patientPortal.labels.prescribedBy', 'Prescribed by')} {prescription.doctor} • {formatDate(prescription.date)}
                                   </p>
                                   <div className="mt-2 space-y-1">
                                     {prescription.items.map((item, index) => (
@@ -2402,22 +4683,24 @@ const PatientPortal = () => {
                                 {prescription.status === 'active' && (
                                   <p className="text-xs text-muted-foreground mt-2">
                                     {prescription.refillsRemaining}{' '}
-                                    {prescription.refillsRemaining === 1 ? 'refill' : 'refills'} remaining
+                                    {prescription.refillsRemaining === 1
+                                      ? t('patientPortal.labels.refillRemaining', 'refill remaining')
+                                      : t('patientPortal.labels.refillsRemaining', 'refills remaining')}
                                   </p>
                                 )}
                               </div>
                             </div>
                             <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
                               <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
-                                View Details
+                                {t('patientPortal.actions.viewDetails', 'View Details')}
                               </Button>
                               {!prescription.isDownloaded ? (
                                 <Button size="sm" variant="outline" onClick={() => handleDownloadPrescription(prescription)}>
-                                  Download
+                                  {t('common.download', 'Download')}
                                 </Button>
                               ) : (
                                 <Button size="sm" variant="outline" disabled>
-                                  Downloaded
+                                  {t('patientPortal.actions.downloaded', 'Downloaded')}
                                 </Button>
                               )}
                               {prescription.status === 'active' && (
@@ -2426,7 +4709,9 @@ const PatientPortal = () => {
                                   onClick={() => handleRequestPrescriptionRefill(prescription)}
                                   disabled={isRequestingRefillId === prescription.id}
                                 >
-                                  {isRequestingRefillId === prescription.id ? 'Sending...' : 'Request Refill'}
+                                  {isRequestingRefillId === prescription.id
+                                    ? t('patientPortal.actions.sending', 'Sending...')
+                                    : t('patientPortal.actions.requestRefill', 'Request Refill')}
                                 </Button>
                               )}
                             </div>
@@ -2440,26 +4725,71 @@ const PatientPortal = () => {
 
               {/* Messages Tab */}
               <TabsContent value="messages" className="space-y-6">
-                <MessagesTab focusSessionId={messagesFocusSessionId} />
+                <MessagesTab
+                  focusSessionId={messagesFocusSessionId}
+                  jumpToUnreadSignal={messagesJumpToUnreadSignal}
+                />
               </TabsContent>
 
               {/* Records Tab */}
               <TabsContent value="records" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Health Records</CardTitle>
-                    <CardDescription>Upload and manage your medical documents</CardDescription>
+                    <CardTitle>{t('patientPortal.recordsTab', 'Investigations')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.healthRecordsDescription', 'View required investigations and upload investigation files')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-6">
+                      {/* Required Investigations From Doctor Clerking */}
+                      <div className="rounded-lg border border-border p-4">
+                        <h4 className="text-sm font-semibold mb-2">{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</h4>
+                        {investigationRequestsLoading || investigationsLoading ? (
+                          <p className="text-sm text-muted-foreground">{t('patientPortal.loading.records', 'Loading investigations...')}</p>
+                        ) : fetchedInvestigationRequests.length > 0 ? (
+                          <div className="space-y-3">
+                            {fetchedInvestigationRequests.map((request) => (
+                              <div key={request.id} className="p-3 rounded-lg border border-border bg-muted/20">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">{request.doctor}</p>
+                                    <p className="text-xs text-muted-foreground">{formatDateTime(request.date)}</p>
+                                    <p className="text-sm whitespace-pre-wrap mt-2">{request.details}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleViewInvestigationDetails(request)}
+                                    >
+                                      {t('patientPortal.actions.viewDetails', 'View Details')}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleDownloadInvestigationRequest(request)}
+                                    >
+                                      {t('common.download', 'Download')}
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : requiredInvestigations ? (
+                          <p className="text-sm whitespace-pre-wrap">{requiredInvestigations}</p>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">{t('patientPortal.empty.noRequiredInvestigations', 'No investigations requested yet.')}</p>
+                        )}
+                      </div>
+
                       {/* Upload Section */}
                       <div className="border-2 border-dashed border-border rounded-lg p-6">
                         <div className="text-center">
                           <Upload className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-sm text-muted-foreground mb-4">Upload medical records, lab results, prescriptions, etc.</p>
+                          <p className="text-sm text-muted-foreground mb-4">{t('patientPortal.records.uploadHelp', 'Upload investigation reports and related documents.')}</p>
                           <div className="space-y-3">
                             <Input
-                              placeholder="Add notes (optional)"
+                              placeholder={t('patientPortal.records.addNotesOptional', 'Add notes (optional)')}
                               value={uploadNotes}
                               onChange={(e) => setUploadNotes(e.target.value)}
                               className="max-w-md mx-auto"
@@ -2478,60 +4808,65 @@ const PatientPortal = () => {
                               onClick={() => document.getElementById('record-upload')?.click()}
                               disabled={isUploadingRecord}
                             >
-                              {isUploadingRecord ? 'Uploading...' : 'Upload Records'}
+                              {isUploadingRecord
+                                ? t('patientPortal.actions.uploading', 'Uploading...')
+                                : t('patientPortal.actions.uploadRecords', 'Upload Investigations')}
                             </Button>
                           </div>
                         </div>
                       </div>
 
-                      {/* Records List */}
+                      {/* Uploaded Investigations */}
+                      <div>
+                        <h4 className="text-sm font-semibold mb-3">{t('patientPortal.records.uploadedInvestigations', 'Uploaded Investigations')}</h4>
                       {recordsLoading ? (
-                        <div className="text-center py-8">
-                          <p className="text-muted-foreground">Loading records...</p>
-                        </div>
-                      ) : healthRecords.length === 0 ? (
-                        <div className="text-center py-8">
-                          <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-muted-foreground">No records uploaded yet</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {healthRecords.map((record) => (
-                            <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <FileText className="w-8 h-8 text-primary flex-shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-medium truncate">{record.file_name}</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {new Date(record.uploaded_at).toLocaleDateString()}
-                                    {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
-                                  </p>
-                                  {record.notes && (
-                                    <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
-                                  )}
+                          <div className="text-center py-8">
+                            <p className="text-muted-foreground">{t('patientPortal.loading.records', 'Loading investigations...')}</p>
+                          </div>
+                        ) : healthRecords.length === 0 ? (
+                          <div className="text-center py-8">
+                            <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                            <p className="text-muted-foreground">{t('patientPortal.empty.noRecordsUploadedYet', 'No investigations uploaded yet')}</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {healthRecords.map((record) => (
+                              <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <FileText className="w-8 h-8 text-primary flex-shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium truncate">{record.file_name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDate(record.uploaded_at)}
+                                      {record.file_size && ` • ${(record.file_size / 1024).toFixed(1)} KB`}
+                                    </p>
+                                    {record.notes && (
+                                      <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => window.open(record.file_url, '_blank')}
+                                  >
+                                    <Download className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-destructive hover:text-destructive"
+                                    onClick={() => handleDeleteRecord(record.id)}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => window.open(record.file_url, '_blank')}
-                                >
-                                  <Download className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="text-destructive hover:text-destructive"
-                                  onClick={() => handleDeleteRecord(record.id)}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
+                        )}
                         </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2551,8 +4886,8 @@ const PatientPortal = () => {
               <TabsContent value="settings" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Profile Settings</CardTitle>
-                    <CardDescription>Manage your account settings</CardDescription>
+                    <CardTitle>{t('common.profileSettings', 'Profile Settings')}</CardTitle>
+                    <CardDescription>{t('patientPortal.headers.manageAccountSettings', 'Manage your account settings')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-6">
@@ -2581,7 +4916,9 @@ const PatientPortal = () => {
                               disabled={isUploadingPhoto}
                               onClick={() => document.getElementById('photo-upload')?.click()}
                             >
-                              {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                              {isUploadingPhoto
+                                ? t('patientPortal.actions.uploading', 'Uploading...')
+                                : t('patientPortal.actions.changePhoto', 'Change Photo')}
                             </Button>
                           </div>
                         </div>
@@ -2589,7 +4926,7 @@ const PatientPortal = () => {
 
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
-                          <label className="text-sm font-medium">Full Name</label>
+                          <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                           <Input 
                             value={profileFormData.fullName || patientRegistration?.full_name || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
@@ -2597,7 +4934,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Email</label>
+                          <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                           <Input 
                             value={profileFormData.email || patientRegistration?.email || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
@@ -2605,7 +4942,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Phone</label>
+                          <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                           <Input 
                             value={profileFormData.phone || patientRegistration?.phone_number || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
@@ -2613,7 +4950,7 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Age</label>
+                          <label className="text-sm font-medium">{t('common.age', 'Age')}</label>
                           <Input 
                             type="number"
                             value={profileFormData.age || patientRegistration?.age?.toString() || ''}
@@ -2622,18 +4959,40 @@ const PatientPortal = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium">Blood Type</label>
+                          <label className="text-sm font-medium">{t('common.bloodType', 'Blood Type')}</label>
                           <Input 
                             value={profileFormData.bloodType || patientRegistration?.blood_type || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, bloodType: e.target.value})}
-                            placeholder="e.g., A+, O-, B+"
+                            placeholder={t('common.bloodTypeExample', 'e.g., A+, O-, B+')}
                             className="mt-1" 
                           />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">{t('common.language', 'Language')}</label>
+                          <select
+                            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={profileFormData.preferredLanguage || language}
+                            onChange={(e) => setProfileFormData({
+                              ...profileFormData,
+                              preferredLanguage: (e.target.value as AppLanguage),
+                            })}
+                          >
+                            {SUPPORTED_LANGUAGES.map((languageCode) => (
+                              <option key={languageCode} value={languageCode}>
+                                {t(APP_LANGUAGE_OPTION_MAP[languageCode].key, APP_LANGUAGE_OPTION_MAP[languageCode].fallback)}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t('patientPortal.settings.preferredLanguageHint', 'This will be your default app language until you change it again.')}
+                          </p>
                         </div>
                       </div>
 
                       <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
-                        {isSavingProfile ? 'Saving...' : 'Save Changes'}
+                        {isSavingProfile
+                          ? t('patientPortal.actions.saving', 'Saving...')
+                          : t('patientPortal.actions.saveChanges', 'Save Changes')}
                       </Button>
                     </div>
                   </CardContent>
@@ -2641,33 +5000,35 @@ const PatientPortal = () => {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Change Password</CardTitle>
-                    <CardDescription>Update your account password</CardDescription>
+                    <CardTitle>{t('common.changePassword', 'Change Password')}</CardTitle>
+                    <CardDescription>{t('common.updateAccountPassword', 'Update your account password')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4 max-w-md">
                       <div>
-                        <label className="text-sm font-medium">New Password</label>
+                        <label className="text-sm font-medium">{t('common.newPassword', 'New Password')}</label>
                         <Input
                           type="password"
                           value={passwordFormData.newPassword}
                           onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
                           className="mt-1"
-                          placeholder="At least 8 characters"
+                          placeholder={t('common.passwordMinHint', 'At least 8 characters')}
                         />
                       </div>
                       <div>
-                        <label className="text-sm font-medium">Confirm New Password</label>
+                        <label className="text-sm font-medium">{t('common.confirmNewPassword', 'Confirm New Password')}</label>
                         <Input
                           type="password"
                           value={passwordFormData.confirmPassword}
                           onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
                           className="mt-1"
-                          placeholder="Re-enter new password"
+                          placeholder={t('common.passwordReenterHint', 'Re-enter new password')}
                         />
                       </div>
                       <Button onClick={handleChangePassword} disabled={isChangingPassword}>
-                        {isChangingPassword ? 'Updating...' : 'Update Password'}
+                        {isChangingPassword
+                          ? t('patientPortal.actions.updating', 'Updating...')
+                          : t('patientPortal.actions.updatePassword', 'Update Password')}
                       </Button>
                     </div>
                   </CardContent>
@@ -2703,7 +5064,7 @@ const PatientPortal = () => {
                     <span className="font-medium">Doctor:</span> {selectedPrescription.doctor}
                   </div>
                   <div>
-                    <span className="font-medium">Date:</span> {new Date(selectedPrescription.date).toLocaleDateString()}
+                    <span className="font-medium">Date:</span> {formatDate(selectedPrescription.date)}
                   </div>
                   <div>
                     <span className="font-medium">Status:</span> {selectedPrescription.status}
@@ -2747,17 +5108,68 @@ const PatientPortal = () => {
                   disabled={selectedPrescription.isDownloaded}
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  {selectedPrescription.isDownloaded ? 'Downloaded' : 'Download'}
+                  {selectedPrescription.isDownloaded
+                    ? t('patientPortal.actions.downloaded', 'Downloaded')
+                    : t('common.download', 'Download')}
                 </Button>
                 <Button
                   onClick={() => handleRequestPrescriptionRefill(selectedPrescription)}
                   disabled={isRequestingRefillId === selectedPrescription.id}
                 >
-                  {isRequestingRefillId === selectedPrescription.id ? 'Sending...' : 'Request Refill'}
+                  {isRequestingRefillId === selectedPrescription.id
+                    ? t('patientPortal.actions.sending', 'Sending...')
+                    : t('patientPortal.actions.requestRefill', 'Request Refill')}
                 </Button>
               </>
             )}
             <Button variant="ghost" onClick={() => setPrescriptionDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Investigation Details Dialog */}
+      <Dialog open={investigationDetailsOpen} onOpenChange={setInvestigationDetailsOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</DialogTitle>
+            <DialogDescription>
+              {t('patientPortal.actions.viewDetails', 'View Details')}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedInvestigationRequest && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted/40 border border-border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="font-medium">Doctor:</span> {selectedInvestigationRequest.doctor}
+                  </div>
+                  <div>
+                    <span className="font-medium">Date:</span> {formatDate(selectedInvestigationRequest.date)}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</label>
+                <div className="mt-2 p-3 rounded-lg bg-muted/30 min-h-[96px]">
+                  <p className="text-sm whitespace-pre-wrap">{selectedInvestigationRequest.details}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {selectedInvestigationRequest && (
+              <Button
+                variant="outline"
+                onClick={() => handleDownloadInvestigationRequest(selectedInvestigationRequest)}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                {t('common.download', 'Download')}
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => setInvestigationDetailsOpen(false)}>
               Close
             </Button>
           </DialogFooter>
@@ -2784,10 +5196,10 @@ const PatientPortal = () => {
                     <span className="font-medium">Specialty:</span> {formatSpecialtyLabel(selectedConsultation.specialty)}
                   </div>
                   <div>
-                    <span className="font-medium">Date:</span> {new Date(selectedConsultation.date).toLocaleDateString()}
+                    <span className="font-medium">Date:</span> {formatDate(selectedConsultation.date)}
                   </div>
                   <div>
-                    <span className="font-medium">Status:</span> Completed
+                    <span className="font-medium">{t('common.status', 'Status')}:</span> {t('appointmentStatus.completed', 'Completed')}
                   </div>
                 </div>
               </div>
