@@ -15,8 +15,13 @@ import { generateTimeSlots, generateDatesForDayOfWeek } from '@/hooks/useAvailab
 import type { AvailableSlot } from '@/hooks/useAvailableSlots';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
-import { isPendingPaymentAppointmentStatus, isSlotBlockingAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
+import {
+  isSlotBlockedByAppointments,
+  normalizeDurationMinutes,
+  type AppointmentIntervalRow,
+} from '@/lib/appointmentIntervals';
+import { AvailabilityService } from '@/services/AvailabilityService';
 
 interface SlotSelectionModalProps {
   open: boolean;
@@ -37,12 +42,19 @@ interface SlotSelectionModalProps {
   currentConsultationType?: 'chat' | 'voice' | 'video' | null;
   selectedConsultationType?: 'chat' | 'voice' | 'video';
   onConsultationTypeChange?: (type: 'chat' | 'voice' | 'video') => void;
+  reschedulePricingPreview?: {
+    proposedFinalPrice: number;
+    previewLoading: boolean;
+    alreadyPaidAmount: number;
+    upgradeAmount: number;
+    walletAppliedIfSelected: number;
+    paystackDueIfSelected: number;
+  } | null;
 }
 
-type BookedSlotRow = {
+type BookedSlotRow = AppointmentIntervalRow & {
   time: string | null;
-  status: string | null;
-  slot_locked_until: string | null;
+  duration_minutes: number | null;
 };
 
 const toDateKey = (date: Date) => {
@@ -50,6 +62,17 @@ const toDateKey = (date: Date) => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const calendarClassNames = {
+  cell:
+    "h-9 w-9 text-center text-sm p-0 relative first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20 [&:has([aria-selected].day-outside)]:bg-primary/10 [&:has([aria-selected])]:bg-primary/15",
+  day_today: "border border-primary/40 text-primary font-semibold",
+  day_selected:
+    "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+  day_outside:
+    "day-outside text-muted-foreground opacity-50 aria-selected:bg-primary/10 aria-selected:text-muted-foreground aria-selected:opacity-40",
+  day_range_middle: "aria-selected:bg-primary/15 aria-selected:text-foreground",
 };
 
 /**
@@ -70,35 +93,36 @@ export function SlotSelectionModal({
   currentConsultationType = null,
   selectedConsultationType,
   onConsultationTypeChange,
+  reschedulePricingPreview = null,
 }: SlotSelectionModalProps) {
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const { formatDate, formatClockTime, formatCurrency } = useLocaleFormatter();
 
-  // Fetch booked appointments for selected doctor and date
-  const { data: bookedSlots = [] } = useQuery({
-    queryKey: ['booked-slots', selectedDoctor, selectedDate],
+  const { data: allowedDurations = [] } = useQuery({
+    queryKey: ['allowed-durations-slot-selection-modal'],
+    queryFn: () => AvailabilityService.getAllowedDurations(),
+  });
+
+  const hasConfiguredDurations = allowedDurations.length > 0;
+
+  // Fetch blocking appointments for selected doctor and date
+  const { data: bookedAppointments = [] } = useQuery({
+    queryKey: ['booked-appointments', selectedDoctor, selectedDate],
     queryFn: async () => {
       if (!selectedDoctor || !selectedDate) return [];
       
       const { data, error } = await supabase
         .from('appointments')
-        .select('time,status,slot_locked_until')
+        .select('time,duration_minutes,status,slot_locked_until')
         .eq('doctor_id', selectedDoctor)
         .eq('date', selectedDate);
       
       if (error) throw error;
-      const nowMs = Date.now();
+
       return (data || [])
-        .filter((apt) => {
-          const typedApt = apt as BookedSlotRow;
-          if (!isSlotBlockingAppointmentStatus(typedApt.status)) return false;
-          if (!isPendingPaymentAppointmentStatus(typedApt.status)) return true;
-          if (!typedApt.slot_locked_until) return false;
-          return new Date(typedApt.slot_locked_until).getTime() > nowMs;
-        })
-        .map((apt) => String((apt as BookedSlotRow).time || '').slice(0, 5));
+        .map((apt) => apt as BookedSlotRow);
     },
     enabled: !!selectedDoctor && !!selectedDate,
   });
@@ -154,12 +178,28 @@ export function SlotSelectionModal({
 
   const durationOptions = useMemo(() => {
     if (mode !== 'reschedule') return [];
-    const options = [15, 30, 45, 60, 90];
+    if (!hasConfiguredDurations) return [];
+
+    const options = allowedDurations;
     const floor = typeof currentDurationMinutes === 'number' && Number.isFinite(currentDurationMinutes)
       ? currentDurationMinutes
       : 30;
-    return options.filter((value) => value >= floor);
-  }, [mode, currentDurationMinutes]);
+    const upgraded = options.filter((value) => value >= floor);
+
+    return upgraded;
+  }, [mode, currentDurationMinutes, allowedDurations, hasConfiguredDurations]);
+
+  useEffect(() => {
+    if (mode !== 'reschedule' || !onDurationChange || durationOptions.length === 0) return;
+    if (
+      typeof effectiveDurationMinutes === 'number'
+      && durationOptions.includes(effectiveDurationMinutes)
+    ) {
+      return;
+    }
+
+    onDurationChange(durationOptions[0]);
+  }, [mode, onDurationChange, durationOptions, effectiveDurationMinutes]);
 
   // Get available dates for selected doctor
   // Only show dates where the doctor has schedules that are marked as available
@@ -179,9 +219,8 @@ export function SlotSelectionModal({
     return Array.from(dates).sort();
   }, [selectedDoctor, doctorSchedules]);
 
-  // Get time slots for selected date, excluding booked slots
-  const timeSlots = useMemo(() => {
-    if (!selectedDate || !selectedDoctor) return [];
+  const timeSlotDurations = useMemo(() => {
+    if (!selectedDate || !selectedDoctor) return new Map<string, number>();
 
     const date = new Date(`${selectedDate}T00:00:00`);
     const dayOfWeek = date.getDay();
@@ -191,22 +230,37 @@ export function SlotSelectionModal({
     );
 
     if (schedules.length === 0) {
-      return [];
+      return new Map<string, number>();
     }
 
-    const times = new Set<string>();
+    const durationsByTime = new Map<string, number>();
     schedules.forEach((schedule) => {
       const slotDuration = mode === 'reschedule'
         ? (effectiveDurationMinutes || schedule.slot_duration_minutes)
         : schedule.slot_duration_minutes;
+      const normalizedDuration = normalizeDurationMinutes(slotDuration, 30);
 
       const slots = generateTimeSlots(
         schedule.start_time,
         schedule.end_time,
         slotDuration
       );
-      slots.forEach((time) => times.add(time));
+      slots.forEach((time) => {
+        const existingDuration = durationsByTime.get(time);
+        if (typeof existingDuration === 'number') {
+          durationsByTime.set(time, Math.min(existingDuration, normalizedDuration));
+        } else {
+          durationsByTime.set(time, normalizedDuration);
+        }
+      });
     });
+
+    return durationsByTime;
+  }, [selectedDate, selectedDoctor, doctorSchedules, mode, effectiveDurationMinutes]);
+
+  // Get time slots for selected date, excluding past times
+  const timeSlots = useMemo(() => {
+    let sorted = Array.from(timeSlotDurations.keys()).sort();
 
     // Filter out past times if selected date is today
     const now = new Date();
@@ -214,14 +268,33 @@ export function SlotSelectionModal({
     
     if (isToday) {
       const currentTime = now.toTimeString().slice(0, 5);
-      return Array.from(times).filter(time => time > currentTime).sort();
+      sorted = sorted.filter((time) => time > currentTime);
     }
 
-    return Array.from(times).sort();
-  }, [selectedDate, selectedDoctor, doctorSchedules, mode, effectiveDurationMinutes]);
+    return sorted;
+  }, [selectedDate, timeSlotDurations]);
+
+  const blockedStartTimes = useMemo(() => {
+    if (!timeSlots.length) return new Set<string>();
+
+    const fallbackDuration = normalizeDurationMinutes(effectiveDurationMinutes || 30, 30);
+    const blocked = new Set<string>();
+
+    timeSlots.forEach((time) => {
+      const duration = timeSlotDurations.get(time) || fallbackDuration;
+      if (isSlotBlockedByAppointments(time, duration, bookedAppointments)) {
+        blocked.add(time);
+      }
+    });
+
+    return blocked;
+  }, [timeSlots, timeSlotDurations, bookedAppointments, effectiveDurationMinutes]);
 
   const handleConfirm = () => {
     if (!selectedDoctor || !selectedDate || !selectedTime) {
+      return;
+    }
+    if (mode === 'reschedule' && !durationSelectionValid) {
       return;
     }
 
@@ -239,7 +312,9 @@ export function SlotSelectionModal({
     }
   };
 
-  const canConfirm = selectedDoctor && selectedDate && selectedTime;
+  const durationSelectionValid = mode !== 'reschedule'
+    || (typeof effectiveDurationMinutes === 'number' && allowedDurations.includes(effectiveDurationMinutes));
+  const canConfirm = selectedDoctor && selectedDate && selectedTime && durationSelectionValid;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
   const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
   const minCalendarDate = useMemo(() => {
@@ -329,6 +404,12 @@ export function SlotSelectionModal({
             </div>
           )}
 
+          {mode === 'reschedule' && !hasConfiguredDurations && (
+            <div className="rounded border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              No allowed durations are configured.
+            </div>
+          )}
+
           {mode === 'reschedule' && currentConsultationType && (
             <div>
               <Label className="text-sm font-medium mb-2 block">Consultation Mode (Upgrade Only)</Label>
@@ -382,6 +463,7 @@ export function SlotSelectionModal({
                   <DateCalendar
                     mode="single"
                     selected={selectedCalendarDate}
+                    classNames={calendarClassNames}
                     onSelect={(date) => {
                       if (!date) return;
                       const dateKey = toDateKey(date);
@@ -412,7 +494,7 @@ export function SlotSelectionModal({
               ) : (
                 <div className="grid grid-cols-4 gap-2">
                   {timeSlots.map((time) => {
-                    const isBooked = bookedSlots.includes(time);
+                    const isBooked = blockedStartTimes.has(time);
                     const isPast = (() => {
                       const now = new Date();
                       const slotDateTime = new Date(`${selectedDate}T${time}`);
@@ -481,6 +563,31 @@ export function SlotSelectionModal({
                         <span className="font-medium">Mode:</span>
                         {selectedConsultationType.charAt(0).toUpperCase() + selectedConsultationType.slice(1)}
                       </div>
+                    )}
+                    {reschedulePricingPreview && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">New Price:</span>
+                          {reschedulePricingPreview.previewLoading
+                            ? 'Calculating...'
+                            : formatCurrency(reschedulePricingPreview.proposedFinalPrice)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Already Paid:</span>
+                          {formatCurrency(reschedulePricingPreview.alreadyPaidAmount)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Balance to Pay:</span>
+                          {formatCurrency(reschedulePricingPreview.upgradeAmount)}
+                        </div>
+                        {reschedulePricingPreview.upgradeAmount > 0 && (
+                          <div className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-[11px] text-primary">
+                            {reschedulePricingPreview.paystackDueIfSelected > 0
+                              ? `Wallet can apply ${formatCurrency(reschedulePricingPreview.walletAppliedIfSelected)} and remaining ${formatCurrency(reschedulePricingPreview.paystackDueIfSelected)} will continue via Paystack automatically.`
+                              : `Wallet can fully cover this upgrade amount.`}
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 )}

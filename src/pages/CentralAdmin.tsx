@@ -759,10 +759,10 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
-                    { id: 'payments', label: 'Payments', icon: BadgeIcon },
                     { id: 'inbox', label: 'Inbox', icon: Mail },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
+                    { id: 'payments', label: 'Payments', icon: BadgeIcon },
                     { id: 'pricing', label: 'Pricing', icon: TrendingUp },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
@@ -834,50 +834,54 @@ const CentralAdmin = () => {
               </div>
             </motion.div>
 
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <p className="text-sm">
-                  Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
-                </p>
-                <Link to="/install">
-                  <Button size="sm" className="gap-2">
-                    <Download className="w-4 h-4" />
-                    Open Install Page
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
+            {activeTab === 'overview' && (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-sm">
+                    Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                  </p>
+                  <Link to="/install">
+                    <Button size="sm" className="gap-2">
+                      <Download className="w-4 h-4" />
+                      Open Install Page
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Quick Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
-              {[
-                { label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
-                { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
-                { label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
-                { label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
-              ].map((stat, index) => (
-                <motion.div
-                  key={stat.label}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                >
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">{stat.label}</p>
-                          <p className="text-2xl font-bold mt-1">{stat.value}</p>
+            {activeTab === 'overview' && (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+                {[
+                  { label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
+                  { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
+                  { label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
+                  { label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
+                ].map((stat, index) => (
+                  <motion.div
+                    key={stat.label}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                  >
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">{stat.label}</p>
+                            <p className="text-2xl font-bold mt-1">{stat.value}</p>
+                          </div>
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
+                            <stat.icon className="w-6 h-6" />
+                          </div>
                         </div>
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.color}`}>
-                          <stat.icon className="w-6 h-6" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))}
-            </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ))}
+              </div>
+            )}
 
             {/* Tabs Content */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -1423,14 +1427,14 @@ const CentralAdmin = () => {
                 </Card>
               </TabsContent>
 
-              {/* Pricing Tab */}
-              <TabsContent value="pricing" className="space-y-6">
-                <PricingManagementPanel />
-              </TabsContent>
-
               {/* Payments Tab */}
               <TabsContent value="payments" className="space-y-6">
                 <PaymentsManagementPanel />
+              </TabsContent>
+
+              {/* Pricing Tab */}
+              <TabsContent value="pricing" className="space-y-6">
+                <PricingManagementPanel />
               </TabsContent>
 
               {/* Quality Assurance Tab */}

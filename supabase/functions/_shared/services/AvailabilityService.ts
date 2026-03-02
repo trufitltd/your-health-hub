@@ -163,6 +163,34 @@ export class AvailabilityService {
     return data?.enabled ?? true;
   }
 
+  async getAllowedDurations() {
+    const { data: durationOptions, error } = await this.supabase
+      .from('appointment_duration_options')
+      .select('value_minutes')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .order('value_minutes', { ascending: true });
+
+    if (error) {
+      throw new Error(`Failed to load duration options: ${error.message}`);
+    }
+
+    const durations = Array.from(
+      new Set(
+        (durationOptions || [])
+          .map((option: any) => Number(option?.value_minutes || 0))
+          .filter((value: number) => Number.isFinite(value) && value > 0 && value <= 24 * 60)
+          .map((value: number) => Math.round(value)),
+      ),
+    ).sort((a, b) => a - b);
+
+    if (durations.length === 0) {
+      throw new Error('No active appointment duration options configured');
+    }
+
+    return durations;
+  }
+
   async cleanupExpiredPendingLocks(doctorId?: string) {
     let query = this.supabase
       .from('appointments')
