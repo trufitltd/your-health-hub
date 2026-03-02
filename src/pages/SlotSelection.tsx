@@ -96,6 +96,14 @@ export default function SlotSelection() {
 
   const durationPricingEnabled = featureFlags.duration_pricing;
 
+  const { data: allowedDurations = [] } = useQuery({
+    queryKey: ['allowed-durations-slot-selection'],
+    queryFn: () => AvailabilityService.getAllowedDurations(),
+  });
+
+  const hasConfiguredDurations = allowedDurations.length > 0;
+  const selectedDurationIsAllowed = allowedDurations.includes(selectedDuration);
+
   const { data: consultationTypes = [] } = useQuery({
     queryKey: ['active-consultation-types-slot-selection'],
     queryFn: () => AvailabilityService.getActiveConsultationTypes(),
@@ -113,6 +121,19 @@ export default function SlotSelection() {
       setFinalPrice(null);
     }
   }, [durationPricingEnabled]);
+
+  useEffect(() => {
+    if (!hasConfiguredDurations) {
+      setSelectedTime(null);
+      setFinalPrice(null);
+      return;
+    }
+    if (allowedDurations.includes(selectedDuration)) return;
+
+    setSelectedDuration(allowedDurations[0]);
+    setSelectedTime(null);
+    setFinalPrice(null);
+  }, [allowedDurations, hasConfiguredDurations, selectedDuration]);
 
   useEffect(() => {
     if (!consultationTypes.length) return;
@@ -216,6 +237,7 @@ export default function SlotSelection() {
   // Get available times for selected date, excluding booked slots
   const availableTimes = useMemo(() => {
     if (!selectedDate || !schedules.length) return [];
+    if (durationPricingEnabled && !hasConfiguredDurations) return [];
 
     const date = new Date(`${selectedDate}T00:00:00`);
     const dayIndex = date.getDay();
@@ -251,7 +273,7 @@ export default function SlotSelection() {
     }
 
     return sorted;
-  }, [selectedDate, schedules, selectedDuration, durationPricingEnabled]);
+  }, [selectedDate, schedules, selectedDuration, durationPricingEnabled, hasConfiguredDurations]);
 
   const blockedStartTimes = useMemo(() => {
     if (!availableTimes.length) return new Set<string>();
@@ -268,7 +290,13 @@ export default function SlotSelection() {
     return blocked;
   }, [availableTimes, bookedAppointments, selectedDuration]);
 
-  const summaryReady = !!(selectedDate && (!durationPricingEnabled || selectedTime));
+  const summaryReady = !!(
+    selectedDate &&
+    (
+      !durationPricingEnabled ||
+      (hasConfiguredDurations && selectedDurationIsAllowed && selectedTime)
+    )
+  );
 
   const {
     data: previewPrice,
@@ -324,6 +352,15 @@ export default function SlotSelection() {
       toast({
         title: t('slotSelection.toast.missingSelectionTitle', 'Missing selection'),
         description: t('slotSelection.toast.selectAppointmentDate', 'Please select an appointment date.')
+      });
+      return;
+    }
+
+    if (durationPricingEnabled && !hasConfiguredDurations) {
+      toast({
+        title: t('slotSelection.toast.configurationErrorTitle', 'Configuration Error'),
+        description: 'No allowed durations are configured. Please contact support.',
+        variant: 'destructive',
       });
       return;
     }
@@ -679,26 +716,32 @@ export default function SlotSelection() {
                     <div>
                       <label className="text-sm font-medium">{t('slotSelection.duration', 'Duration')}</label>
                       {durationPricingEnabled ? (
-                        <div className="mt-2 grid grid-cols-4 gap-2">
-                          {[15, 30, 45, 60].map((mins) => (
-                            <button
-                              key={mins}
-                              type="button"
-                              onClick={() => {
-                                setSelectedDuration(mins);
-                                setSelectedTime(null);
-                                setFinalPrice(null);
-                              }}
-                              className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
-                                selectedDuration === mins
-                                  ? 'border-primary bg-primary text-primary-foreground'
-                                  : 'border-border hover:border-primary/40'
-                              }`}
-                            >
-                              {t('slotSelection.minutesShort', '{minutes} min').replace('{minutes}', String(mins))}
-                            </button>
-                          ))}
-                        </div>
+                        hasConfiguredDurations ? (
+                          <div className="mt-2 grid grid-cols-4 gap-2">
+                            {allowedDurations.map((mins) => (
+                              <button
+                                key={mins}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDuration(mins);
+                                  setSelectedTime(null);
+                                  setFinalPrice(null);
+                                }}
+                                className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                                  selectedDuration === mins
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border hover:border-primary/40'
+                                }`}
+                              >
+                                {t('slotSelection.minutesShort', '{minutes} min').replace('{minutes}', String(mins))}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-sm text-destructive">
+                            No allowed durations are configured.
+                          </p>
+                        )
                       ) : (
                         <p className="mt-2 text-sm text-muted-foreground">
                           {t('slotSelection.autoAssignDescription', 'Time selection is disabled by current pricing configuration. The system will auto-assign the next available slot.')}
@@ -711,7 +754,7 @@ export default function SlotSelection() {
             )}
 
             {/* Time Selection */}
-            {selectedDate && durationPricingEnabled && (
+            {selectedDate && durationPricingEnabled && hasConfiguredDurations && (
               <motion.div
                 id="time-selection"
                 initial={{ opacity: 0, y: 20 }}

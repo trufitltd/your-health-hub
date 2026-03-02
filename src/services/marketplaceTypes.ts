@@ -53,6 +53,16 @@ export interface DoctorTier {
   created_at?: string;
 }
 
+export interface AppointmentDurationOption {
+  id: string;
+  name: string;
+  value_minutes: number;
+  active: boolean;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface PlatformFeeRule {
   id: string;
   doctor_type: DoctorType;
