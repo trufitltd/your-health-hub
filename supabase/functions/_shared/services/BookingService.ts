@@ -46,7 +46,7 @@ export class BookingService {
   private async getDoctorContext(doctorId: string) {
     const { data: doctorRegistration, error: regError } = await this.supabase
       .from('doctor_registrations')
-      .select('full_name, specialty, experience, doctor_tier_id, rate_per_consultation')
+      .select('full_name, specialty, experience, doctor_tier_id')
       .eq('user_id', doctorId)
       .maybeSingle();
 
@@ -92,16 +92,11 @@ export class BookingService {
       }
     }
 
-    const defaultBaseRate = Number(
-      doctorRegistration?.rate_per_consultation || (doctorType === 'GP' ? 5000 : 10000),
-    );
-
     return {
       doctorName: doctorRegistration?.full_name || 'Doctor',
       doctorType,
       tierId,
       tierName,
-      defaultBaseRate,
     };
   }
 
@@ -126,7 +121,6 @@ export class BookingService {
       doctorType: DoctorType;
       tierId: string | null;
       tierName: string | null;
-      defaultBaseRate: number;
     };
   }) {
     const doctor = input.doctorContext || await this.getDoctorContext(input.doctorId);
@@ -137,7 +131,6 @@ export class BookingService {
       consultationType,
       tierId: doctor.tierId,
       tierName: doctor.tierName,
-      baseFallback: doctor.defaultBaseRate,
     });
 
     return { doctor, consultationType, price };
@@ -147,6 +140,11 @@ export class BookingService {
     if (!input.doctorId) throw new Error('Missing doctorId');
 
     const durationMinutes = Math.max(5, Number(input.duration || 30));
+    const allowedDurations = await this.availabilityService.getAllowedDurations();
+    if (!allowedDurations.includes(durationMinutes)) {
+      throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+    }
+
     const { consultationType, price } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
       duration: durationMinutes,
@@ -215,6 +213,11 @@ export class BookingService {
     const durationPricingEnabled = await this.availabilityService.getDurationPricingEnabled();
 
     const requestedDuration = Math.max(5, Number(input.duration || 30));
+    const allowedDurations = await this.availabilityService.getAllowedDurations();
+    if (!allowedDurations.includes(requestedDuration)) {
+      throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+    }
+
     let slot;
 
     if (durationPricingEnabled) {
