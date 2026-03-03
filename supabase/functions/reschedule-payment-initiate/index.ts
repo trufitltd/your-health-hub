@@ -5,6 +5,10 @@ import { AvailabilityService } from '../_shared/services/AvailabilityService.ts'
 import { PaymentService } from '../_shared/services/PaymentService.ts';
 import { WalletService } from '../_shared/services/WalletService.ts';
 import { BookingService } from '../_shared/services/BookingService.ts';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+} from '../_shared/marketplace-types.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -222,10 +226,16 @@ serve(async (req) => {
       : (appointment.reschedule_proposed_date || null);
     const metadataProposedTime = normalizeTimeInput(proposedTime) || normalizeTimeInput(appointment.reschedule_proposed_time);
     const metadataProposedDurationRaw = Number(
-      proposedDuration ?? appointment.reschedule_proposed_duration_minutes ?? appointment.duration_minutes ?? 30,
+      proposedDuration
+      ?? appointment.reschedule_proposed_duration_minutes
+      ?? appointment.duration_minutes
+      ?? DEFAULT_BOOKING_DURATION_MINUTES,
     );
-    const metadataProposedDuration = Math.max(5, Math.round(Number.isFinite(metadataProposedDurationRaw) ? metadataProposedDurationRaw : 30));
-    const currentDuration = Math.max(5, Math.round(Number(appointment.duration_minutes || 30)));
+    const metadataProposedDuration = Math.max(
+      5,
+      Math.round(Number.isFinite(metadataProposedDurationRaw) ? metadataProposedDurationRaw : DEFAULT_BOOKING_DURATION_MINUTES),
+    );
+    const currentDuration = Math.max(5, Math.round(Number(appointment.duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES)));
 
     let metadataProposedConsultationType = asConsultationType(proposedConsultationType)
       || asConsultationType(appointment.reschedule_proposed_consultation_type)
@@ -340,7 +350,7 @@ serve(async (req) => {
     const preview = await bookingService.previewPrice({
       doctorId: appointment.doctor_id,
       duration: metadataProposedDuration,
-      consultationType: metadataProposedConsultationType || 'video',
+      consultationType: metadataProposedConsultationType || DEFAULT_CONSULTATION_TYPE,
     });
     const proposedPrice = roundMoney(Number(preview.finalPrice || 0));
 
@@ -448,7 +458,7 @@ serve(async (req) => {
           ? Math.max(5, Math.round(existingProposedDuration)) === metadataProposedDuration
           : true) &&
         (existingProposedConsultationType
-          ? existingProposedConsultationType === (metadataProposedConsultationType || 'video')
+          ? existingProposedConsultationType === (metadataProposedConsultationType || DEFAULT_CONSULTATION_TYPE)
           : true);
 
       if (!stalePendingIntent && !pendingMatchesRequested) {
@@ -504,7 +514,7 @@ serve(async (req) => {
       proposed_date: metadataProposedDate,
       proposed_time: metadataProposedTime,
       proposed_duration: metadataProposedDuration,
-      proposed_consultation_type: metadataProposedConsultationType || 'video',
+      proposed_consultation_type: metadataProposedConsultationType || DEFAULT_CONSULTATION_TYPE,
       pricing_profile_id: preview.pricingProfileId,
     };
 
