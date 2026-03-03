@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { consultationService, type ConsultationSession, type ConsultationMessage } from '@/services/consultationService';
+import { DEFAULT_CONSULTATION_TYPE } from '@/config/marketplaceDefaults';
 
 interface UseConsultationReturn {
   session: ConsultationSession | null;
@@ -28,7 +29,7 @@ export function useConsultation(appointmentId: string, patientId: string, doctor
             appointmentId,
             patientId,
             doctorId,
-            consultationType || 'video'
+            consultationType || DEFAULT_CONSULTATION_TYPE
           );
         }
 

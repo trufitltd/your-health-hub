@@ -67,6 +67,10 @@ import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab'
 import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+} from '@/config/marketplaceDefaults';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
@@ -1429,11 +1433,11 @@ const DoctorPortal = () => {
       ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
       (apt as { consultationType?: string | null }).consultationType ||
       (apt as { consultation_mode?: string | null }).consultation_mode ||
-      'video'
+      DEFAULT_CONSULTATION_TYPE
     ).toLowerCase();
     const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
       ? consultationTypeCandidate
-      : 'video';
+      : DEFAULT_CONSULTATION_TYPE;
 
     try {
       const { data: existingSession, error: existingSessionError } = await supabase
@@ -1503,7 +1507,7 @@ const DoctorPortal = () => {
         appointmentId: rescheduleAppointmentId,
         proposedDate: rescheduleDate,
         proposedTime: normalizedTime,
-        proposedDurationMinutes: Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30),
+        proposedDurationMinutes: Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES),
         proposedFinalPrice: Number((rescheduleAppointment as { final_price?: number | null }).final_price || 0),
       });
 
