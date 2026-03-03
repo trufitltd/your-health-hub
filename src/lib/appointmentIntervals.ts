@@ -2,6 +2,7 @@ import {
   isPendingPaymentAppointmentStatus,
   isSlotBlockingAppointmentStatus,
 } from '@/services/marketplaceTypes';
+import { DEFAULT_BOOKING_DURATION_MINUTES } from '@/config/marketplaceDefaults';
 
 export type AppointmentIntervalRow = {
   id?: string | null;
@@ -35,10 +36,10 @@ export const timeToMinutes = (value: string | null | undefined) => {
   return (hour * 60) + minute;
 };
 
-export const normalizeDurationMinutes = (value: unknown, fallback = 30) => {
+export const normalizeDurationMinutes = (value: unknown, fallback = DEFAULT_BOOKING_DURATION_MINUTES) => {
   const safeFallback = Number.isFinite(Number(fallback)) && Number(fallback) > 0
     ? Math.min(Math.round(Number(fallback)), 24 * 60)
-    : 30;
+    : DEFAULT_BOOKING_DURATION_MINUTES;
 
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -67,7 +68,7 @@ export const isBlockingAppointmentRow = (
 
 export const getAppointmentInterval = (
   appointment: AppointmentIntervalRow,
-  fallbackDurationMinutes = 30,
+  fallbackDurationMinutes = DEFAULT_BOOKING_DURATION_MINUTES,
 ) => {
   const startMinutes = timeToMinutes(appointment.time || null);
   if (startMinutes === null) return null;
@@ -91,7 +92,7 @@ export const doesAppointmentBlockSlot = (
   const slotStart = timeToMinutes(slotStartTime);
   if (slotStart === null) return false;
 
-  const slotDuration = normalizeDurationMinutes(slotDurationMinutes, 30);
+  const slotDuration = normalizeDurationMinutes(slotDurationMinutes, DEFAULT_BOOKING_DURATION_MINUTES);
   const slotEnd = slotStart + slotDuration;
   const appointmentInterval = getAppointmentInterval(appointment);
   if (!appointmentInterval) return false;

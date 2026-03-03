@@ -1,5 +1,9 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { isPendingPaymentAppointmentStatus, normalizeAppointmentStatusRaw } from '../marketplace-types.ts';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  isPendingPaymentAppointmentStatus,
+  normalizeAppointmentStatusRaw,
+} from '../marketplace-types.ts';
 
 type AvailabilityCheckInput = {
   doctorId: string;
@@ -288,7 +292,7 @@ export class AvailabilityService {
 
     return appointments.some((apt) => {
       const existingStart = timeToMinutes(apt.time);
-      const existingDuration = Number(apt.duration_minutes || 30);
+      const existingDuration = Number(apt.duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES);
       const existingEnd = existingStart + existingDuration;
       return overlap(targetStart, targetEnd, existingStart, existingEnd);
     });
@@ -358,7 +362,9 @@ export class AvailabilityService {
       if (schedules.length === 0) continue;
 
       for (const schedule of schedules) {
-        const stepDuration = Math.max(5, Number(params.durationMinutes || schedule.slot_duration_minutes || 30));
+        const stepDuration = Math.max(5, Number(
+          params.durationMinutes || schedule.slot_duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES,
+        ));
         const slots = this.generateTimeSlots(schedule.start_time, schedule.end_time, stepDuration);
 
         for (const time of slots) {
