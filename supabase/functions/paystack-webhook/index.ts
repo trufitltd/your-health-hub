@@ -5,6 +5,7 @@ import { AvailabilityService } from '../_shared/services/AvailabilityService.ts'
 import { PaymentService } from '../_shared/services/PaymentService.ts';
 import { WalletService } from '../_shared/services/WalletService.ts';
 import { BookingService } from '../_shared/services/BookingService.ts';
+import { DEFAULT_BOOKING_DURATION_MINUTES } from '../_shared/marketplace-types.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -221,7 +222,7 @@ async function finalizeReschedulePayment(
   const proposedDurationRaw = Number(metadata.proposed_duration);
   const proposedDuration = Number.isFinite(proposedDurationRaw) && proposedDurationRaw > 0
     ? Math.max(5, Math.round(proposedDurationRaw))
-    : (appointment.reschedule_proposed_duration_minutes || appointment.duration_minutes || 30);
+    : (appointment.reschedule_proposed_duration_minutes || appointment.duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES);
   const proposedFinalPriceRaw = Number(metadata.proposed_price);
   if (!Number.isFinite(proposedFinalPriceRaw) || proposedFinalPriceRaw <= 0) {
     throw new Error('Missing computed proposed price in payment metadata');

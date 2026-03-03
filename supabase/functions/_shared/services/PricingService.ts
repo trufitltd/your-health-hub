@@ -5,7 +5,7 @@ import type {
   PriceCalculationResult,
   PriceModifierResult,
 } from '../marketplace-types.ts';
-import { roundMoney } from '../marketplace-types.ts';
+import { DEFAULT_PRICING_FEATURE_FLAGS, roundMoney } from '../marketplace-types.ts';
 
 type PricingRuleRow = {
   id: string;
@@ -48,12 +48,6 @@ export type DiscoveryStartingPricesResult = {
   };
 };
 
-const DEFAULT_FLAGS: Record<FeatureFlagName, boolean> = {
-  duration_pricing: true,
-  tier_pricing: true,
-  consultation_type_pricing: false,
-};
-
 const normalizeValue = (value?: string | null) => (value || '').trim().toLowerCase();
 
 const applyAction = (
@@ -76,10 +70,10 @@ export class PricingService {
 
     if (error) {
       console.warn('[PricingService] Failed loading feature flags, using defaults:', error.message);
-      return { ...DEFAULT_FLAGS };
+      return { ...DEFAULT_PRICING_FEATURE_FLAGS };
     }
 
-    const result = { ...DEFAULT_FLAGS };
+    const result = { ...DEFAULT_PRICING_FEATURE_FLAGS };
     (data || []).forEach((row) => {
       const typedRow = row as FeatureFlagRow;
       const key = typedRow.feature_name;
