@@ -6,7 +6,13 @@ import type {
   PricePreviewInput,
   PricePreviewResult,
 } from '../marketplace-types.ts';
-import { normalizeAppointmentStatusRaw, normalizeDoctorType, roundMoney } from '../marketplace-types.ts';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+  normalizeAppointmentStatusRaw,
+  normalizeDoctorType,
+  roundMoney,
+} from '../marketplace-types.ts';
 import { PricingService } from './PricingService.ts';
 import { AvailabilityService } from './AvailabilityService.ts';
 import { PaymentService } from './PaymentService.ts';
@@ -124,7 +130,7 @@ export class BookingService {
     };
   }) {
     const doctor = input.doctorContext || await this.getDoctorContext(input.doctorId);
-    const consultationType = input.consultationType || 'video';
+    const consultationType = input.consultationType || DEFAULT_CONSULTATION_TYPE;
     const price = await this.pricingService.calculatePrice({
       doctorType: doctor.doctorType,
       duration: input.duration,
@@ -139,16 +145,27 @@ export class BookingService {
   async previewPrice(input: PricePreviewInput): Promise<PricePreviewResult> {
     if (!input.doctorId) throw new Error('Missing doctorId');
 
-    const durationMinutes = Math.max(5, Number(input.duration || 30));
-    const allowedDurations = await this.availabilityService.getAllowedDurations();
-    if (!allowedDurations.includes(durationMinutes)) {
-      throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+    const pricingFeatureFlags = await this.pricingService.getFeatureFlags();
+
+    const durationMinutes = pricingFeatureFlags.duration_pricing
+      ? Math.max(5, Number(input.duration || DEFAULT_BOOKING_DURATION_MINUTES))
+      : DEFAULT_BOOKING_DURATION_MINUTES;
+
+    if (pricingFeatureFlags.duration_pricing) {
+      const allowedDurations = await this.availabilityService.getAllowedDurations();
+      if (!allowedDurations.includes(durationMinutes)) {
+        throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+      }
     }
+
+    const normalizedConsultationType = pricingFeatureFlags.consultation_type_pricing
+      ? input.consultationType
+      : DEFAULT_CONSULTATION_TYPE;
 
     const { consultationType, price } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
       duration: durationMinutes,
-      consultationType: input.consultationType,
+      consultationType: normalizedConsultationType,
     });
 
     return {
@@ -210,49 +227,48 @@ export class BookingService {
 
     const doctor = await this.getDoctorContext(input.doctorId);
     const patient = await this.getPatientContext(input.patientId);
-    const durationPricingEnabled = await this.availabilityService.getDurationPricingEnabled();
+    const pricingFeatureFlags = await this.pricingService.getFeatureFlags();
 
-    const requestedDuration = Math.max(5, Number(input.duration || 30));
-    const allowedDurations = await this.availabilityService.getAllowedDurations();
-    if (!allowedDurations.includes(requestedDuration)) {
-      throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+    const requestedDuration = pricingFeatureFlags.duration_pricing
+      ? Math.max(5, Number(input.duration || DEFAULT_BOOKING_DURATION_MINUTES))
+      : DEFAULT_BOOKING_DURATION_MINUTES;
+
+    if (pricingFeatureFlags.duration_pricing) {
+      const allowedDurations = await this.availabilityService.getAllowedDurations();
+      if (!allowedDurations.includes(requestedDuration)) {
+        throw new Error(`Unsupported duration selected. Allowed durations: ${allowedDurations.join(', ')} minutes`);
+      }
     }
 
-    let slot;
-
-    if (durationPricingEnabled) {
-      if (!input.preferredDate || !input.preferredTime) {
-        throw new Error('Date and time are required when duration pricing is enabled');
-      }
-
-      const check = await this.availabilityService.validateAvailability({
-        doctorId: input.doctorId,
-        date: input.preferredDate,
-        time: input.preferredTime,
-        durationMinutes: requestedDuration,
-      });
-
-      if (!check.available) {
-        throw new Error(check.reason || 'Selected slot is unavailable');
-      }
-
-      slot = {
-        date: input.preferredDate,
-        time: input.preferredTime,
-        durationMinutes: requestedDuration,
-      };
-    } else {
-      slot = await this.availabilityService.findNextAvailableSlot({
-        doctorId: input.doctorId,
-        durationMinutes: requestedDuration,
-        preferredDate: input.preferredDate,
-      });
+    if (!input.preferredDate || !input.preferredTime) {
+      throw new Error('Date and time are required');
     }
+
+    const check = await this.availabilityService.validateAvailability({
+      doctorId: input.doctorId,
+      date: input.preferredDate,
+      time: input.preferredTime,
+      durationMinutes: requestedDuration,
+    });
+
+    if (!check.available) {
+      throw new Error(check.reason || 'Selected slot is unavailable');
+    }
+
+    const slot = {
+      date: input.preferredDate,
+      time: input.preferredTime,
+      durationMinutes: requestedDuration,
+    };
+
+    const normalizedConsultationType = pricingFeatureFlags.consultation_type_pricing
+      ? input.consultationType
+      : DEFAULT_CONSULTATION_TYPE;
 
     const { consultationType, price } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
       duration: slot.durationMinutes,
-      consultationType: input.consultationType,
+      consultationType: normalizedConsultationType,
       doctorContext: doctor,
     });
 
