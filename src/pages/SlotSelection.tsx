@@ -17,6 +17,11 @@ import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+  DEFAULT_PRICING_FEATURE_FLAGS,
+} from '@/config/marketplaceDefaults';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { BookingService } from '@/services/BookingService';
 import { PatientWalletService } from '@/services/PatientWalletService';
@@ -66,8 +71,8 @@ export default function SlotSelection() {
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [selectedDuration, setSelectedDuration] = useState<number>(30);
-  const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [selectedDuration, setSelectedDuration] = useState<number>(DEFAULT_BOOKING_DURATION_MINUTES);
+  const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>(DEFAULT_CONSULTATION_TYPE);
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
@@ -101,12 +106,13 @@ export default function SlotSelection() {
     );
   }
 
-  const { data: featureFlags = { duration_pricing: true, tier_pricing: true, consultation_type_pricing: false } } = useQuery({
+  const { data: featureFlags = DEFAULT_PRICING_FEATURE_FLAGS } = useQuery({
     queryKey: ['pricing-feature-flags-slot-selection'],
     queryFn: () => AvailabilityService.getFeatureFlags(),
   });
 
   const durationPricingEnabled = featureFlags.duration_pricing;
+  const consultationTypePricingEnabled = featureFlags.consultation_type_pricing;
 
   const { data: allowedDurations = [] } = useQuery({
     queryKey: ['allowed-durations-slot-selection'],
@@ -129,12 +135,14 @@ export default function SlotSelection() {
 
   useEffect(() => {
     if (!durationPricingEnabled) {
-      setSelectedTime(null);
-      setFinalPrice(null);
+      if (selectedDuration !== DEFAULT_BOOKING_DURATION_MINUTES) {
+        setSelectedDuration(DEFAULT_BOOKING_DURATION_MINUTES);
+        setSelectedTime(null);
+        setFinalPrice(null);
+      }
+      return;
     }
-  }, [durationPricingEnabled]);
 
-  useEffect(() => {
     if (!hasConfiguredDurations) {
       setSelectedTime(null);
       setFinalPrice(null);
@@ -145,9 +153,17 @@ export default function SlotSelection() {
     setSelectedDuration(allowedDurations[0]);
     setSelectedTime(null);
     setFinalPrice(null);
-  }, [allowedDurations, hasConfiguredDurations, selectedDuration]);
+  }, [allowedDurations, durationPricingEnabled, hasConfiguredDurations, selectedDuration]);
 
   useEffect(() => {
+    if (!consultationTypePricingEnabled) {
+      if (selectedConsultationType !== DEFAULT_CONSULTATION_TYPE) {
+        setSelectedConsultationType(DEFAULT_CONSULTATION_TYPE);
+        setFinalPrice(null);
+      }
+      return;
+    }
+
     if (!consultationTypes.length) return;
 
     const existing = consultationTypes.find((type: any) => type.name === selectedConsultationType);
@@ -158,11 +174,11 @@ export default function SlotSelection() {
         setFinalPrice(null);
       }
     }
-  }, [consultationTypes, selectedConsultationType]);
+  }, [consultationTypePricingEnabled, consultationTypes, selectedConsultationType]);
 
   // Auto-scroll to time selection when date is selected
   useEffect(() => {
-    if (selectedDate && durationPricingEnabled) {
+    if (selectedDate) {
       setTimeout(() => {
         const timeSection = document.getElementById('time-selection');
         if (timeSection) {
@@ -170,11 +186,11 @@ export default function SlotSelection() {
         }
       }, 100);
     }
-  }, [selectedDate, durationPricingEnabled]);
+  }, [selectedDate]);
 
   // Auto-scroll to summary when ready
   useEffect(() => {
-    const ready = selectedDate && (!durationPricingEnabled || selectedTime);
+    const ready = selectedDate && selectedTime;
     if (ready) {
       setTimeout(() => {
         const summarySection = document.getElementById('appointment-summary');
@@ -183,7 +199,7 @@ export default function SlotSelection() {
         }
       }, 100);
     }
-  }, [selectedDate, selectedTime, durationPricingEnabled]);
+  }, [selectedDate, selectedTime]);
 
   // Fetch doctor schedules and availability
   const { data: schedules = [], isLoading: schedulesLoading } = useQuery({
@@ -262,9 +278,7 @@ export default function SlotSelection() {
 
     const times = new Set<string>();
     daySchedules.forEach((schedule: any) => {
-      const duration = durationPricingEnabled
-        ? selectedDuration
-        : Number(schedule.slot_duration_minutes || 30);
+      const duration = normalizeDurationMinutes(selectedDuration, DEFAULT_BOOKING_DURATION_MINUTES);
 
       const slots = generateTimeSlots(
         String(schedule.start_time).slice(0, 5),
@@ -290,7 +304,7 @@ export default function SlotSelection() {
   const blockedStartTimes = useMemo(() => {
     if (!availableTimes.length) return new Set<string>();
 
-    const requestedDuration = normalizeDurationMinutes(selectedDuration, 30);
+    const requestedDuration = normalizeDurationMinutes(selectedDuration, DEFAULT_BOOKING_DURATION_MINUTES);
     const blocked = new Set<string>();
 
     availableTimes.forEach((time) => {
@@ -304,9 +318,10 @@ export default function SlotSelection() {
 
   const summaryReady = !!(
     selectedDate &&
+    selectedTime &&
     (
       !durationPricingEnabled ||
-      (hasConfiguredDurations && selectedDurationIsAllowed && selectedTime)
+      (hasConfiguredDurations && selectedDurationIsAllowed)
     )
   );
 
@@ -381,7 +396,7 @@ export default function SlotSelection() {
       return;
     }
 
-    if (durationPricingEnabled && !selectedTime) {
+    if (!selectedTime) {
       toast({
         title: t('slotSelection.toast.missingSelectionTitle', 'Missing selection'),
         description: t('slotSelection.toast.selectAppointmentTime', 'Please select an appointment time.')
@@ -407,7 +422,7 @@ export default function SlotSelection() {
       const booking = await BookingService.initiateBooking({
         doctorId: state.doctorId,
         preferredDate: selectedDate,
-        preferredTime: durationPricingEnabled ? (selectedTime || undefined) : undefined,
+        preferredTime: selectedTime || undefined,
         duration: selectedDuration,
         consultationType: selectedConsultationType,
         paymentMethod: effectivePaymentMethod,
@@ -580,13 +595,13 @@ export default function SlotSelection() {
             >
               {[
                 { step: 1, label: t('slotSelection.step.date', 'Date') },
-                { step: 2, label: durationPricingEnabled ? t('slotSelection.step.time', 'Time') : t('slotSelection.step.autoSlot', 'Auto Slot') },
+                { step: 2, label: t('slotSelection.step.time', 'Time') },
                 { step: 3, label: t('slotSelection.step.confirm', 'Confirm') },
               ].map((item, index) => {
                 const active = item.step === 1
                   ? !!selectedDate
                   : item.step === 2
-                  ? (!durationPricingEnabled || !!selectedTime)
+                  ? !!selectedTime
                   : !!summaryReady;
 
                 return (
@@ -705,20 +720,26 @@ export default function SlotSelection() {
                   <CardContent className="space-y-4">
                     <div>
                       <label className="text-sm font-medium">{t('slotSelection.consultationMode', 'Consultation Mode')}</label>
-                      <select
-                        value={selectedConsultationType}
-                        onChange={(e) => {
-                          setSelectedConsultationType(e.target.value as 'chat' | 'voice' | 'video');
-                          setFinalPrice(null);
-                        }}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      >
-                        {(consultationTypes.length ? consultationTypes : [{ name: 'video' }]).map((type: any) => (
-                          <option key={type.name} value={type.name}>
-                            {String(type.name).charAt(0).toUpperCase() + String(type.name).slice(1)}
-                          </option>
-                        ))}
-                      </select>
+                      {consultationTypePricingEnabled ? (
+                        <select
+                          value={selectedConsultationType}
+                          onChange={(e) => {
+                            setSelectedConsultationType(e.target.value as 'chat' | 'voice' | 'video');
+                            setFinalPrice(null);
+                          }}
+                          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          {(consultationTypes.length ? consultationTypes : [{ name: DEFAULT_CONSULTATION_TYPE }]).map((type: any) => (
+                            <option key={type.name} value={type.name}>
+                              {String(type.name).charAt(0).toUpperCase() + String(type.name).slice(1)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          Video (default)
+                        </p>
+                      )}
                     </div>
 
                     <div>
@@ -752,7 +773,7 @@ export default function SlotSelection() {
                         )
                       ) : (
                         <p className="mt-2 text-sm text-muted-foreground">
-                          {t('slotSelection.autoAssignDescription', 'Time selection is disabled by current pricing configuration. The system will auto-assign the next available slot.')}
+                          {`${DEFAULT_BOOKING_DURATION_MINUTES} min (default)`}
                         </p>
                       )}
                     </div>
@@ -762,7 +783,7 @@ export default function SlotSelection() {
             )}
 
             {/* Time Selection */}
-            {selectedDate && durationPricingEnabled && hasConfiguredDurations && (
+            {selectedDate && (!durationPricingEnabled || hasConfiguredDurations) && (
               <motion.div
                 id="time-selection"
                 initial={{ opacity: 0, y: 20 }}
@@ -852,7 +873,7 @@ export default function SlotSelection() {
                         <span className="text-muted-foreground">{t('slotSelection.summary.date', 'Date')}</span>
                         <span className="font-medium">{formatLocaleDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
                       </div>
-                      {durationPricingEnabled && selectedTime && (
+                      {selectedTime && (
                         <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
                           <span className="text-muted-foreground">{t('slotSelection.summary.time', 'Time')}</span>
                           <span className="font-medium">{selectedTime}</span>

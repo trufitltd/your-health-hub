@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { DEFAULT_PRICING_FEATURE_FLAGS } from '@/config/marketplaceDefaults';
 import type { FeatureFlagName, PricePreviewRequest, PricePreviewResponse } from './marketplaceTypes';
 
 type FeatureFlagRow = {
@@ -14,11 +15,7 @@ export const AvailabilityService = {
 
     if (error) throw error;
 
-    const defaults: Record<FeatureFlagName, boolean> = {
-      duration_pricing: true,
-      tier_pricing: true,
-      consultation_type_pricing: false,
-    };
+    const defaults: Record<FeatureFlagName, boolean> = { ...DEFAULT_PRICING_FEATURE_FLAGS };
 
     (data || []).forEach((row) => {
       const typedRow = row as FeatureFlagRow;
