@@ -2364,6 +2364,17 @@ const PatientPortal = () => {
   const isPendingRescheduleRequest = (apt: {
     reschedule_request_status?: string | null;
   }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isPendingTabAppointment = (apt: {
+    status?: string | null;
+    reschedule_request_status?: string | null;
+  }) => {
+    const normalizedStatus = normalizeAppointmentStatus(apt.status);
+    return (
+      normalizedStatus === 'pending_approval'
+      || normalizedStatus === 'pending_payment'
+      || isPendingRescheduleRequest(apt)
+    );
+  };
   const isDoctorRequestedReschedule = (apt: {
     reschedule_requested_by?: string | null;
   }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
@@ -2418,12 +2429,10 @@ const PatientPortal = () => {
         filtered = appointments.filter((apt) => apt.status === 'pending_payment');
         break;
       case 'pending_approval':
-        filtered = appointments.filter(
-          (apt) =>
-            apt.status === 'pending_approval' ||
-            apt.status === 'pending_payment' ||
-            isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
-        );
+        filtered = appointments.filter((apt) => isPendingTabAppointment(apt as {
+          status?: string | null;
+          reschedule_request_status?: string | null;
+        }));
         break;
       case 'confirmed':
         filtered = appointments.filter(
@@ -3012,9 +3021,9 @@ const PatientPortal = () => {
   };
 
   const pendingApprovalCount = appointments.filter((apt) => {
-    const status = apt.status;
-    const isPending = status === 'pending_approval' || status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
-    if (!isPending) return false;
+    if (!isPendingTabAppointment(apt as { status?: string | null; reschedule_request_status?: string | null })) {
+      return false;
+    }
     if ((apt as any).date && (apt as any).time) {
       return !hasEffectiveAppointmentTimePassed(apt as {
         date: string;
@@ -4190,6 +4199,7 @@ const PatientPortal = () => {
                               filteredAppointmentsByStatus.map((apt) => {
                                 const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
                                 const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                const isPendingPayment = normalizeAppointmentStatus(apt.status) === 'pending_payment';
                                 return (
                                 <div
                                   key={apt.id}
@@ -4247,6 +4257,15 @@ const PatientPortal = () => {
                                       </>
                                     ) : pendingReschedule ? (
                                       <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                    ) : isPendingPayment ? (
+                                      <>
+                                        <Button size="sm" onClick={() => handlePayNow(apt)}>
+                                          Pay Now
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                          Cancel
+                                        </Button>
+                                      </>
                                     ) : (
                                       <>
                                         <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
