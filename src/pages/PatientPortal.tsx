@@ -73,6 +73,10 @@ import { createPrescriptionPdfBlob } from '@/lib/pdf';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+} from '@/config/marketplaceDefaults';
 
 const formatDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -1384,9 +1388,9 @@ const PatientPortal = () => {
   const [specialistName, setSpecialistName] = useState('');
   const [bookingDate, setBookingDate] = useState('');
   const [bookingTime, setBookingTime] = useState('');
-  const [rescheduleDurationMinutes, setRescheduleDurationMinutes] = useState<number>(30);
-  const [rescheduleConsultationType, setRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
-  const [currentRescheduleConsultationType, setCurrentRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>('video');
+  const [rescheduleDurationMinutes, setRescheduleDurationMinutes] = useState<number>(DEFAULT_BOOKING_DURATION_MINUTES);
+  const [rescheduleConsultationType, setRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>(DEFAULT_CONSULTATION_TYPE);
+  const [currentRescheduleConsultationType, setCurrentRescheduleConsultationType] = useState<'chat' | 'voice' | 'video'>(DEFAULT_CONSULTATION_TYPE);
   const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
@@ -1604,7 +1608,7 @@ const PatientPortal = () => {
     setSpecialistName('');
     setBookingDate('');
     setBookingTime('');
-    setRescheduleDurationMinutes(30);
+    setRescheduleDurationMinutes(DEFAULT_BOOKING_DURATION_MINUTES);
     setRescheduleRequestNote('');
     setSelectedDoctorId(null);
     setRescheduleAppointmentId(null);
@@ -1622,9 +1626,9 @@ const PatientPortal = () => {
     [appointments, rescheduleAppointmentId],
   );
   const currentRescheduleDurationMinutes = useMemo(() => {
-    if (!rescheduleAppointment) return 30;
-    const value = Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || 30);
-    return Number.isFinite(value) && value > 0 ? value : 30;
+    if (!rescheduleAppointment) return DEFAULT_BOOKING_DURATION_MINUTES;
+    const value = Number((rescheduleAppointment as { duration_minutes?: number | null }).duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_BOOKING_DURATION_MINUTES;
   }, [rescheduleAppointment]);
   const currentRescheduleFinalPrice = useMemo(() => {
     if (!rescheduleAppointment) return 0;
@@ -1632,9 +1636,9 @@ const PatientPortal = () => {
     return Number.isFinite(value) && value > 0 ? value : 0;
   }, [rescheduleAppointment]);
   const getConsultationTypeForPricing = (apt: { price_breakdown?: Record<string, unknown> | null }) => {
-    const type = String((apt.price_breakdown as Record<string, unknown> | null)?.consultation_type || 'video').toLowerCase();
+    const type = String((apt.price_breakdown as Record<string, unknown> | null)?.consultation_type || DEFAULT_CONSULTATION_TYPE).toLowerCase();
     if (type === 'chat' || type === 'voice' || type === 'video') return type;
-    return 'video';
+    return DEFAULT_CONSULTATION_TYPE;
   };
   const {
     data: reschedulePreviewFinalPrice,
@@ -1786,7 +1790,7 @@ const PatientPortal = () => {
     setBookingTime('');
     
     // Extract current duration and consultation type from appointment
-    const currentDuration = Number((apt as { duration_minutes?: number | null }).duration_minutes || 30) || 30;
+    const currentDuration = Number((apt as { duration_minutes?: number | null }).duration_minutes || DEFAULT_BOOKING_DURATION_MINUTES) || DEFAULT_BOOKING_DURATION_MINUTES;
     const currentConsultType = getConsultationTypeForPricing(apt as { price_breakdown?: Record<string, unknown> | null });
     
     setRescheduleDurationMinutes(currentDuration);
@@ -1816,11 +1820,11 @@ const PatientPortal = () => {
       ((apt as { price_breakdown?: Record<string, unknown> | null }).price_breakdown as Record<string, unknown> | null)?.consultation_type ||
       (apt as { consultationType?: string | null }).consultationType ||
       (apt as { consultation_mode?: string | null }).consultation_mode ||
-      'video'
+      DEFAULT_CONSULTATION_TYPE
     ).toLowerCase();
     const consultationType = consultationTypeCandidate === 'chat' || consultationTypeCandidate === 'voice'
       ? consultationTypeCandidate
-      : 'video';
+      : DEFAULT_CONSULTATION_TYPE;
 
     try {
       const { data: existingSession, error: existingSessionError } = await supabase
@@ -2360,6 +2364,17 @@ const PatientPortal = () => {
   const isPendingRescheduleRequest = (apt: {
     reschedule_request_status?: string | null;
   }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  const isPendingTabAppointment = (apt: {
+    status?: string | null;
+    reschedule_request_status?: string | null;
+  }) => {
+    const normalizedStatus = normalizeAppointmentStatus(apt.status);
+    return (
+      normalizedStatus === 'pending_approval'
+      || normalizedStatus === 'pending_payment'
+      || isPendingRescheduleRequest(apt)
+    );
+  };
   const isDoctorRequestedReschedule = (apt: {
     reschedule_requested_by?: string | null;
   }) => (apt.reschedule_requested_by || '').trim().toLowerCase() === 'doctor';
@@ -2414,12 +2429,10 @@ const PatientPortal = () => {
         filtered = appointments.filter((apt) => apt.status === 'pending_payment');
         break;
       case 'pending_approval':
-        filtered = appointments.filter(
-          (apt) =>
-            apt.status === 'pending_approval' ||
-            apt.status === 'pending_payment' ||
-            isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
-        );
+        filtered = appointments.filter((apt) => isPendingTabAppointment(apt as {
+          status?: string | null;
+          reschedule_request_status?: string | null;
+        }));
         break;
       case 'confirmed':
         filtered = appointments.filter(
@@ -3008,9 +3021,9 @@ const PatientPortal = () => {
   };
 
   const pendingApprovalCount = appointments.filter((apt) => {
-    const status = apt.status;
-    const isPending = status === 'pending_approval' || status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
-    if (!isPending) return false;
+    if (!isPendingTabAppointment(apt as { status?: string | null; reschedule_request_status?: string | null })) {
+      return false;
+    }
     if ((apt as any).date && (apt as any).time) {
       return !hasEffectiveAppointmentTimePassed(apt as {
         date: string;
@@ -4186,6 +4199,7 @@ const PatientPortal = () => {
                               filteredAppointmentsByStatus.map((apt) => {
                                 const pendingReschedule = isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
                                 const doctorRequested = isDoctorRequestedReschedule(apt as { reschedule_requested_by?: string | null });
+                                const isPendingPayment = normalizeAppointmentStatus(apt.status) === 'pending_payment';
                                 return (
                                 <div
                                   key={apt.id}
@@ -4243,6 +4257,15 @@ const PatientPortal = () => {
                                       </>
                                     ) : pendingReschedule ? (
                                       <Badge variant="secondary">Waiting for doctor approval</Badge>
+                                    ) : isPendingPayment ? (
+                                      <>
+                                        <Button size="sm" onClick={() => handlePayNow(apt)}>
+                                          Pay Now
+                                        </Button>
+                                        <Button size="sm" variant="destructive" onClick={() => setCancelAppointmentId((apt as unknown as { id?: string }).id ?? null)}>
+                                          Cancel
+                                        </Button>
+                                      </>
                                     ) : (
                                       <>
                                         <Button size="sm" variant="outline" onClick={() => initReschedule(apt)}>
