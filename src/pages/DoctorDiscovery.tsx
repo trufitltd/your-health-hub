@@ -107,6 +107,73 @@ const formatConsultationLanguageLabel = (value: string) => {
       .join(' ');
 };
 
+const URL_PARAM_DOCTOR_TYPE_VALUES = new Set(['all', 'general', 'specialist']);
+const URL_PARAM_AVAILABILITY_MODE_VALUES = new Set(['none', 'now', 'exact', 'range']);
+const DOCTOR_DISCOVERY_MANAGED_URL_PARAMS = [
+  'q',
+  'type',
+  'specialty',
+  'minRating',
+  'minExperience',
+  'hospital',
+  'consultationLanguage',
+  'availability',
+  'date',
+  'time',
+  'startDate',
+  'startTime',
+  'endDate',
+  'endTime',
+];
+
+const areDoctorDiscoveryFiltersEqual = (
+  left: DoctorDiscoveryFilters,
+  right: DoctorDiscoveryFilters,
+) => (
+  left.specialty === right.specialty
+  && left.minRating === right.minRating
+  && left.minExperience === right.minExperience
+  && left.hospital === right.hospital
+  && left.consultationLanguage === right.consultationLanguage
+);
+
+const areDoctorDiscoveryAvailabilityFiltersEqual = (
+  left: DoctorDiscoveryAvailabilityFilters,
+  right: DoctorDiscoveryAvailabilityFilters,
+) => (
+  left.date === right.date
+  && left.time === right.time
+  && left.startDate === right.startDate
+  && left.startTime === right.startTime
+  && left.endDate === right.endDate
+  && left.endTime === right.endTime
+);
+
+const parseNonNegativeNumber = (value: string | null, fallback: number) => {
+  if (value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+};
+
+type DiscoveryStartingPrices = {
+  gp: number | null;
+  specialist: number | null;
+  currency: string;
+  variation: {
+    gp: {
+      duration: boolean;
+      consultationType: boolean;
+      tier: boolean;
+    };
+    specialist: {
+      duration: boolean;
+      consultationType: boolean;
+      tier: boolean;
+    };
+  };
+};
+
 export default function DoctorDiscovery() {
   const { user } = useAuth();
   const { t, language } = useLanguage();
@@ -175,6 +242,79 @@ export default function DoctorDiscovery() {
     const time = now.toTimeString().slice(0, 5);
     return { date, time };
   };
+
+  const { data: discoveryStartingPrices = {
+    gp: null,
+    specialist: null,
+    currency: 'NGN',
+    variation: {
+      gp: { duration: false, consultationType: false, tier: false },
+      specialist: { duration: false, consultationType: false, tier: false },
+    },
+  } } = useQuery({
+    queryKey: ['doctor-discovery-starting-prices'],
+    queryFn: async (): Promise<DiscoveryStartingPrices> => {
+      try {
+        const { data, error } = await supabase.functions.invoke('discovery-starting-prices');
+        if (error) throw error;
+
+        const payload = (data || {}) as {
+          gp?: number | null;
+          specialist?: number | null;
+          currency?: string | null;
+          variation?: {
+            gp?: {
+              duration?: boolean;
+              consultationType?: boolean;
+              tier?: boolean;
+            };
+            specialist?: {
+              duration?: boolean;
+              consultationType?: boolean;
+              tier?: boolean;
+            };
+          };
+        };
+
+        const gp = typeof payload.gp === 'number' && Number.isFinite(payload.gp) && payload.gp >= 0
+          ? payload.gp
+          : null;
+        const specialist = typeof payload.specialist === 'number' && Number.isFinite(payload.specialist) && payload.specialist >= 0
+          ? payload.specialist
+          : null;
+        const currency = typeof payload.currency === 'string' && payload.currency.trim()
+          ? payload.currency.trim().toUpperCase()
+          : 'NGN';
+
+        const variation = {
+          gp: {
+            duration: !!payload.variation?.gp?.duration,
+            consultationType: !!payload.variation?.gp?.consultationType,
+            tier: !!payload.variation?.gp?.tier,
+          },
+          specialist: {
+            duration: !!payload.variation?.specialist?.duration,
+            consultationType: !!payload.variation?.specialist?.consultationType,
+            tier: !!payload.variation?.specialist?.tier,
+          },
+        };
+
+        return { gp, specialist, currency, variation };
+      } catch (error) {
+        console.warn('[DoctorDiscovery] Unable to load discovery starting prices from edge function', error);
+        return {
+          gp: null,
+          specialist: null,
+          currency: 'NGN',
+          variation: {
+            gp: { duration: false, consultationType: false, tier: false },
+            specialist: { duration: false, consultationType: false, tier: false },
+          },
+        };
+      }
+    },
+    staleTime: 60 * 1000,
+  });
 
   // Fetch doctors who have an available schedule based on mode (excluding booked slots)
   const { data: availableDoctorIds = [] } = useQuery({
@@ -586,14 +726,44 @@ export default function DoctorDiscovery() {
     setProfileOpen(true);
   };
 
-  // Helper: Get consultation fee based on specialty + specialist configured rate
-  const getConsultationFee = (doctor: Doctor) => {
+  // Legacy fallback used only when discovery pricing config cannot be loaded.
+  const getFallbackConsultationFee = (doctor: Doctor) => {
     const isSpecialist = !isGeneralPracticeSpecialty(doctor.specialty || '');
     const parsedRate = Number(doctor.rate_per_consultation);
     if (isSpecialist && Number.isFinite(parsedRate) && parsedRate > 0) {
       return parsedRate;
     }
     return isSpecialist ? 10000 : 5000;
+  };
+
+  const getStartingPriceForDoctor = (doctor: Doctor) => {
+    const doctorTypeKey = isGeneralPracticeSpecialty(doctor.specialty || '') ? 'gp' : 'specialist';
+    const configuredStartingPrice = discoveryStartingPrices[doctorTypeKey];
+    if (typeof configuredStartingPrice === 'number' && Number.isFinite(configuredStartingPrice) && configuredStartingPrice > 0) {
+      return configuredStartingPrice;
+    }
+    return getFallbackConsultationFee(doctor);
+  };
+
+  const getPricingVariationMessage = (doctor: Doctor) => {
+    const doctorTypeKey = isGeneralPracticeSpecialty(doctor.specialty || '') ? 'gp' : 'specialist';
+    const variation = discoveryStartingPrices.variation[doctorTypeKey];
+    const factors: string[] = [];
+
+    if (variation.duration) factors.push('duration');
+    if (variation.consultationType) factors.push('mode');
+    if (variation.tier) factors.push('doctor tier');
+
+    if (factors.length === 0) {
+      return 'Fixed price.';
+    }
+    if (factors.length === 1) {
+      return `Final price varies by ${factors[0]}.`;
+    }
+    if (factors.length === 2) {
+      return `Final price varies by ${factors[0]} and ${factors[1]}.`;
+    }
+    return `Final price varies by ${factors[0]}, ${factors[1]}, and ${factors[2]}.`;
   };
 
   // Helper: Get status color and label
@@ -1069,6 +1239,9 @@ export default function DoctorDiscovery() {
               <div className="grid md:grid-cols-3 gap-6">
                 {filteredDoctors.map(doctor => {
                   const localizedDoctorBio = getLocalizedDoctorBio(doctor);
+                  const isGeneralPracticeDoctor = isGeneralPracticeSpecialty(doctor.specialty || '');
+                  const startingPrice = getStartingPriceForDoctor(doctor);
+                  const pricingVariationMessage = getPricingVariationMessage(doctor);
                   return (
                     <motion.div
                       key={doctor.id}
@@ -1094,7 +1267,7 @@ export default function DoctorDiscovery() {
                                     : `${t('specialists.card.experience', 'Experience')} ${t('specialists.defaults.notAvailable', 'N/A')}`}
                                 </Badge>
                                 <Badge className="text-xs bg-blue-100 text-blue-800">
-                                  {isGeneralPracticeSpecialty(doctor.specialty || '') ? 'General' : 'Specialist'}
+                                  {isGeneralPracticeDoctor ? 'General' : 'Specialist'}
                                 </Badge>
                                 {!doctor.is_active && (
                                   <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
@@ -1149,8 +1322,10 @@ export default function DoctorDiscovery() {
                             )}
 
                             <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
-                              <p className="text-sm font-semibold text-success">{formatCurrency(getConsultationFee(doctor))}</p>
-                              <p className="text-xs text-muted-foreground">Consultation Fee</p>
+                              <p className="text-sm font-semibold text-success">
+                                {`From ${formatCurrency(startingPrice, discoveryStartingPrices.currency)}`}
+                              </p>
+                              <p className="text-xs text-muted-foreground">{pricingVariationMessage}</p>
                             </div>
 
                             <div className="flex gap-2 pt-4 border-t">
