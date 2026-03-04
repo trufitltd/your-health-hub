@@ -465,6 +465,7 @@ DECLARE
   v_proposed_time TEXT;
   v_slot_conflict BOOLEAN := FALSE;
   v_target_datetime TIMESTAMPTZ;
+  v_wallet_balance NUMERIC := 0;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'Authentication required';
