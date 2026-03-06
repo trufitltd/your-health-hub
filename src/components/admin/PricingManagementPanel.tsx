@@ -8,6 +8,11 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { PricingService } from '@/services/PricingService';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+  DEFAULT_PRICING_FEATURE_FLAGS,
+} from '@/config/marketplaceDefaults';
 import { AlertTriangle, X } from 'lucide-react';
 import type {
   FeatureFlagName,
@@ -37,6 +42,12 @@ const featureLabels: Record<FeatureFlagName, string> = {
   consultation_type_pricing: 'Consultation Type Pricing',
 };
 
+const featureBehaviorNotes: Record<FeatureFlagName, string> = {
+  duration_pricing: `When off, booking keeps fixed ${DEFAULT_BOOKING_DURATION_MINUTES} min and still requires manual slot selection.`,
+  tier_pricing: 'When off, tier modifiers are ignored in final price calculation.',
+  consultation_type_pricing: `When off, consultation mode defaults to ${DEFAULT_CONSULTATION_TYPE} and mode modifiers are ignored.`,
+};
+
 const DEFAULT_PROFILE_EDIT_FORM = {
   name: '',
   country_code: 'NG',
@@ -49,7 +60,7 @@ const DEFAULT_TIER_EDIT_FORM = {
   experience_max: '',
 };
 
-const DEFAULT_DURATION_OPTIONS = [15, 30, 45, 60];
+const DEFAULT_DURATION_OPTIONS = [15, DEFAULT_BOOKING_DURATION_MINUTES, 45, 60];
 const DEFAULT_CONSULTATION_TYPES = ['chat', 'voice', 'video'];
 const MIN_ALLOWED_DURATION_MINUTES = 5;
 const MAX_ALLOWED_DURATION_MINUTES = 240;
@@ -439,11 +450,7 @@ export function PricingManagementPanel() {
   });
 
   const featureFlagLookup = useMemo<Record<FeatureFlagName, boolean>>(() => {
-    const defaults: Record<FeatureFlagName, boolean> = {
-      duration_pricing: true,
-      tier_pricing: true,
-      consultation_type_pricing: false,
-    };
+    const defaults: Record<FeatureFlagName, boolean> = { ...DEFAULT_PRICING_FEATURE_FLAGS };
 
     featureFlags.forEach((flag) => {
       const key = flag.feature_name as FeatureFlagName;
@@ -625,7 +632,7 @@ export function PricingManagementPanel() {
         if (featureFlagsLoaded && !featureFlagLookup.duration_pricing) {
           issues.push({
             level: 'warning',
-            message: 'Duration pricing is disabled, so duration modifiers will be ignored.',
+            message: `Duration pricing is disabled, so duration modifiers are ignored and booking uses default ${DEFAULT_BOOKING_DURATION_MINUTES} min.`,
           });
         }
       }
@@ -688,7 +695,7 @@ export function PricingManagementPanel() {
         if (featureFlagsLoaded && !featureFlagLookup.consultation_type_pricing) {
           issues.push({
             level: 'warning',
-            message: 'Consultation type pricing is disabled, so consultation modifiers will be ignored.',
+            message: `Consultation type pricing is disabled, so consultation modifiers are ignored and mode defaults to ${DEFAULT_CONSULTATION_TYPE}.`,
           });
         }
       }
@@ -1140,7 +1147,7 @@ export function PricingManagementPanel() {
               <div key={flag.feature_name} className="rounded-lg border p-3 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium">{featureLabels[flag.feature_name as FeatureFlagName]}</p>
-                  <p className="text-xs text-muted-foreground">{flag.feature_name}</p>
+                  <p className="text-xs text-muted-foreground">{featureBehaviorNotes[flag.feature_name as FeatureFlagName]}</p>
                 </div>
                 <Switch
                   checked={!!flag.enabled}
@@ -1320,11 +1327,11 @@ export function PricingManagementPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Allowed Durations</CardTitle>
-          <CardDescription>Manage selectable slot lengths for new bookings and reschedules.</CardDescription>
+          <CardDescription>Manage selectable duration options used when Duration Pricing is enabled.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Duration options are global. New bookings and reschedules can only use active duration values configured below.
+            When Duration Pricing is off, booking uses a fixed {DEFAULT_BOOKING_DURATION_MINUTES}-minute duration and ignores these options.
           </p>
 
           <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
