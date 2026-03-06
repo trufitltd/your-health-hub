@@ -4586,23 +4586,24 @@ const DoctorPortal = () => {
                       ) : (
                         patientHealthRecords.map((record) => (
                           <div key={record.id} className="p-3 rounded-lg bg-muted/30">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium truncate">{record.file_name}</p>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium break-words sm:truncate">{record.file_name}</p>
                                 <p className="text-xs text-muted-foreground">
                                   {formatDateTime(record.uploaded_at)}
                                   {record.file_size ? ` • ${(record.file_size / 1024).toFixed(1)} KB` : ''}
                                 </p>
                                 {record.notes && (
-                                  <p className="text-xs text-muted-foreground mt-1">{record.notes}</p>
+                                  <p className="text-xs text-muted-foreground mt-1 break-words">{record.notes}</p>
                                 )}
                               </div>
                               <Button
                                 size="sm"
                                 variant="outline"
+                                className="h-auto w-full whitespace-normal break-words py-2 text-center sm:h-9 sm:w-auto sm:whitespace-nowrap sm:py-0"
                                 onClick={() => window.open(record.file_url, '_blank')}
                               >
-                                {t('doctorPortal.actions.viewFolder', 'View')}
+                                {t('doctorPortal.actions.viewInvestigation', 'View Investigation')}
                               </Button>
                             </div>
                           </div>

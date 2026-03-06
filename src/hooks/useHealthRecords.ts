@@ -36,15 +36,36 @@ export const useHealthRecords = (patientId: string | undefined) => {
     mutationFn: async ({ file, notes }: { file: File; notes?: string }) => {
       if (!patientId) throw new Error('Patient ID required');
 
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}.${fileExt}`;
-      const filePath = `${patientId}/health-records/${fileName}`;
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+      if (authError || !user?.id) {
+        throw new Error('You must be signed in to upload investigations.');
+      }
+
+      const ownerId = user.id;
+      const fileExt = file.name.split('.').pop() || 'bin';
+      const uniqueId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const fileName = `${Date.now()}-${uniqueId}.${fileExt}`;
+      const filePath = `${ownerId}/health-records/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('patient-files')
-        .upload(filePath, file);
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          contentType: file.type || undefined,
+          upsert: false,
+        });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        const message = [uploadError.message, (uploadError as any).details, (uploadError as any).hint]
+          .filter(Boolean)
+          .join(' | ');
+        throw new Error(message || 'Failed to upload file to storage.');
+      }
 
       const { data: urlData } = supabase.storage
         .from('patient-files')
@@ -53,7 +74,7 @@ export const useHealthRecords = (patientId: string | undefined) => {
       const { error: dbError } = await supabase
         .from('health_records')
         .insert({
-          patient_id: patientId,
+          patient_id: ownerId,
           file_name: file.name,
           file_url: urlData.publicUrl,
           file_type: file.type,
@@ -61,7 +82,12 @@ export const useHealthRecords = (patientId: string | undefined) => {
           notes: notes || null,
         });
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        const message = [dbError.message, (dbError as any).details, (dbError as any).hint]
+          .filter(Boolean)
+          .join(' | ');
+        throw new Error(message || 'File uploaded but failed to save record.');
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['health-records', patientId] });
