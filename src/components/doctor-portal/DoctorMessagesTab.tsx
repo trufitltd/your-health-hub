@@ -35,6 +35,7 @@ import { useLocaleFormatter } from '@/lib/locale';
 interface PatientThread {
   id: string;
   sessionId: string;
+  sessionIds: string[];
   patientId: string;
   patientName: string;
   patientAvatar?: string | null;
@@ -42,6 +43,11 @@ interface PatientThread {
   appointmentTime?: string | null;
   consultationType?: string | null;
   lastMessageAt?: string | null;
+  sessionMetaById: Record<string, {
+    appointmentDate?: string | null;
+    appointmentTime?: string | null;
+    consultationType?: string | null;
+  }>;
 }
 
 interface DoctorMessagesTabProps {
@@ -110,7 +116,12 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
 
   const selectedThread = threads.find((t) => t.sessionId === selectedSessionId);
   const appendMessageIfMissing = (message: ConsultationMessage) => {
-    setMessages((prev) => (prev.some((existing) => existing.id === message.id) ? prev : [...prev, message]));
+    setMessages((prev) => {
+      if (prev.some((existing) => existing.id === message.id)) return prev;
+      return [...prev, message].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+    });
   };
 
   useEffect(() => {
@@ -188,7 +199,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
           );
         }
 
-        const hydrated = rows
+        const hydratedSessions = rows
           .map((row) => {
             const patient = row.patientId ? patientMap.get(row.patientId) : null;
             return {
@@ -197,14 +208,51 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
               patientAvatar: patient?.profile_picture_url ?? null,
             };
           })
-          .filter((row) => Boolean(row.sessionId))
-          .sort((a, b) => {
-            const aDate = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
-            const bDate = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
-            return bDate - aDate;
-          });
+          .filter((row) => Boolean(row.sessionId));
 
-        if (mounted) setThreads(hydrated);
+        const groupedByPatient = new Map<string, PatientThread>();
+        hydratedSessions.forEach((row) => {
+          const key = row.patientId || `session-${row.sessionId}`;
+          const existing = groupedByPatient.get(key);
+          const rowTime = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : 0;
+          const sessionMeta = {
+            appointmentDate: row.appointmentDate ?? null,
+            appointmentTime: row.appointmentTime ?? null,
+            consultationType: row.consultationType ?? null,
+          };
+
+          if (!existing) {
+            groupedByPatient.set(key, {
+              ...row,
+              id: key,
+              sessionIds: [row.sessionId],
+              sessionMetaById: { [row.sessionId]: sessionMeta },
+            });
+            return;
+          }
+
+          if (!existing.sessionIds.includes(row.sessionId)) {
+            existing.sessionIds.push(row.sessionId);
+          }
+          existing.sessionMetaById[row.sessionId] = sessionMeta;
+
+          const existingTime = existing.lastMessageAt ? new Date(existing.lastMessageAt).getTime() : 0;
+          if (rowTime >= existingTime) {
+            existing.sessionId = row.sessionId;
+            existing.appointmentDate = row.appointmentDate;
+            existing.appointmentTime = row.appointmentTime;
+            existing.consultationType = row.consultationType;
+            existing.lastMessageAt = row.lastMessageAt;
+          }
+        });
+
+        const groupedThreads = Array.from(groupedByPatient.values()).sort((a, b) => {
+          const aDate = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+          const bDate = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+          return bDate - aDate;
+        });
+
+        if (mounted) setThreads(groupedThreads);
       } finally {
         if (mounted) setIsLoadingThreads(false);
       }
@@ -219,88 +267,19 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
 
   useEffect(() => {
     if (!focusSessionId) return;
-    setSelectedSessionId(focusSessionId);
-  }, [focusSessionId]);
+    const targetThread = threads.find((thread) => thread.sessionIds.includes(focusSessionId));
+    if (!targetThread) return;
+    setSelectedSessionId(targetThread.sessionId);
+  }, [focusSessionId, threads]);
 
   useEffect(() => {
-    if (!focusSessionId || !user?.id) return;
-    if (threads.some((thread) => thread.sessionId === focusSessionId)) return;
+    if (!selectedThread) {
+      setMessages([]);
+      return;
+    }
 
-    let isMounted = true;
-    const loadFocusedSessionThread = async () => {
-      try {
-        const { data: session, error } = await supabase
-          .from('consultation_sessions')
-          .select(`
-            id,
-            patient_id,
-            consultation_type,
-            created_at,
-            appointments(
-              date,
-              time,
-              patient_name
-            )
-          `)
-          .eq('id', focusSessionId)
-          .eq('doctor_id', user.id)
-          .maybeSingle();
-
-        if (error || !session || !isMounted) return;
-
-        const patientId = (session as { patient_id?: string | null }).patient_id ?? '';
-        let patientName =
-          (session as { appointments?: { patient_name?: string | null } | Array<{ patient_name?: string | null }> }).appointments &&
-          Array.isArray((session as any).appointments)
-            ? (((session as any).appointments[0]?.patient_name as string | undefined) || 'Patient')
-            : (((session as any).appointments?.patient_name as string | undefined) || 'Patient');
-        let patientAvatar: string | null = null;
-
-        if (patientId) {
-          const { data: patientRow } = await supabase
-            .from('patient_registrations')
-            .select('full_name, profile_picture_url')
-            .eq('user_id', patientId)
-            .maybeSingle();
-          if (patientRow) {
-            patientName = (patientRow.full_name as string | null) || patientName;
-            patientAvatar = (patientRow.profile_picture_url as string | null) ?? null;
-          }
-        }
-
-        const appointmentObj = Array.isArray((session as any).appointments)
-          ? (session as any).appointments[0]
-          : (session as any).appointments;
-
-        const thread: PatientThread = {
-          id: session.id as string,
-          sessionId: session.id as string,
-          patientId,
-          patientName,
-          patientAvatar,
-          appointmentDate: appointmentObj?.date ?? null,
-          appointmentTime: appointmentObj?.time ?? null,
-          consultationType: (session as { consultation_type?: string | null }).consultation_type ?? null,
-          lastMessageAt: (session as { created_at?: string | null }).created_at ?? null,
-        };
-
-        setThreads((prev) => {
-          if (prev.some((item) => item.sessionId === thread.sessionId)) return prev;
-          return [thread, ...prev];
-        });
-      } catch (err) {
-        console.error('Failed to load focused session thread:', err);
-      }
-    };
-
-    loadFocusedSessionThread();
-    return () => {
-      isMounted = false;
-    };
-  }, [focusSessionId, threads, user?.id]);
-
-  useEffect(() => {
-    if (!selectedSessionId) {
+    const sessionIds = selectedThread.sessionIds.filter(Boolean);
+    if (sessionIds.length === 0) {
       setMessages([]);
       return;
     }
@@ -308,24 +287,34 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     let isMounted = true;
     setIsLoadingMessages(true);
 
-    consultationService
-      .getMessages(selectedSessionId)
-      .then((data) => {
-        if (isMounted) setMessages(data);
+    supabase
+      .from('consultation_messages')
+      .select('*')
+      .in('session_id', sessionIds)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Failed to load messages for thread:', error);
+          if (isMounted) setMessages([]);
+          return;
+        }
+        if (isMounted) setMessages((data || []) as ConsultationMessage[]);
       })
       .finally(() => {
         if (isMounted) setIsLoadingMessages(false);
       });
 
-    const unsubscribe = consultationService.subscribeToMessages(selectedSessionId, (message) => {
-      appendMessageIfMissing(message);
-    });
+    const unsubscribers = sessionIds.map((sessionId) =>
+      consultationService.subscribeToMessages(sessionId, (message) => {
+        appendMessageIfMissing(message);
+      })
+    );
 
     return () => {
       isMounted = false;
-      unsubscribe();
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [selectedSessionId]);
+  }, [selectedThread?.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -338,7 +327,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
         return;
       }
 
-      const sessionIds = threads.map((thread) => thread.sessionId).filter(Boolean);
+      const sessionIds = Array.from(new Set(threads.flatMap((thread) => thread.sessionIds))).filter(Boolean);
       if (sessionIds.length === 0) return;
 
       const readState = getReadState();
@@ -379,18 +368,22 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     };
   }, [threads, user?.id]);
 
+  const markThreadAsRead = (thread: PatientThread, readAtIso?: string) => {
+    thread.sessionIds.forEach((sessionId) => markSessionAsRead(sessionId, readAtIso));
+  };
+
   useEffect(() => {
     if (!messagesViewportRef.current) return;
     messagesViewportRef.current.scrollTop = messagesViewportRef.current.scrollHeight;
   }, [messages, selectedSessionId, isLoadingMessages]);
 
   useEffect(() => {
-    if (!selectedSessionId || isLoadingMessages) return;
+    if (!selectedThread || isLoadingMessages) return;
     const latestIncoming = [...messages]
       .reverse()
       .find((message) => message.sender_role === 'patient');
-    markSessionAsRead(selectedSessionId, latestIncoming?.created_at || new Date().toISOString());
-  }, [selectedSessionId, messages, isLoadingMessages]);
+    markThreadAsRead(selectedThread, latestIncoming?.created_at || new Date().toISOString());
+  }, [selectedThread, messages, isLoadingMessages]);
 
   useEffect(() => {
     if (!jumpToUnreadSignal || jumpToUnreadSignal === lastJumpHandledRef.current) return;
@@ -401,7 +394,10 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
 
     unreadSessions.sort((a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime());
     const targetSessionId = unreadSessions[0][0];
-    setSelectedSessionId(targetSessionId);
+    const targetThread = threads.find((thread) => thread.sessionIds.includes(targetSessionId));
+    if (targetThread) {
+      setSelectedSessionId(targetThread.sessionId);
+    }
 
     setTimeout(() => {
       if (messagesViewportRef.current) {
@@ -409,7 +405,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
       }
       composerInputRef.current?.focus();
     }, 50);
-  }, [jumpToUnreadSignal, unreadLatestBySession]);
+  }, [jumpToUnreadSignal, unreadLatestBySession, threads]);
 
   const filteredThreads = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -422,7 +418,8 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
 
   const handleSendMessage = async (event?: React.FormEvent) => {
     event?.preventDefault();
-    if (!newMessage.trim() || !selectedSessionId || !user?.id) return;
+    if (!newMessage.trim() || !selectedThread || !user?.id) return;
+    const targetSessionId = selectedThread.sessionId;
 
     const senderName =
       user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
@@ -431,7 +428,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     setNewMessage('');
 
     const sent = await consultationService.sendMessage(
-      selectedSessionId,
+      targetSessionId,
       user.id,
       'doctor',
       senderName,
@@ -444,7 +441,8 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
   const handleAttachDocument = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !selectedSessionId || !user?.id) return;
+    if (!file || !selectedThread || !user?.id) return;
+    const targetSessionId = selectedThread.sessionId;
 
     const senderName =
       user.user_metadata?.full_name || user.user_metadata?.email || user.email || 'Doctor';
@@ -452,7 +450,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     setIsUploadingAttachment(true);
     try {
       const fileName = `${Date.now()}-${file.name}`;
-      const filePath = `${user.id}/consultation-attachments/${selectedSessionId}/${fileName}`;
+      const filePath = `${user.id}/consultation-attachments/${targetSessionId}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('doctor-files')
@@ -465,7 +463,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
         .getPublicUrl(filePath);
 
       const sent = await consultationService.sendMessage(
-        selectedSessionId,
+        targetSessionId,
         user.id,
         'doctor',
         senderName,
@@ -490,6 +488,9 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     if (!dateString) return '';
     return formatDate(dateString);
   };
+
+  const getThreadUnreadCount = (thread: PatientThread) =>
+    thread.sessionIds.reduce((total, sessionId) => total + (unreadCountsBySession[sessionId] || 0), 0);
 
   const parseRefillRequest = (message: ConsultationMessage) => {
     if (message.sender_role !== 'patient' || !message.content) return null;
@@ -525,7 +526,8 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
   };
 
   const handleApproveRefill = async () => {
-    if (!selectedSessionId || !selectedThread || !user?.id || !selectedRefillMessage) return;
+    if (!selectedThread || !user?.id || !selectedRefillMessage) return;
+    const targetSessionId = selectedRefillMessage.session_id || selectedThread.sessionId;
     const parsed = parseRefillRequest(selectedRefillMessage);
     if (!parsed) return;
     if (!replacementPrescription.trim()) {
@@ -539,7 +541,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     setIsSubmittingRefillAction(true);
     try {
       const { data: insertedNote, error: noteError } = await supabase.from('doctor_consultation_notes').insert({
-        session_id: selectedSessionId,
+        session_id: targetSessionId,
         patient_id: selectedThread.patientId,
         doctor_id: user.id,
         diagnosis: null,
@@ -557,7 +559,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
       try {
         const { data: codeData, error: codeError } = await (supabase as any).rpc('ensure_prescription_verification', {
           p_note_id: insertedNote.id,
-          p_session_id: selectedSessionId,
+          p_session_id: targetSessionId,
           p_patient_id: selectedThread.patientId,
           p_doctor_id: user.id,
           p_drug_list: replacementPrescription.trim(),
@@ -574,7 +576,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
       }
 
       const fileName = `refill-prescription-${new Date().toISOString().slice(0, 10)}.pdf`;
-      const filePath = `${user.id}/prescription-refills/${selectedSessionId}/${Date.now()}-${fileName}`;
+      const filePath = `${user.id}/prescription-refills/${targetSessionId}/${Date.now()}-${fileName}`;
       const prescriptionText = [
         `Date: ${formatDateTime(new Date())}`,
         `Patient: ${selectedThread.patientName}`,
@@ -603,7 +605,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
         .getPublicUrl(filePath);
 
       const sent = await consultationService.sendMessage(
-        selectedSessionId,
+        targetSessionId,
         user.id,
         'doctor',
         senderName,
@@ -611,7 +613,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
       );
       appendMessageIfMissing(sent);
       const fileMessage = await consultationService.sendMessage(
-        selectedSessionId,
+        targetSessionId,
         user.id,
         'doctor',
         senderName,
@@ -634,7 +636,8 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
   };
 
   const handleDisapproveRefill = async () => {
-    if (!selectedSessionId || !user?.id || !selectedRefillMessage) return;
+    if (!selectedThread || !user?.id || !selectedRefillMessage) return;
+    const targetSessionId = selectedRefillMessage.session_id || selectedThread.sessionId;
     const parsed = parseRefillRequest(selectedRefillMessage);
     if (!parsed) return;
     if (!disapprovalReason.trim()) {
@@ -648,7 +651,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     setIsSubmittingRefillAction(true);
     try {
       const sent = await consultationService.sendMessage(
-        selectedSessionId,
+        targetSessionId,
         user.id,
         'doctor',
         senderName,
@@ -713,7 +716,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
                         {thread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                       </AvatarFallback>
                     </Avatar>
-                    {(unreadCountsBySession[thread.sessionId] || 0) > 0 && (
+                    {getThreadUnreadCount(thread) > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />
                     )}
                   </div>
@@ -728,9 +731,9 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
                       <Badge variant="outline" className="text-[10px]">
                         {thread.consultationType || 'Consultation'}
                       </Badge>
-                      {(unreadCountsBySession[thread.sessionId] || 0) > 0 && (
+                      {getThreadUnreadCount(thread) > 0 && (
                         <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
-                          {unreadCountsBySession[thread.sessionId] > 99 ? '99+' : unreadCountsBySession[thread.sessionId]}
+                          {getThreadUnreadCount(thread) > 99 ? '99+' : getThreadUnreadCount(thread)}
                         </Badge>
                       )}
                     </div>
@@ -756,7 +759,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
                     {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
                   </AvatarFallback>
                 </Avatar>
-                {(selectedSessionId && (unreadCountsBySession[selectedSessionId] || 0) > 0) && (
+                {(selectedThread && getThreadUnreadCount(selectedThread) > 0) && (
                   <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />
                 )}
               </div>
@@ -792,53 +795,66 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
               <div className="space-y-4">
                 {messages.map((message, index) => {
                   const isDoctor = message.sender_role === 'doctor';
+                  const previousMessage = index > 0 ? messages[index - 1] : null;
+                  const isNewAppointmentSection = !previousMessage || previousMessage.session_id !== message.session_id;
+                  const sessionMeta = selectedThread.sessionMetaById[message.session_id] || {};
                   const showAvatar = !isDoctor && (index === 0 || messages[index - 1].sender_role === 'doctor');
                   const refillRequest = parseRefillRequest(message);
                   return (
-                    <div key={message.id} className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
-                      {!isDoctor && (
-                        <div className="w-8 flex-shrink-0">
-                          {showAvatar && (
-                            <Avatar className="w-8 h-8">
-                              <AvatarImage src={selectedThread.patientAvatar ?? undefined} />
-                              <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                                {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
-                              </AvatarFallback>
-                            </Avatar>
-                          )}
+                    <div key={message.id}>
+                      {isNewAppointmentSection && (
+                        <div className="my-2 flex justify-center">
+                          <Badge variant="outline" className="text-[10px] sm:text-xs">
+                            Appointment: {formatMessageDate(sessionMeta.appointmentDate)}
+                            {sessionMeta.appointmentTime ? ` • ${sessionMeta.appointmentTime}` : ''}
+                          </Badge>
                         </div>
                       )}
-                      <div className={cn('flex flex-col', isDoctor ? 'items-end' : 'items-start')}>
-                        <div className={cn('rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
-                          {message.message_type === 'file' && message.file_url ? (
-                            <a
-                              href={message.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className={cn(
-                                'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
-                                isDoctor ? 'text-primary-foreground' : 'text-primary'
-                              )}
-                            >
-                              {message.content || 'Open attachment'}
-                            </a>
-                          ) : (
-                            <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
-                          )}
-                        </div>
-                        {refillRequest && !isDoctor && (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" onClick={() => handleOpenApproveDialog(message)}>
-                              Approve & Write Prescription
-                            </Button>
-                            <Button size="sm" variant="destructive" onClick={() => handleOpenDisapproveDialog(message)}>
-                              Disapprove
-                            </Button>
+                      <div className={cn('flex gap-2 sm:gap-3 max-w-[92%] sm:max-w-[80%] min-w-0', isDoctor ? 'ml-auto flex-row-reverse' : '')}>
+                        {!isDoctor && (
+                          <div className="w-8 flex-shrink-0">
+                            {showAvatar && (
+                              <Avatar className="w-8 h-8">
+                                <AvatarImage src={selectedThread.patientAvatar ?? undefined} />
+                                <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                                  {selectedThread.patientName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                                </AvatarFallback>
+                              </Avatar>
+                            )}
                           </div>
                         )}
-                        <div className="flex items-center gap-1 mt-1 px-1">
-                          <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.created_at)}</span>
-                          {isDoctor && <Check className="w-3 h-3 text-muted-foreground" />}
+                        <div className={cn('flex flex-col', isDoctor ? 'items-end' : 'items-start')}>
+                          <div className={cn('rounded-2xl px-3 sm:px-4 py-2 shadow-sm max-w-full', isDoctor ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm')}>
+                            {message.message_type === 'file' && message.file_url ? (
+                              <a
+                                href={message.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={cn(
+                                  'text-sm underline underline-offset-2 break-all [overflow-wrap:anywhere]',
+                                  isDoctor ? 'text-primary-foreground' : 'text-primary'
+                                )}
+                              >
+                                {message.content || 'Open attachment'}
+                              </a>
+                            ) : (
+                              <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
+                            )}
+                          </div>
+                          {refillRequest && !isDoctor && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" onClick={() => handleOpenApproveDialog(message)}>
+                                Approve & Write Prescription
+                              </Button>
+                              <Button size="sm" variant="destructive" onClick={() => handleOpenDisapproveDialog(message)}>
+                                Disapprove
+                              </Button>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1 mt-1 px-1">
+                            <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.created_at)}</span>
+                            {isDoctor && <Check className="w-3 h-3 text-muted-foreground" />}
+                          </div>
                         </div>
                       </div>
                     </div>
