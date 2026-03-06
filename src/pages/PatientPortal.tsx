@@ -1120,8 +1120,9 @@ const PatientPortal = () => {
       await uploadRecord.mutateAsync({ file, notes: uploadNotes });
       setUploadNotes('');
       toast({ title: 'Success', description: 'Investigation uploaded successfully!' });
-    } catch (error) {
-      toast({ title: 'Error', description: 'Failed to upload investigation.' });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to upload investigation.';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
     } finally {
       setIsUploadingRecord(false);
     }
@@ -4690,22 +4691,23 @@ const PatientPortal = () => {
                                 )}
                               </div>
                             </div>
-                            <div className="mt-3 pt-3 border-t border-border flex justify-end gap-2">
-                              <Button size="sm" variant="outline" onClick={() => handleViewPrescriptionDetails(prescription)}>
+                            <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-end">
+                              <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => handleViewPrescriptionDetails(prescription)}>
                                 {t('patientPortal.actions.viewDetails', 'View Details')}
                               </Button>
                               {!prescription.isDownloaded ? (
-                                <Button size="sm" variant="outline" onClick={() => handleDownloadPrescription(prescription)}>
+                                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => handleDownloadPrescription(prescription)}>
                                   {t('common.download', 'Download')}
                                 </Button>
                               ) : (
-                                <Button size="sm" variant="outline" disabled>
+                                <Button size="sm" variant="outline" className="w-full sm:w-auto" disabled>
                                   {t('patientPortal.actions.downloaded', 'Downloaded')}
                                 </Button>
                               )}
                               {prescription.status === 'active' && (
                                 <Button
                                   size="sm"
+                                  className="w-full sm:w-auto"
                                   onClick={() => handleRequestPrescriptionRefill(prescription)}
                                   disabled={isRequestingRefillId === prescription.id}
                                 >
@@ -4749,16 +4751,17 @@ const PatientPortal = () => {
                           <div className="space-y-3">
                             {fetchedInvestigationRequests.map((request) => (
                               <div key={request.id} className="p-3 rounded-lg border border-border bg-muted/20">
-                                <div className="flex items-start justify-between gap-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="min-w-0 flex-1">
                                     <p className="text-sm font-medium">{request.doctor}</p>
                                     <p className="text-xs text-muted-foreground">{formatDateTime(request.date)}</p>
                                     <p className="text-sm whitespace-pre-wrap mt-2">{request.details}</p>
                                   </div>
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap sm:justify-end">
                                     <Button
                                       size="sm"
                                       variant="outline"
+                                      className="flex-1 sm:flex-none"
                                       onClick={() => handleViewInvestigationDetails(request)}
                                     >
                                       {t('patientPortal.actions.viewDetails', 'View Details')}
@@ -4766,6 +4769,7 @@ const PatientPortal = () => {
                                     <Button
                                       size="sm"
                                       variant="outline"
+                                      className="flex-1 sm:flex-none"
                                       onClick={() => handleDownloadInvestigationRequest(request)}
                                     >
                                       {t('common.download', 'Download')}
@@ -4831,7 +4835,7 @@ const PatientPortal = () => {
                         ) : (
                           <div className="space-y-3">
                             {healthRecords.map((record) => (
-                              <div key={record.id} className="flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors">
+                              <div key={record.id} className="flex flex-col gap-3 p-4 rounded-lg border border-border transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex items-center gap-3 flex-1 min-w-0">
                                   <FileText className="w-8 h-8 text-primary flex-shrink-0" />
                                   <div className="flex-1 min-w-0">
@@ -4845,7 +4849,7 @@ const PatientPortal = () => {
                                     )}
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                                   <Button
                                     size="icon"
                                     variant="ghost"
