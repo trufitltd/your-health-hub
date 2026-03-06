@@ -222,16 +222,18 @@ export default function DoctorDiscovery() {
       if (checkTimes.length === 0) return [];
       const uniqueDates = Array.from(new Set(checkTimes.map(({ date }) => date)));
 
-      // Get active doctors first
-      const { data: activeDoctors, error: doctorError } = await supabase
-        .from('doctors')
-        .select('id')
-        .eq('is_active', true);
-      
-      if (doctorError) throw doctorError;
-      if (!activeDoctors || activeDoctors.length === 0) return [];
+      // Use approved doctors (booking eligibility), not stale doctors.is_active.
+      const { data: approvedDoctors, error: approvedError } = await supabase
+        .from('doctor_registrations')
+        .select('user_id')
+        .eq('verification_status', 'approved');
 
-      const activeDoctorIds = activeDoctors.map(d => d.id);
+      if (approvedError) throw approvedError;
+      if (!approvedDoctors || approvedDoctors.length === 0) return [];
+
+      const activeDoctorIds = approvedDoctors
+        .map((doctor) => doctor.user_id)
+        .filter(Boolean) as string[];
       const doctorSet = new Set<string>();
 
       // Check each doctor
@@ -379,13 +381,6 @@ export default function DoctorDiscovery() {
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
         registrationRows.map(async (doctor) => {
-          // Fetch doctor availability status
-          const { data: doctorStatus } = await supabase
-            .from('doctors')
-            .select('is_active')
-            .eq('id', doctor.user_id)
-            .single();
-
           // Check if doctor has any available schedules
           const { data: schedules } = await supabase
             .from('doctor_schedules')
@@ -405,7 +400,6 @@ export default function DoctorDiscovery() {
           const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b) / ratings.length : 0;
 
           const hasAvailableSchedules = (schedules || []).length > 0;
-          const isActive = doctorStatus?.is_active !== false;
           const preferredConsultationLanguages = Array.isArray(doctor.preferred_consultation_languages)
             ? doctor.preferred_consultation_languages
               .map((language) => normalizeConsultationLanguage(String(language)))
@@ -432,7 +426,8 @@ export default function DoctorDiscovery() {
             rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
             bio_translations: localizedBioTranslations,
             preferred_consultation_languages: preferredConsultationLanguages,
-            is_active: isActive && hasAvailableSchedules, // Only active if both conditions are true
+            // Bookable when doctor is approved and has at least one available schedule.
+            is_active: hasAvailableSchedules,
           };
         })
       );
