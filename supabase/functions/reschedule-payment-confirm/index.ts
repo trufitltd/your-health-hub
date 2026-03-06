@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { PaymentService } from '../_shared/services/PaymentService.ts';
 import { WalletService } from '../_shared/services/WalletService.ts';
+import { DEFAULT_BOOKING_DURATION_MINUTES } from '../_shared/marketplace-types.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -263,7 +264,14 @@ serve(async (req) => {
     const proposedDurationRaw = Number(paymentMetadata.proposed_duration);
     const proposedDuration = Number.isFinite(proposedDurationRaw) && proposedDurationRaw > 0
       ? Math.max(5, Math.round(proposedDurationRaw))
-      : Math.max(5, Math.round(Number(appointment.reschedule_proposed_duration_minutes || appointment.duration_minutes || 30)));
+      : Math.max(
+        5,
+        Math.round(Number(
+          appointment.reschedule_proposed_duration_minutes
+          || appointment.duration_minutes
+          || DEFAULT_BOOKING_DURATION_MINUTES,
+        )),
+      );
 
     const proposedFinalPriceRaw = Number(paymentMetadata.proposed_price);
     const proposedFinalPrice = Number.isFinite(proposedFinalPriceRaw) && proposedFinalPriceRaw > 0
