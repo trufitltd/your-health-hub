@@ -219,15 +219,11 @@ export const getFormattedSchedule = async (doctorId: string) => {
  */
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
-    const defaultSchedules = [
-      { day_of_week: 0, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Sunday
-      { day_of_week: 1, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Monday
-      { day_of_week: 2, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Tuesday
-      { day_of_week: 3, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Wednesday
-      { day_of_week: 4, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Thursday
-      { day_of_week: 5, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Friday
-      { day_of_week: 6, start_time: DEFAULT_SCHEDULE_START, end_time: DEFAULT_SCHEDULE_END }, // Saturday
-    ];
+    const defaultSchedules = DEFAULT_SCHEDULE_DAYS.map((dayOfWeek) => ({
+      day_of_week: dayOfWeek,
+      start_time: DEFAULT_SCHEDULE_START,
+      end_time: DEFAULT_SCHEDULE_END,
+    }));
 
     // Direct insert without checking for existing schedules
     const scheduleData = defaultSchedules.map(schedule => ({
@@ -252,6 +248,18 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
       console.error('Error creating default schedule:', error);
       // Don't throw error, just log it - schedule can be created later
       return [];
+    }
+
+    // If defaults exist, make doctor discoverable for booking.
+    const hasDefaults = (data || []).length > 0;
+    if (hasDefaults) {
+      const { error: activateError } = await supabase
+        .from('doctors')
+        .update({ is_active: true })
+        .eq('id', doctorId);
+      if (activateError) {
+        console.warn('Failed to auto-activate doctor after default schedule seed:', activateError);
+      }
     }
 
     return (data || []) as DoctorSchedule[];

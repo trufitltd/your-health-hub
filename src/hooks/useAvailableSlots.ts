@@ -63,33 +63,67 @@ export const useDoctors = () => {
   return useQuery({
     queryKey: ['doctors'],
     queryFn: async () => {
-      // Fetch doctors that are both active and approved
-      const { data: doctors, error: doctorsError } = await supabase
-        .from('doctors')
-        .select('id, name, specialty, email, phone, bio, avatar_url')
-        .eq('is_active', true)
-        .order('name');
-      
-      if (doctorsError) {
-        console.error('Error fetching doctors:', doctorsError);
-        throw doctorsError;
-      }
-
-      // Filter to only approved doctors by joining with doctor_registrations
+      // Approved registrations are the source-of-truth for discovery eligibility.
       const { data: registrations, error: regsError } = await supabase
         .from('doctor_registrations')
-        .select('user_id')
+        .select('user_id, full_name, specialty, email, phone_number, bio, profile_picture_url')
         .eq('verification_status', 'approved');
 
       if (regsError) {
         console.error('Error fetching doctor registrations:', regsError);
-        // Still return doctors if registration fetch fails (graceful degradation)
-        return (doctors || []) as Doctor[];
+        throw regsError;
       }
 
-      const approvedUserIds = new Set((registrations || []).map(r => r.user_id));
-      
-      return (doctors || []).filter(doc => approvedUserIds.has(doc.id)) as Doctor[];
+      const approvedRows = (registrations || []) as Array<{
+        user_id: string;
+        full_name?: string | null;
+        specialty?: string | null;
+        email?: string | null;
+        phone_number?: string | null;
+        bio?: string | null;
+        profile_picture_url?: string | null;
+      }>;
+
+      const approvedIds = approvedRows.map((row) => row.user_id).filter(Boolean);
+      if (approvedIds.length === 0) return [];
+
+      const { data: availableSchedules, error: schedulesError } = await supabase
+        .from('doctor_schedules')
+        .select('doctor_id')
+        .in('doctor_id', approvedIds)
+        .eq('is_available', true);
+
+      if (schedulesError) {
+        console.error('Error fetching doctor schedules:', schedulesError);
+        throw schedulesError;
+      }
+
+      const availableDoctorIds = new Set((availableSchedules || []).map((row: any) => row.doctor_id));
+      const availableApprovedRows = approvedRows.filter((row) => availableDoctorIds.has(row.user_id));
+      if (availableApprovedRows.length === 0) return [];
+
+      // Enrich from public.doctors when present; fallback to registration fields.
+      const { data: doctors } = await supabase
+        .from('doctors')
+        .select('id, name, specialty, email, phone, bio, avatar_url')
+        .in('id', availableApprovedRows.map((row) => row.user_id));
+
+      const doctorsById = new Map((doctors || []).map((doc: any) => [doc.id as string, doc]));
+
+      return availableApprovedRows
+        .map((row) => {
+          const synced = doctorsById.get(row.user_id);
+          return {
+            id: row.user_id,
+            name: (synced?.name as string | undefined) || row.full_name || 'Doctor',
+            specialty: (synced?.specialty as string | undefined) || row.specialty || 'General Practice',
+            email: (synced?.email as string | undefined) || row.email || undefined,
+            phone: (synced?.phone as string | undefined) || row.phone_number || undefined,
+            bio: (synced?.bio as string | undefined) || row.bio || undefined,
+            avatar_url: (synced?.avatar_url as string | undefined) || row.profile_picture_url || undefined,
+          } as Doctor;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
   });
 };
@@ -148,7 +182,72 @@ export const useAvailableSlots = (doctorId?: string, daysAhead: number = 7) => {
       
       // Filter to only show slots for dates within daysAhead
       const today = new Date();
-      const slots: AvailableSlot[] = data || [];
+      let slots: AvailableSlot[] = data || [];
+
+      // Fallback path: if the view returns nothing (often due stale doctors.is_active),
+      // build slots directly from available schedules.
+      if (slots.length === 0) {
+        let schedulesQuery = supabase
+          .from('doctor_schedules')
+          .select('id, doctor_id, day_of_week, start_time, end_time, slot_duration_minutes, max_patients_per_slot')
+          .eq('is_available', true);
+
+        if (doctorId) {
+          schedulesQuery = schedulesQuery.eq('doctor_id', doctorId);
+        }
+
+        const { data: fallbackSchedules, error: fallbackError } = await schedulesQuery;
+        if (!fallbackError && fallbackSchedules) {
+          const doctorIds = Array.from(
+            new Set(
+              (fallbackSchedules as Array<{ doctor_id?: string | null }>)
+                .map((row) => row.doctor_id || '')
+                .filter(Boolean),
+            ),
+          ) as string[];
+
+          const { data: doctorRows } = await supabase
+            .from('doctors')
+            .select('id, name, specialty')
+            .in('id', doctorIds);
+
+          const { data: registrationRows } = await supabase
+            .from('doctor_registrations')
+            .select('user_id, full_name, specialty')
+            .in('user_id', doctorIds)
+            .eq('verification_status', 'approved');
+
+          const doctorsById = new Map((doctorRows || []).map((row: any) => [row.id as string, row]));
+          const regsById = new Map((registrationRows || []).map((row: any) => [row.user_id as string, row]));
+
+          slots = fallbackSchedules
+            .filter((row: any) => {
+              const docId = String(row.doctor_id || '');
+              return docId && (doctorsById.has(docId) || regsById.has(docId));
+            })
+            .map((row: any) => ({
+              schedule_id: row.id,
+              doctor_id: row.doctor_id,
+              doctor_name:
+                doctorsById.get(row.doctor_id)?.name
+                || regsById.get(row.doctor_id)?.full_name
+                || 'Doctor',
+              specialty:
+                doctorsById.get(row.doctor_id)?.specialty
+                || regsById.get(row.doctor_id)?.specialty
+                || 'General Practice',
+              day_of_week: Number(row.day_of_week),
+              start_time: String(row.start_time || '').slice(0, 5),
+              end_time: String(row.end_time || '').slice(0, 5),
+              slot_duration_minutes: Number(row.slot_duration_minutes || 30),
+              max_patients_per_slot: Number(row.max_patients_per_slot || 1),
+              booked_count: 0,
+              available_slots: Number(row.max_patients_per_slot || 1),
+            })) as AvailableSlot[];
+        } else if (fallbackError) {
+          console.error('Fallback schedule query failed:', fallbackError);
+        }
+      }
       
       console.log(`Fetched ${slots.length} available slots for doctor ${doctorId || 'all'}`);
       
