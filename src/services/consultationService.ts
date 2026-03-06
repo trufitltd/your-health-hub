@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { DEFAULT_CONSULTATION_TYPE } from '@/config/marketplaceDefaults';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export interface ConsultationSession {
@@ -45,7 +46,7 @@ class ConsultationService {
         appointment_id: appointmentId,
         patient_id: patientId,
         doctor_id: doctorId,
-        consultation_type: consultationType || 'video',
+        consultation_type: consultationType || DEFAULT_CONSULTATION_TYPE,
         status: 'waiting',
         started_at: new Date().toISOString(),
       })

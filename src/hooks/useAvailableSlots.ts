@@ -6,6 +6,7 @@ import {
   normalizeDurationMinutes,
   type AppointmentIntervalRow,
 } from '@/lib/appointmentIntervals';
+import { DEFAULT_BOOKING_DURATION_MINUTES } from '@/config/marketplaceDefaults';
 
 export interface Doctor {
   id: string;
@@ -317,7 +318,7 @@ export const checkSlotAvailability = async (
   doctorId: string,
   date: string, // YYYY-MM-DD format
   time: string,  // HH:MM format
-  durationMinutes: number = 30,
+  durationMinutes: number = DEFAULT_BOOKING_DURATION_MINUTES,
   excludeAppointmentId?: string,
 ): Promise<boolean> => {
   try {
@@ -336,7 +337,7 @@ export const checkSlotAvailability = async (
     
     if (error) throw error;
 
-    const safeDuration = normalizeDurationMinutes(durationMinutes, 30);
+    const safeDuration = normalizeDurationMinutes(durationMinutes, DEFAULT_BOOKING_DURATION_MINUTES);
     const hasConflict = isSlotBlockedByAppointments(
       time,
       safeDuration,
@@ -357,9 +358,9 @@ export const checkSlotAvailability = async (
 export function generateTimeSlots(
   startTime: string, // HH:MM format
   endTime: string,   // HH:MM format
-  durationMinutes: number = 30
+  durationMinutes: number = DEFAULT_BOOKING_DURATION_MINUTES
 ): string[] {
-  const safeDurationMinutes = normalizeDurationMinutes(durationMinutes, 30);
+  const safeDurationMinutes = normalizeDurationMinutes(durationMinutes, DEFAULT_BOOKING_DURATION_MINUTES);
   const slots: string[] = [];
   const [startHour, startMin] = startTime.split(':').map(Number);
   const [endHour, endMin] = endTime.split(':').map(Number);

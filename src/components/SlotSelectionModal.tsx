@@ -22,6 +22,11 @@ import {
   normalizeDurationMinutes,
   type AppointmentIntervalRow,
 } from '@/lib/appointmentIntervals';
+import {
+  DEFAULT_BOOKING_DURATION_MINUTES,
+  DEFAULT_CONSULTATION_TYPE,
+  DEFAULT_PRICING_FEATURE_FLAGS,
+} from '@/config/marketplaceDefaults';
 import { AvailabilityService } from '@/services/AvailabilityService';
 
 interface SlotSelectionModalProps {
@@ -106,6 +111,14 @@ export function SlotSelectionModal({
     queryFn: () => AvailabilityService.getAllowedDurations(),
   });
 
+  const { data: featureFlags = DEFAULT_PRICING_FEATURE_FLAGS } = useQuery({
+    queryKey: ['pricing-feature-flags-slot-selection-modal'],
+    queryFn: () => AvailabilityService.getFeatureFlags(),
+  });
+
+  const durationPricingEnabled = featureFlags.duration_pricing;
+  const consultationTypePricingEnabled = featureFlags.consultation_type_pricing;
+
   const hasConfiguredDurations = allowedDurations.length > 0;
 
   // Fetch blocking appointments for selected doctor and date
@@ -168,30 +181,42 @@ export function SlotSelectionModal({
 
   const effectiveDurationMinutes = useMemo(() => {
     if (mode !== 'reschedule') return null;
+    if (!durationPricingEnabled) return DEFAULT_BOOKING_DURATION_MINUTES;
     if (typeof selectedDurationMinutes === 'number' && Number.isFinite(selectedDurationMinutes)) {
       return selectedDurationMinutes;
     }
     if (typeof currentDurationMinutes === 'number' && Number.isFinite(currentDurationMinutes)) {
       return currentDurationMinutes;
     }
-    return 30;
-  }, [mode, selectedDurationMinutes, currentDurationMinutes]);
+    return DEFAULT_BOOKING_DURATION_MINUTES;
+  }, [mode, selectedDurationMinutes, currentDurationMinutes, durationPricingEnabled]);
 
   const durationOptions = useMemo(() => {
     if (mode !== 'reschedule') return [];
+    if (!durationPricingEnabled) return [];
     if (!hasConfiguredDurations) return [];
 
     const options = allowedDurations;
     const floor = typeof currentDurationMinutes === 'number' && Number.isFinite(currentDurationMinutes)
       ? currentDurationMinutes
-      : 30;
+      : DEFAULT_BOOKING_DURATION_MINUTES;
     const upgraded = options.filter((value) => value >= floor);
 
     return upgraded;
-  }, [mode, currentDurationMinutes, allowedDurations, hasConfiguredDurations]);
+  }, [mode, currentDurationMinutes, allowedDurations, hasConfiguredDurations, durationPricingEnabled]);
 
   useEffect(() => {
-    if (mode !== 'reschedule' || !onDurationChange || durationOptions.length === 0) return;
+    if (mode !== 'reschedule' || !onDurationChange) return;
+
+    if (!durationPricingEnabled) {
+      if (selectedDurationMinutes !== DEFAULT_BOOKING_DURATION_MINUTES) {
+        onDurationChange(DEFAULT_BOOKING_DURATION_MINUTES);
+        setSelectedTime(null);
+      }
+      return;
+    }
+
+    if (durationOptions.length === 0) return;
     if (
       typeof effectiveDurationMinutes === 'number'
       && durationOptions.includes(effectiveDurationMinutes)
@@ -200,7 +225,16 @@ export function SlotSelectionModal({
     }
 
     onDurationChange(durationOptions[0]);
-  }, [mode, onDurationChange, durationOptions, effectiveDurationMinutes]);
+    setSelectedTime(null);
+  }, [mode, onDurationChange, durationOptions, effectiveDurationMinutes, durationPricingEnabled, selectedDurationMinutes]);
+
+  useEffect(() => {
+    if (mode !== 'reschedule' || !onConsultationTypeChange) return;
+    if (!consultationTypePricingEnabled && selectedConsultationType !== DEFAULT_CONSULTATION_TYPE) {
+      onConsultationTypeChange(DEFAULT_CONSULTATION_TYPE);
+      setSelectedTime(null);
+    }
+  }, [mode, onConsultationTypeChange, consultationTypePricingEnabled, selectedConsultationType]);
 
   // Get available dates for selected doctor
   // Only show dates where the doctor has schedules that are marked as available
@@ -239,7 +273,7 @@ export function SlotSelectionModal({
       const slotDuration = mode === 'reschedule'
         ? (effectiveDurationMinutes || schedule.slot_duration_minutes)
         : schedule.slot_duration_minutes;
-      const normalizedDuration = normalizeDurationMinutes(slotDuration, 30);
+      const normalizedDuration = normalizeDurationMinutes(slotDuration, DEFAULT_BOOKING_DURATION_MINUTES);
 
       const slots = generateTimeSlots(
         schedule.start_time,
@@ -278,7 +312,10 @@ export function SlotSelectionModal({
   const blockedStartTimes = useMemo(() => {
     if (!timeSlots.length) return new Set<string>();
 
-    const fallbackDuration = normalizeDurationMinutes(effectiveDurationMinutes || 30, 30);
+    const fallbackDuration = normalizeDurationMinutes(
+      effectiveDurationMinutes || DEFAULT_BOOKING_DURATION_MINUTES,
+      DEFAULT_BOOKING_DURATION_MINUTES,
+    );
     const blocked = new Set<string>();
 
     timeSlots.forEach((time) => {
@@ -314,6 +351,7 @@ export function SlotSelectionModal({
   };
 
   const durationSelectionValid = mode !== 'reschedule'
+    || !durationPricingEnabled
     || (typeof effectiveDurationMinutes === 'number' && allowedDurations.includes(effectiveDurationMinutes));
   const canConfirm = selectedDoctor && selectedDate && selectedTime && durationSelectionValid;
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
@@ -379,12 +417,12 @@ export function SlotSelectionModal({
             )}
           </div>
 
-          {mode === 'reschedule' && durationOptions.length > 0 && (
+          {mode === 'reschedule' && durationPricingEnabled && durationOptions.length > 0 && (
             <div>
               <Label className="text-sm font-medium mb-2 block">Duration (Upgrade Only)</Label>
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                 {durationOptions.map((duration) => {
-                  const selected = (effectiveDurationMinutes || 30) === duration;
+                  const selected = (effectiveDurationMinutes || DEFAULT_BOOKING_DURATION_MINUTES) === duration;
                   return (
                     <button
                       key={duration}
@@ -405,13 +443,25 @@ export function SlotSelectionModal({
             </div>
           )}
 
-          {mode === 'reschedule' && !hasConfiguredDurations && (
+          {mode === 'reschedule' && !durationPricingEnabled && (
+            <div className="rounded border border-border p-3 text-sm text-muted-foreground">
+              Duration: {DEFAULT_BOOKING_DURATION_MINUTES} min (default).
+            </div>
+          )}
+
+          {mode === 'reschedule' && durationPricingEnabled && !hasConfiguredDurations && (
             <div className="rounded border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               No allowed durations are configured.
             </div>
           )}
 
-          {mode === 'reschedule' && currentConsultationType && (
+          {mode === 'reschedule' && !consultationTypePricingEnabled && (
+            <div className="rounded border border-border p-3 text-sm text-muted-foreground">
+              Consultation mode: {DEFAULT_CONSULTATION_TYPE.charAt(0).toUpperCase() + DEFAULT_CONSULTATION_TYPE.slice(1)} (default).
+            </div>
+          )}
+
+          {mode === 'reschedule' && consultationTypePricingEnabled && currentConsultationType && (
             <div>
               <Label className="text-sm font-medium mb-2 block">Consultation Mode (Upgrade Only)</Label>
               <p className="text-xs text-muted-foreground mb-2">Current: {currentConsultationType.charAt(0).toUpperCase() + currentConsultationType.slice(1)}</p>
@@ -557,12 +607,16 @@ export function SlotSelectionModal({
                   <>
                     <div className="flex items-center gap-2">
                       <span className="font-medium">Duration:</span>
-                      {effectiveDurationMinutes || 30} min
+                      {durationPricingEnabled
+                        ? `${effectiveDurationMinutes || DEFAULT_BOOKING_DURATION_MINUTES} min`
+                        : `${DEFAULT_BOOKING_DURATION_MINUTES} min (default)`}
                     </div>
-                    {selectedConsultationType && (
+                    {(selectedConsultationType || !consultationTypePricingEnabled) && (
                       <div className="flex items-center gap-2">
                         <span className="font-medium">Mode:</span>
-                        {selectedConsultationType.charAt(0).toUpperCase() + selectedConsultationType.slice(1)}
+                        {consultationTypePricingEnabled
+                          ? selectedConsultationType!.charAt(0).toUpperCase() + selectedConsultationType!.slice(1)
+                          : `${DEFAULT_CONSULTATION_TYPE.charAt(0).toUpperCase() + DEFAULT_CONSULTATION_TYPE.slice(1)} (default)`}
                       </div>
                     )}
                     {reschedulePricingPreview && (
