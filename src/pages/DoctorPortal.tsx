@@ -74,6 +74,7 @@ import {
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
+import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
 
 const PROFILE_BIO_TRANSLATION_LANGUAGES = [
   { code: 'ha', label: 'Hausa' },
@@ -1479,6 +1480,51 @@ const DoctorPortal = () => {
     }
   };
 
+  const getConsultationLanguageForAppointment = (apt: {
+    notes?: string | null;
+    price_breakdown?: Record<string, unknown> | null;
+    consultation_language?: string | null;
+    consultationLanguage?: string | null;
+  }) => {
+    const fromNotes = extractConsultationLanguageFromNotes(apt.notes);
+    if (fromNotes) return fromNotes;
+
+    const breakdown = (apt.price_breakdown || {}) as Record<string, unknown>;
+    const directCandidates = [
+      apt.consultation_language,
+      apt.consultationLanguage,
+      breakdown.consultation_language,
+      breakdown.consultationLanguage,
+      breakdown.selected_consultation_language,
+      breakdown.selectedConsultationLanguage,
+      breakdown.selected_language,
+      breakdown.selectedLanguage,
+      breakdown.language,
+    ];
+    const metadata = (breakdown.metadata && typeof breakdown.metadata === 'object')
+      ? (breakdown.metadata as Record<string, unknown>)
+      : null;
+    const nestedCandidates = metadata
+      ? [
+        metadata.consultation_language,
+        metadata.consultationLanguage,
+        metadata.selected_consultation_language,
+        metadata.selectedConsultationLanguage,
+        metadata.selected_language,
+        metadata.selectedLanguage,
+        metadata.language,
+      ]
+      : [];
+
+    for (const candidate of [...directCandidates, ...nestedCandidates]) {
+      const normalized = normalizeConsultationLanguage(
+        typeof candidate === 'string' ? candidate : null
+      );
+      if (normalized) return normalized;
+    }
+    return '';
+  };
+
   const submitReschedule = async () => {
     if (!rescheduleAppointmentId || !rescheduleAppointment) return;
     if (!rescheduleDate || !rescheduleTime) {
@@ -2162,6 +2208,7 @@ const DoctorPortal = () => {
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={calendarFocusedAppointment.patient_name || ''}
                       status={calendarFocusedAppointment.status}
+                      consultationLanguage={getConsultationLanguageForAppointment(calendarFocusedAppointment as any)}
                       variant="default"
                       size="sm"
                     />
@@ -3449,6 +3496,7 @@ const DoctorPortal = () => {
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
                                       status={apt.status}
+                                      consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
                                       variant="default"
                                       size="sm"
                                       className="gradient-primary w-full sm:w-auto"
@@ -3697,6 +3745,7 @@ const DoctorPortal = () => {
                                       appointmentId={apt.id}
                                       participantName={apt.patient_name || ''}
                                       status={apt.status}
+                                      consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
                                       variant="default"
                                       size="sm"
                                     />

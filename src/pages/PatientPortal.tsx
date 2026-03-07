@@ -73,6 +73,7 @@ import { createPrescriptionPdfBlob } from '@/lib/pdf';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
+import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
 import {
   DEFAULT_BOOKING_DURATION_MINUTES,
   DEFAULT_CONSULTATION_TYPE,
@@ -1641,6 +1642,50 @@ const PatientPortal = () => {
     if (type === 'chat' || type === 'voice' || type === 'video') return type;
     return DEFAULT_CONSULTATION_TYPE;
   };
+  const getConsultationLanguageForAppointment = (apt: {
+    notes?: string | null;
+    price_breakdown?: Record<string, unknown> | null;
+    consultation_language?: string | null;
+    consultationLanguage?: string | null;
+  }) => {
+    const fromNotes = extractConsultationLanguageFromNotes(apt.notes);
+    if (fromNotes) return fromNotes;
+
+    const breakdown = (apt.price_breakdown || {}) as Record<string, unknown>;
+    const directCandidates = [
+      apt.consultation_language,
+      apt.consultationLanguage,
+      breakdown.consultation_language,
+      breakdown.consultationLanguage,
+      breakdown.selected_consultation_language,
+      breakdown.selectedConsultationLanguage,
+      breakdown.selected_language,
+      breakdown.selectedLanguage,
+      breakdown.language,
+    ];
+    const metadata = (breakdown.metadata && typeof breakdown.metadata === 'object')
+      ? (breakdown.metadata as Record<string, unknown>)
+      : null;
+    const nestedCandidates = metadata
+      ? [
+        metadata.consultation_language,
+        metadata.consultationLanguage,
+        metadata.selected_consultation_language,
+        metadata.selectedConsultationLanguage,
+        metadata.selected_language,
+        metadata.selectedLanguage,
+        metadata.language,
+      ]
+      : [];
+
+    for (const candidate of [...directCandidates, ...nestedCandidates]) {
+      const normalized = normalizeConsultationLanguage(
+        typeof candidate === 'string' ? candidate : null
+      );
+      if (normalized) return normalized;
+    }
+    return '';
+  };
   const {
     data: reschedulePreviewFinalPrice,
     isLoading: reschedulePreviewLoading,
@@ -2914,6 +2959,7 @@ const PatientPortal = () => {
                       appointmentId={calendarFocusedAppointment.id}
                       participantName={getDoctorNameById((calendarFocusedAppointment as { doctor_id?: string }).doctor_id, calendarFocusedAppointment.specialist_name)}
                       status={calendarFocusedAppointment.status}
+                      consultationLanguage={getConsultationLanguageForAppointment(calendarFocusedAppointment as any)}
                       variant="default"
                       size="sm"
                     />
@@ -3825,6 +3871,7 @@ const PatientPortal = () => {
                                   appointmentId={apt.id}
                                   participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                                   status={apt.status}
+                                  consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
                                   variant="default"
                                   size="sm"
                                   className="w-full sm:w-auto"
@@ -4339,6 +4386,7 @@ const PatientPortal = () => {
                                       appointmentId={apt.id}
                                       participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                                       status={apt.status}
+                                      consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
                                       variant="default"
                                       size="sm"
                                       className="gradient-primary"
@@ -4571,6 +4619,7 @@ const PatientPortal = () => {
                                       appointmentId={apt.id}
                                       participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
                                       status={apt.status}
+                                      consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
                                       variant="default"
                                       size="sm"
                                     />
