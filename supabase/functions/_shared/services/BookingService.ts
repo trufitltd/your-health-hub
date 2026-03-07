@@ -40,6 +40,12 @@ const parseExperienceYears = (value: unknown): number | null => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
+const normalizeConsultationLanguage = (value: string | null | undefined): string | null => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return normalized || null;
+};
+
 export class BookingService {
   constructor(
     private readonly supabase: SupabaseClient,
@@ -291,6 +297,7 @@ export class BookingService {
       final_price: price.finalPrice,
       doctor_type: doctor.doctorType,
       consultation_type: consultationType,
+      consultation_language: normalizeConsultationLanguage(input.consultationLanguage),
       duration_minutes: slot.durationMinutes,
       tier_id: doctor.tierId,
       tier_name: doctor.tierName,

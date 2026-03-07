@@ -324,11 +324,30 @@ const SPECIALTY_TRANSLATIONS: Record<string, Partial<Record<AppLanguage, string>
 
 const normalizeSpecialtyKey = (value: string) =>
   value
+    .replace(/_/g, ' ')
     .toLowerCase()
     .replace(/[()]/g, '')
     .replace(/[^\w\s/&-]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+const GENERAL_PRACTITIONER_SPECIALTY_KEYS = new Set([
+  'general',
+  'general practitioner',
+  'general practice',
+  'general medicine',
+  'medical officer',
+  'medical officers',
+]);
+
+const toCanonicalSpecialty = (specialty: string | null | undefined) => {
+  const normalized = normalizeSpecialtyKey(specialty || '');
+  if (!normalized) return '';
+  if (GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalized)) {
+    return 'general practitioner';
+  }
+  return normalized;
+};
 
 const getLocalizedBio = (registration: Record<string, unknown> | null | undefined, language: AppLanguage) => {
   if (!registration || language === 'en') {
@@ -493,7 +512,7 @@ export default function SpecialistsPage() {
     const values = Array.from(
       new Set(
         doctors
-          .map((doctor) => doctor.specialty)
+          .map((doctor) => toCanonicalSpecialty(doctor.specialty))
           .filter((specialty) => specialty && specialty.trim().length > 0)
       )
     ).sort();
@@ -510,17 +529,19 @@ export default function SpecialistsPage() {
   };
 
   const filteredDoctors = doctors.filter((doctor) => {
+    const canonicalSpecialty = toCanonicalSpecialty(doctor.specialty);
     const localizedSpecialty = getLocalizedSpecialty(
       doctor.registration,
-      doctor.specialty,
+      canonicalSpecialty || doctor.specialty,
       language,
       t('specialists.defaults.generalPractice', 'General Practice')
     );
     const query = searchQuery.toLowerCase();
     const matchesSearch = doctor.name.toLowerCase().includes(query) ||
       (doctor.specialty || '').toLowerCase().includes(query) ||
+      canonicalSpecialty.toLowerCase().includes(query) ||
       localizedSpecialty.toLowerCase().includes(query);
-    const matchesSpecialty = selectedSpecialty === '__all__' || doctor.specialty === selectedSpecialty;
+    const matchesSpecialty = selectedSpecialty === '__all__' || canonicalSpecialty === selectedSpecialty;
     return matchesSearch && matchesSpecialty;
   });
 
@@ -585,7 +606,9 @@ export default function SpecialistsPage() {
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 )}
               >
-                {formatSpecialtyLabel(specialty)}
+                {specialty.label === allSpecialtiesLabel
+                  ? allSpecialtiesLabel
+                  : formatSpecialtyLabel(translateSpecialty(specialty.value))}
               </button>
             ))}
           </div>
@@ -637,7 +660,11 @@ export default function SpecialistsPage() {
                         t('specialists.defaults.generalPractice', 'General Practice')
                       )}
                     </p> */}
-                    <p className="text-sm text-primary">{formatSpecialtyLabel(doctor.specialty)}</p>
+                    <p className="text-sm text-primary">
+                      {formatSpecialtyLabel(
+                        translateSpecialty(toCanonicalSpecialty(doctor.specialty) || doctor.specialty)
+                      )}
+                    </p>
                     {doctor.experience && (
                       <p className="text-xs text-muted-foreground mt-1">
                         {t('specialists.card.experience', 'Experience')}: {doctor.experience} {t('specialists.card.years', 'years')}

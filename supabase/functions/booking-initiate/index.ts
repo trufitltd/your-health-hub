@@ -75,6 +75,7 @@ serve(async (req) => {
       preferredTime: payload.preferredTime,
       duration: payload.duration,
       consultationType: payload.consultationType,
+      consultationLanguage: payload.consultationLanguage,
       paymentMethod: payload.paymentMethod,
       notes: payload.notes,
     });
