@@ -36,6 +36,11 @@ import { ControlBar } from './ControlBar';
 import { DoctorNotesPanel } from './DoctorNotesPanel';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { translateToastText } from '@/lib/toastI18n';
+import {
+  extractConsultationLanguageFromNotes,
+  formatConsultationLanguageLabel,
+  normalizeConsultationLanguage
+} from '@/lib/consultationLanguage';
 
 interface Message {
   id: string;
@@ -50,19 +55,67 @@ interface ConsultationRoomProps {
   appointmentId: string;
   participantName: string;
   participantRole: 'doctor' | 'patient';
+  initialConsultationLanguage?: string | null;
   onEndCall: () => void;
 }
+
+const extractConsultationLanguageFromAppointment = (
+  appointmentData: { price_breakdown?: unknown; notes?: unknown } | null | undefined,
+): string | null => {
+  const fromNotes = extractConsultationLanguageFromNotes(appointmentData?.notes);
+  if (fromNotes) return fromNotes;
+
+  const breakdown = appointmentData?.price_breakdown;
+  if (!breakdown || typeof breakdown !== 'object') return null;
+  const map = breakdown as Record<string, unknown>;
+
+  const directCandidates = [
+    map.consultation_language,
+    map.consultationLanguage,
+    map.selected_consultation_language,
+    map.selectedConsultationLanguage,
+    map.selected_language,
+    map.selectedLanguage,
+    map.language,
+  ];
+
+  const metadata = (map.metadata && typeof map.metadata === 'object')
+    ? (map.metadata as Record<string, unknown>)
+    : null;
+
+  const nestedCandidates = metadata
+    ? [
+      metadata.consultation_language,
+      metadata.consultationLanguage,
+      metadata.selected_consultation_language,
+      metadata.selectedConsultationLanguage,
+      metadata.selected_language,
+      metadata.selectedLanguage,
+      metadata.language,
+    ]
+    : [];
+
+  for (const candidate of [...directCandidates, ...nestedCandidates]) {
+    const normalized = normalizeConsultationLanguage(
+      typeof candidate === 'string' ? candidate : null
+    );
+    if (normalized) return normalized;
+  }
+
+  return null;
+};
 
 export function ConsultationRoom({
   appointmentId,
   participantName,
   participantRole,
+  initialConsultationLanguage = null,
   onEndCall
 }: ConsultationRoomProps) {
   // Consultations are uniform; default to video+audio enabled internally
   const consultationType: 'video' | 'audio' | 'chat' = 'video';
   const { user } = useAuth();
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
   const ui = (text: string) => translateToastText(text, language);
   
   // Track user presence during consultation
@@ -103,6 +156,9 @@ export function ConsultationRoom({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [appointmentConsultationLanguage, setAppointmentConsultationLanguage] = useState<string | null>(
+    normalizeConsultationLanguage(initialConsultationLanguage) || null
+  );
   const [waitingForPatient, setWaitingForPatient] = useState(false);
   const [isCallStarted, setIsCallStarted] = useState(false);
   const [shouldInitializeWebRTC, setShouldInitializeWebRTC] = useState(false);
@@ -131,6 +187,7 @@ export function ConsultationRoom({
   const participantInitials = participantName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const myName = participantRole === 'doctor' ? 'Dr. You' : 'You';
   const myInitials = participantRole === 'doctor' ? 'DR' : 'PT';
+  const bookedConsultationLanguageLabel = formatConsultationLanguageLabel(appointmentConsultationLanguage);
 
   const renderAvatar = (
     imageUrl: string | null,
@@ -387,13 +444,17 @@ export function ConsultationRoom({
           
           const { data: appointmentData } = await supabase
             .from('appointments')
-            .select('patient_id, doctor_id')
+            .select('patient_id, doctor_id, price_breakdown, notes')
             .eq('id', appointmentId)
             .single();
 
           if (!appointmentData) {
             throw new Error('Appointment not found');
           }
+
+          setAppointmentConsultationLanguage((prev) => (
+            extractConsultationLanguageFromAppointment(appointmentData as { price_breakdown?: unknown; notes?: unknown }) || prev || null
+          ));
 
           session = await consultationService.createSession(
             appointmentId,
@@ -408,11 +469,14 @@ export function ConsultationRoom({
           console.log('[Session] About to fetch appointment data for id:', appointmentId);
           const { data: appointmentData, error: aptError } = await supabase
             .from('appointments')
-            .select('patient_id, doctor_id')
+            .select('patient_id, doctor_id, price_breakdown, notes')
             .eq('id', appointmentId)
             .single();
           console.log('[Session] Appointment fetch result - data:', appointmentData, 'error:', aptError);
           if (appointmentData) {
+            setAppointmentConsultationLanguage((prev) => (
+              extractConsultationLanguageFromAppointment(appointmentData as { price_breakdown?: unknown; notes?: unknown }) || prev || null
+            ));
             console.log('[Session] Calling loadAvatars with patient_id:', appointmentData.patient_id, 'doctor_id:', appointmentData.doctor_id);
             await loadAvatars(appointmentData.patient_id, appointmentData.doctor_id);
             console.log('[Session] loadAvatars completed');
@@ -1283,6 +1347,14 @@ export function ConsultationRoom({
           )}
 
           <div className="space-y-4">
+            <div className="rounded-lg border border-amber-300/60 bg-amber-500/20 px-4 py-3 text-center">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-100">
+                {t('consultation.room.languageNoticeTitle', 'Selected Consultation Language')}
+              </p>
+              <p className="text-lg font-extrabold text-amber-50">
+                {bookedConsultationLanguageLabel}
+              </p>
+            </div>
               <div className="flex items-center justify-center gap-3">
                 <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
               <h2 className="text-2xl font-semibold text-white">{ui('Waiting for Patient')}</h2>
@@ -1378,6 +1450,14 @@ export function ConsultationRoom({
           )}
 
           <div className="space-y-4">
+            <div className="rounded-lg border border-amber-300/60 bg-amber-500/20 px-4 py-3 text-center">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-100">
+                {t('consultation.room.languageNoticeTitle', 'Selected Consultation Language')}
+              </p>
+              <p className="text-lg font-extrabold text-amber-50">
+                {bookedConsultationLanguageLabel}
+              </p>
+            </div>
             <div className="flex items-center justify-center gap-3">
               <div className="w-3 h-3 bg-amber-500 rounded-full animate-pulse" />
               <h2 className="text-2xl font-semibold text-white">{ui('Waiting Room')}</h2>
@@ -1520,8 +1600,21 @@ export function ConsultationRoom({
             </div>
           </div>
 
+          {appointmentConsultationLanguage && (
+            <div className="absolute top-12 sm:top-14 left-3 right-3 z-30">
+              <div className="rounded-md border border-amber-300/60 bg-amber-500/25 px-3 py-2 text-center text-amber-50 shadow-sm">
+                <p className="text-[11px] sm:text-xs font-semibold uppercase tracking-wide">
+                  {t('consultation.room.languageNoticeTitle', 'Selected Consultation Language')}
+                </p>
+                <p className="text-sm sm:text-base font-bold">
+                  {formatConsultationLanguageLabel(appointmentConsultationLanguage)}
+                </p>
+              </div>
+            </div>
+          )}
+
           {participantRole === 'doctor' && !isNotesOpen && (
-            <div className="absolute top-14 left-3 right-3 z-30 flex sm:hidden items-center gap-2">
+            <div className={`${appointmentConsultationLanguage ? 'top-28' : 'top-14'} absolute left-3 right-3 z-30 flex sm:hidden items-center gap-2`}>
               <Button
                 variant="secondary"
                 size="sm"
