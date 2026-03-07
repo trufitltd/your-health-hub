@@ -844,6 +844,7 @@ export default function DoctorDiscovery() {
         doctorName: doctor.full_name,
         specialty: doctor.specialty,
         profilePicture: doctor.profile_picture_url,
+        consultationLanguage: filters.consultationLanguage || undefined,
       }
     });
   };
