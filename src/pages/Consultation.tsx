@@ -35,6 +35,7 @@ const Consultation = () => {
   // Get participant info from URL params (in production, this would come from the database)
   const participantName = searchParams.get('participant') ||
     (role === 'doctor' ? 'Sarah Johnson' : 'Dr. Emily Chen');
+  const bookedConsultationLanguage = searchParams.get('consultationLanguage');
 
   useEffect(() => {
     // Simulate loading appointment data
@@ -252,6 +253,7 @@ const Consultation = () => {
       appointmentId={appointmentId!}
       participantName={participantName}
       participantRole={role || 'patient'}
+      initialConsultationLanguage={bookedConsultationLanguage}
       onEndCall={handleEndCall}
     />
   );

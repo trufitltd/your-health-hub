@@ -49,6 +49,7 @@ export interface BookingInitiateInput {
   preferredTime?: string;
   duration?: number;
   consultationType?: 'chat' | 'voice' | 'video';
+  consultationLanguage?: string;
   paymentMethod?: 'paystack' | 'wallet' | 'hybrid';
   notes?: string;
 }
