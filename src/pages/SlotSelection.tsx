@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout } from '@/components/layout';
@@ -18,6 +18,10 @@ import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import {
+  formatConsultationLanguageLabel,
+  normalizeConsultationLanguage,
+} from '@/lib/consultationLanguage';
+import {
   DEFAULT_BOOKING_DURATION_MINUTES,
   DEFAULT_CONSULTATION_TYPE,
   DEFAULT_PRICING_FEATURE_FLAGS,
@@ -36,11 +40,27 @@ interface LocationState {
   doctorName?: string;
   specialty?: string;
   profilePicture?: string;
+  consultationLanguage?: string;
 }
 
 type BookedAppointmentRow = AppointmentIntervalRow & {
   time: string | null;
   duration_minutes: number | null;
+};
+
+const toConsultationLanguageList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeConsultationLanguage(String(item)))
+      .filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((item) => normalizeConsultationLanguage(item))
+      .filter(Boolean);
+  }
+  return [];
 };
 
 const toDateKey = (date: Date) => {
@@ -73,9 +93,13 @@ export default function SlotSelection() {
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedDuration, setSelectedDuration] = useState<number>(DEFAULT_BOOKING_DURATION_MINUTES);
   const [selectedConsultationType, setSelectedConsultationType] = useState<'chat' | 'voice' | 'video'>(DEFAULT_CONSULTATION_TYPE);
+  const [selectedConsultationLanguage, setSelectedConsultationLanguage] = useState<string>(() =>
+    normalizeConsultationLanguage(state?.consultationLanguage),
+  );
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const paystackFlowActiveRef = useRef(false);
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -127,6 +151,57 @@ export default function SlotSelection() {
     queryFn: () => AvailabilityService.getActiveConsultationTypes(),
   });
 
+  const { data: doctorConsultationLanguages = [] } = useQuery({
+    queryKey: ['doctor-consultation-languages', state.doctorId],
+    queryFn: async () => {
+      if (!state.doctorId) return [];
+
+      const [{ data: doctorData, error: doctorError }, { data: registrationData, error: registrationError }] = await Promise.all([
+        supabase
+          .from('doctors')
+          .select('preferred_consultation_languages')
+          .eq('id', state.doctorId)
+          .maybeSingle(),
+        supabase
+          .from('doctor_registrations')
+          .select('preferred_consultation_languages')
+          .eq('user_id', state.doctorId)
+          .maybeSingle(),
+      ]);
+
+      if (doctorError && registrationError) {
+        throw doctorError;
+      }
+
+      const doctorLanguages = toConsultationLanguageList(doctorData?.preferred_consultation_languages);
+      const registrationLanguages = toConsultationLanguageList(registrationData?.preferred_consultation_languages);
+
+      const merged = Array.from(new Set([...registrationLanguages, ...doctorLanguages]));
+      if (merged.length > 0) return merged;
+
+      const { data, error } = await supabase
+        .from('doctors')
+        .select('preferred_consultation_languages')
+        .eq('id', state.doctorId)
+        .maybeSingle();
+
+      if (error) return [];
+
+      return toConsultationLanguageList(data?.preferred_consultation_languages);
+    },
+    enabled: !!state.doctorId,
+  });
+
+  const consultationLanguageOptions = useMemo(() => {
+    const fallback = ['english'];
+    const values = (doctorConsultationLanguages.length ? doctorConsultationLanguages : fallback)
+      .filter(Boolean);
+    return values.map((value) => ({
+      value,
+      label: formatConsultationLanguageLabel(value),
+    }));
+  }, [doctorConsultationLanguages]);
+
   const { data: patientWallet } = useQuery({
     queryKey: ['patient-wallet', user?.id],
     queryFn: () => PatientWalletService.getPatientWallet(user!.id),
@@ -176,6 +251,13 @@ export default function SlotSelection() {
     }
   }, [consultationTypePricingEnabled, consultationTypes, selectedConsultationType]);
 
+  useEffect(() => {
+    if (!consultationLanguageOptions.length) return;
+    const exists = consultationLanguageOptions.some((item) => item.value === selectedConsultationLanguage);
+    if (exists) return;
+    setSelectedConsultationLanguage(consultationLanguageOptions[0].value);
+  }, [consultationLanguageOptions, selectedConsultationLanguage]);
+
   // Auto-scroll to time selection when date is selected
   useEffect(() => {
     if (selectedDate) {
@@ -188,14 +270,14 @@ export default function SlotSelection() {
     }
   }, [selectedDate]);
 
-  // Auto-scroll to summary when ready
+  // Auto-scroll to consultation language selection after date/time are selected
   useEffect(() => {
     const ready = selectedDate && selectedTime;
     if (ready) {
       setTimeout(() => {
-        const summarySection = document.getElementById('appointment-summary');
-        if (summarySection) {
-          summarySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const languageSection = document.getElementById('consultation-language-selection');
+        if (languageSection) {
+          languageSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 100);
     }
@@ -316,9 +398,12 @@ export default function SlotSelection() {
     return blocked;
   }, [availableTimes, bookedAppointments, selectedDuration]);
 
+  const consultationLanguageReady = !!selectedConsultationLanguage;
+
   const summaryReady = !!(
     selectedDate &&
     selectedTime &&
+    consultationLanguageReady &&
     (
       !durationPricingEnabled ||
       (hasConfiguredDurations && selectedDurationIsAllowed)
@@ -378,6 +463,61 @@ export default function SlotSelection() {
     return max;
   }, []);
 
+  useEffect(() => {
+    if (!isConfirming || !paystackFlowActiveRef.current) return;
+
+    let handled = false;
+    const handlePaystackRuntimeFailure = () => {
+      if (handled) return;
+      handled = true;
+      paystackFlowActiveRef.current = false;
+      setIsConfirming(false);
+      toast({
+        title: t('slotSelection.toast.paymentInitializationFailedTitle', 'Payment initialization failed'),
+        description: t(
+          'slotSelection.toast.paymentInitializationFailedDescription',
+          'Unable to open secure checkout on this browser. Please refresh and try again.'
+        ),
+        variant: 'destructive',
+      });
+    };
+
+    const onWindowError = (event: ErrorEvent) => {
+      const message = String(event.message || '');
+      const filename = String(event.filename || '');
+      const isPaystackStorageError =
+        filename.includes('checkout.paystack.com')
+        && message.toLowerCase().includes('localstorage');
+      if (isPaystackStorageError) {
+        handlePaystackRuntimeFailure();
+      }
+    };
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reasonText = String(
+        (event.reason as { message?: unknown } | null)?.message
+          ?? event.reason
+          ?? ''
+      );
+      const normalized = reasonText.toLowerCase();
+      const looksLikePaystackRuntimeFailure =
+        normalized.includes('paystack')
+        || normalized.includes('localstorage')
+        || normalized.includes('access is denied for this document');
+      if (looksLikePaystackRuntimeFailure) {
+        handlePaystackRuntimeFailure();
+      }
+    };
+
+    window.addEventListener('error', onWindowError, true);
+    window.addEventListener('unhandledrejection', onUnhandledRejection, true);
+
+    return () => {
+      window.removeEventListener('error', onWindowError, true);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection, true);
+    };
+  }, [isConfirming, t]);
+
   const handleConfirm = async () => {
     if (!selectedDate || !user) {
       toast({
@@ -425,6 +565,10 @@ export default function SlotSelection() {
         preferredTime: selectedTime || undefined,
         duration: selectedDuration,
         consultationType: selectedConsultationType,
+        consultationLanguage: selectedConsultationLanguage || undefined,
+        notes: selectedConsultationLanguage
+          ? `[consultation_language:${selectedConsultationLanguage}]`
+          : undefined,
         paymentMethod: effectivePaymentMethod,
       });
 
@@ -436,6 +580,7 @@ export default function SlotSelection() {
       );
 
       if (booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
+        paystackFlowActiveRef.current = false;
         setIsConfirming(false);
         toast({
           title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
@@ -458,86 +603,115 @@ export default function SlotSelection() {
       }
 
       let paymentCompleted = false;
-      initializePayment({
-        email: paymentInit.email || user.email || '',
-        amount: paymentInit.amountInKobo,
-        reference: paymentInit.reference,
-        publicKey: paystackPublicKey,
-        metadata: paymentInit.metadata,
-        onSuccess: async (response: any) => {
-          paymentCompleted = true;
-          const paidReference = String(response?.reference || paymentInit.reference || '').trim();
+      let paymentWatchdogTriggered = false;
+      paystackFlowActiveRef.current = true;
+      const paymentWatchdog = window.setTimeout(() => {
+        paymentWatchdogTriggered = true;
+        paystackFlowActiveRef.current = false;
+        setIsConfirming(false);
+        toast({
+          title: t('slotSelection.toast.paymentTimeoutTitle', 'Payment window timed out'),
+          description: t(
+            'slotSelection.toast.paymentTimeoutDescription',
+            'We did not receive a payment response. Please try again.'
+          ),
+          variant: 'destructive',
+        });
+      }, 90_000);
+      try {
+        initializePayment({
+          email: paymentInit.email || user.email || '',
+          amount: paymentInit.amountInKobo,
+          reference: paymentInit.reference,
+          publicKey: paystackPublicKey,
+          metadata: paymentInit.metadata,
+          onSuccess: async (response: any) => {
+            if (paymentWatchdogTriggered) return;
+            window.clearTimeout(paymentWatchdog);
+            paystackFlowActiveRef.current = false;
+            paymentCompleted = true;
+            const paidReference = String(response?.reference || paymentInit.reference || '').trim();
 
-          try {
-            let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
-            let lastConfirmError: any = null;
+            try {
+              let confirmResult: { error?: string; alreadyProcessed?: boolean } | null = null;
+              let lastConfirmError: any = null;
 
-            for (let attempt = 0; attempt < 3; attempt += 1) {
-              try {
-                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
-                  body: { reference: paidReference },
-                });
-                if (confirmError) throw confirmError;
+              for (let attempt = 0; attempt < 3; attempt += 1) {
+                try {
+                  const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
+                    body: { reference: paidReference },
+                  });
+                  if (confirmError) throw confirmError;
 
-                const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
-                if (parsed.error) throw new Error(parsed.error);
-                confirmResult = parsed;
-                lastConfirmError = null;
-                break;
-              } catch (attemptError: any) {
-                lastConfirmError = attemptError;
-                if (attempt < 2) {
-                  await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                  const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
+                  if (parsed.error) throw new Error(parsed.error);
+                  confirmResult = parsed;
+                  lastConfirmError = null;
+                  break;
+                } catch (attemptError: any) {
+                  lastConfirmError = attemptError;
+                  if (attempt < 2) {
+                    await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+                  }
                 }
               }
-            }
 
-            if (!confirmResult) {
-              throw lastConfirmError || new Error('Payment confirmation failed');
-            }
+              if (!confirmResult) {
+                throw lastConfirmError || new Error('Payment confirmation failed');
+              }
 
-            toast({
-              title: t('booking.paymentSuccessTitle', 'Payment successful'),
-              description: walletChargedAmount > 0
-                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
-                : confirmResult.alreadyProcessed
-                ? t(
-                  'slotSelection.toast.appointmentAlreadyProcessed',
-                  'This payment was already processed and your appointment remains pending doctor approval.',
-                )
-                : t(
-                  'slotSelection.toast.appointmentPendingApproval',
-                  'Payment successful. Your appointment is pending doctor approval.',
-                ),
-            });
-          } catch (confirmErr: any) {
-            console.warn('[slot-selection] booking payment client confirmation failed:', confirmErr);
-            toast({
-              title: t('booking.paymentSuccessTitle', 'Payment successful'),
-              description: walletChargedAmount > 0
-                ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment will appear after payment confirmation processing completes.`
-                : t(
-                  'slotSelection.toast.paymentSuccessPendingWebhook',
-                  'Payment succeeded. Your appointment will appear once confirmation processing completes.',
-                ),
-            });
-          } finally {
+              toast({
+                title: t('booking.paymentSuccessTitle', 'Payment successful'),
+                description: walletChargedAmount > 0
+                  ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment is pending doctor approval.`
+                  : confirmResult.alreadyProcessed
+                  ? t(
+                    'slotSelection.toast.appointmentAlreadyProcessed',
+                    'This payment was already processed and your appointment remains pending doctor approval.',
+                  )
+                  : t(
+                    'slotSelection.toast.appointmentPendingApproval',
+                    'Payment successful. Your appointment is pending doctor approval.',
+                  ),
+              });
+            } catch (confirmErr: any) {
+              console.warn('[slot-selection] booking payment client confirmation failed:', confirmErr);
+              toast({
+                title: t('booking.paymentSuccessTitle', 'Payment successful'),
+                description: walletChargedAmount > 0
+                  ? `Wallet applied ${formatCurrency(walletChargedAmount)} and Paystack paid ${formatCurrency(paystackAmountDue)}. Your appointment will appear after payment confirmation processing completes.`
+                  : t(
+                    'slotSelection.toast.paymentSuccessPendingWebhook',
+                    'Payment succeeded. Your appointment will appear once confirmation processing completes.',
+                  ),
+              });
+            } finally {
+              setIsConfirming(false);
+              setTimeout(() => {
+                navigate('/patient-portal?tab=appointments');
+              }, 800);
+            }
+          },
+          onClose: () => {
+            if (!paymentWatchdogTriggered) {
+              window.clearTimeout(paymentWatchdog);
+            }
+            paystackFlowActiveRef.current = false;
+            if (paymentCompleted) return;
             setIsConfirming(false);
-            setTimeout(() => {
-              navigate('/patient-portal?tab=appointments');
-            }, 800);
-          }
-        },
-        onClose: () => {
-          if (paymentCompleted) return;
-          setIsConfirming(false);
-          toast({
-            title: t('booking.paymentCancelledTitle', 'Payment cancelled'),
-            description: t('slotSelection.toast.paymentCancelledDescription', 'You cancelled the payment process.'),
-          });
-        },
-      });
+            toast({
+              title: t('booking.paymentCancelledTitle', 'Payment cancelled'),
+              description: t('slotSelection.toast.paymentCancelledDescription', 'You cancelled the payment process.'),
+            });
+          },
+        });
+      } catch (paystackInitError) {
+        window.clearTimeout(paymentWatchdog);
+        paystackFlowActiveRef.current = false;
+        throw paystackInitError;
+      }
     } catch (error: any) {
+      paystackFlowActiveRef.current = false;
       setIsConfirming(false);
       toast({
         title: t('booking.failedTitle', 'Booking failed'),
@@ -845,6 +1019,44 @@ export default function SlotSelection() {
                         })}
                       </div>
                     )}
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+
+            {/* Consultation Language Selection */}
+            {selectedDate && selectedTime && (
+              <motion.div
+                id="consultation-language-selection"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.35 }}
+                className="mb-8"
+              >
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">
+                      {t('slotSelection.consultationLanguage', 'Consultation Language')}
+                    </CardTitle>
+                    <CardDescription>
+                      {t('slotSelection.consultationLanguageHint', 'Consultation will be conducted in the selected language.')}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <select
+                      value={selectedConsultationLanguage}
+                      onChange={(e) => {
+                        setSelectedConsultationLanguage(normalizeConsultationLanguage(e.target.value));
+                        setFinalPrice(null);
+                      }}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-semibold"
+                    >
+                      {consultationLanguageOptions.map((languageOption) => (
+                        <option key={languageOption.value} value={languageOption.value}>
+                          {languageOption.label}
+                        </option>
+                      ))}
+                    </select>
                   </CardContent>
                 </Card>
               </motion.div>
