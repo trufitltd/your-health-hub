@@ -36,6 +36,8 @@ const Consultation = () => {
   const participantName = searchParams.get('participant') ||
     (role === 'doctor' ? 'Sarah Johnson' : 'Dr. Emily Chen');
   const bookedConsultationLanguage = searchParams.get('consultationLanguage');
+  const consultationTypeParam = (searchParams.get('consultationType') || searchParams.get('type') || '').toLowerCase();
+  const bookedConsultationType = consultationTypeParam === 'audio' || consultationTypeParam === 'chat' ? consultationTypeParam : 'video';
 
   useEffect(() => {
     // Simulate loading appointment data
@@ -254,6 +256,7 @@ const Consultation = () => {
       participantName={participantName}
       participantRole={role || 'patient'}
       initialConsultationLanguage={bookedConsultationLanguage}
+      consultationType={bookedConsultationType}
       onEndCall={handleEndCall}
     />
   );
