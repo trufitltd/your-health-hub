@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => ({
       registerType: "autoUpdate",
       workbox: {
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // increase to 10MB
+        ...(mode === "development" ? { globPatterns: [] } : {}),
       },
       includeAssets: ["favicon.ico", "robots.txt", "icon-192.png", "icon-512.png"],
       manifest: {
