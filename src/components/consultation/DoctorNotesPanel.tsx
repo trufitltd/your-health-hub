@@ -459,9 +459,9 @@ export function DoctorNotesPanel({
     );
   };
 
-  const toTranslationPayload = (value: string): Record<string, string> | null => {
+  const toTranslationPayload = (value: string): Record<string, string> => {
     const normalized = value.trim();
-    if (!normalized) return null;
+    if (!normalized) return {};
     return { [language]: normalized };
   };
 
