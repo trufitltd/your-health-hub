@@ -8,6 +8,7 @@ import { LanguageProvider } from "@/contexts/LanguageContext";
 import { FloatingLanguageSelector } from "@/components/LanguageSelector";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
+import ForgotPassword from "./pages/ForgotPassword";
 import Services from "./pages/Services";
 import Specialists from "./pages/Specialists";
 import Booking from "./pages/Booking";
@@ -36,6 +37,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/patient-portal" element={<PatientPortal />} />
               <Route path="/doctor-portal" element={<DoctorPortal />} />
               <Route path="/doctor-discovery" element={<DoctorDiscovery />} />
