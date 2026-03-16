@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Search,
   Send,
@@ -9,6 +10,9 @@ import {
   Check,
   AlertCircle,
   X,
+  MessageSquare,
+  User,
+  Calendar,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +20,13 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -27,6 +38,7 @@ interface FollowUpThread {
   id: string;
   sessionId: string;
   sessionIds: string[];
+  appointmentId?: string | null;
   doctorId: string;
   doctorName: string;
   specialty?: string | null;
@@ -37,6 +49,7 @@ interface FollowUpThread {
   consultationType?: string | null;
   lastMessageAt?: string | null;
   sessionMetaById: Record<string, {
+    appointmentId?: string | null;
     appointmentDate?: string | null;
     appointmentTime?: string | null;
     consultationType?: string | null;
@@ -50,6 +63,7 @@ interface MessagesTabProps {
 
 export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: MessagesTabProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { formatDate, formatTime } = useLocaleFormatter();
   const [threads, setThreads] = useState<FollowUpThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -164,6 +178,7 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
           return {
             id: session.id,
             sessionId: session.id,
+            appointmentId: session.appointment_id ?? null,
             doctorId: session.doctor_id,
             doctorName: appointment?.specialist_name || 'Doctor',
             followUpNotes: '',
@@ -214,6 +229,7 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
           const existing = groupedByDoctor.get(key);
           const rowTime = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : 0;
           const sessionMeta = {
+            appointmentId: row.appointmentId ?? null,
             appointmentDate: row.appointmentDate ?? null,
             appointmentTime: row.appointmentTime ?? null,
             consultationType: row.consultationType ?? null,
@@ -486,6 +502,66 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
     }
   };
 
+  const handleStartAudioCall = () => {
+    if (!selectedThread) return;
+
+    const appointmentId = selectedThread.appointmentId;
+    if (!appointmentId) {
+      toast({
+        title: 'Cannot start call',
+        description: 'Appointment information not available.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const participantName = user?.user_metadata?.full_name || user?.email || 'Patient';
+    const query = new URLSearchParams();
+    query.set('participant', participantName);
+    query.set('consultationType', 'audio');
+
+    navigate(`/consultation/${appointmentId}?${query.toString()}`);
+  };
+
+  const handleStartVideoCall = () => {
+    if (!selectedThread) return;
+
+    const appointmentId = selectedThread.appointmentId;
+    if (!appointmentId) {
+      toast({
+        title: 'Cannot start call',
+        description: 'Appointment information not available.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const participantName = user?.user_metadata?.full_name || user?.email || 'Patient';
+    const query = new URLSearchParams();
+    query.set('participant', participantName);
+    query.set('consultationType', 'video');
+
+    navigate(`/consultation/${appointmentId}?${query.toString()}`);
+  };
+
+  const handleViewDoctorProfile = () => {
+    if (!selectedThread) return;
+    // Navigate to doctor profile or show doctor details
+    toast({ title: 'Doctor Profile', description: `Viewing profile for ${selectedThread.doctorName}` });
+  };
+
+  const handleViewAppointmentDetails = () => {
+    if (!selectedThread) return;
+    // Navigate to appointment details
+    toast({ title: 'Appointment Details', description: 'Opening appointment details...' });
+  };
+
+  const handleReportIssue = () => {
+    if (!selectedThread) return;
+    // Open issue reporting dialog or navigate to support
+    toast({ title: 'Report Issue', description: 'Opening issue reporting form...' });
+  };
+
   const formatMessageTime = (dateString: string) => formatTime(dateString);
   const formatMessageDate = (dateString: string | null | undefined) => {
     if (!dateString) return '';
@@ -619,15 +695,48 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
               </div>
             </div>
             <div className="hidden sm:flex items-center gap-1">
-              <Button variant="ghost" size="icon">
-                <Phone className="w-5 h-5 text-muted-foreground" />
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={handleStartAudioCall}
+                title="Start audio call"
+              >
+                <Phone className="w-5 h-5 text-muted-foreground hover:text-primary" />
               </Button>
-              <Button variant="ghost" size="icon">
-                <Video className="w-5 h-5 text-muted-foreground" />
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={handleStartVideoCall}
+                title="Start video call"
+              >
+                <Video className="w-5 h-5 text-muted-foreground hover:text-primary" />
               </Button>
-              <Button variant="ghost" size="icon">
-                <MoreVertical className="w-5 h-5 text-muted-foreground" />
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    title="More options"
+                  >
+                    <MoreVertical className="w-5 h-5 text-muted-foreground hover:text-primary" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={handleViewDoctorProfile}>
+                    <User className="w-4 h-4 mr-2" />
+                    View Doctor Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleViewAppointmentDetails}>
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Appointment Details
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleReportIssue}>
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                    Report Issue
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
