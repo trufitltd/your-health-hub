@@ -8,7 +8,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
+    detectSessionInUrl: true, // Re-enable for automatic session handling
     storageKey: 'myedoctor-auth',
     flowType: 'pkce',
   },
