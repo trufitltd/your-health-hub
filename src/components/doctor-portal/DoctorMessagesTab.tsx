@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Search,
   Send,
@@ -9,6 +10,10 @@ import {
   Check,
   AlertCircle,
   X,
+  MessageSquare,
+  User,
+  Calendar,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +29,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -36,6 +48,7 @@ interface PatientThread {
   id: string;
   sessionId: string;
   sessionIds: string[];
+  appointmentId?: string | null;
   patientId: string;
   patientName: string;
   patientAvatar?: string | null;
@@ -44,6 +57,7 @@ interface PatientThread {
   consultationType?: string | null;
   lastMessageAt?: string | null;
   sessionMetaById: Record<string, {
+    appointmentId?: string | null;
     appointmentDate?: string | null;
     appointmentTime?: string | null;
     consultationType?: string | null;
@@ -57,6 +71,7 @@ interface DoctorMessagesTabProps {
 
 export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: DoctorMessagesTabProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { formatDate, formatDateTime, formatTime } = useLocaleFormatter();
   const [threads, setThreads] = useState<PatientThread[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -169,6 +184,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
           return {
             id: session.id,
             sessionId: session.id,
+            appointmentId: session.appointment_id ?? null,
             patientId: session.patient_id,
             patientName: appointment?.patient_name || 'Patient',
             appointmentDate: appointment?.date ?? null,
@@ -216,6 +232,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
           const existing = groupedByPatient.get(key);
           const rowTime = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : 0;
           const sessionMeta = {
+            appointmentId: row.appointmentId ?? null,
             appointmentDate: row.appointmentDate ?? null,
             appointmentTime: row.appointmentTime ?? null,
             consultationType: row.consultationType ?? null,
@@ -480,6 +497,66 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
     } finally {
       setIsUploadingAttachment(false);
     }
+  };
+
+  const handleStartAudioCall = () => {
+    if (!selectedThread) return;
+
+    const appointmentId = selectedThread.appointmentId;
+    if (!appointmentId) {
+      toast({
+        title: 'Cannot start call',
+        description: 'Appointment information not available.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const participantName = user?.user_metadata?.full_name || user?.email || 'Doctor';
+    const query = new URLSearchParams();
+    query.set('participant', participantName);
+    query.set('consultationType', 'audio');
+
+    navigate(`/consultation/${appointmentId}?${query.toString()}`);
+  };
+
+  const handleStartVideoCall = () => {
+    if (!selectedThread) return;
+
+    const appointmentId = selectedThread.appointmentId;
+    if (!appointmentId) {
+      toast({
+        title: 'Cannot start call',
+        description: 'Appointment information not available.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const participantName = user?.user_metadata?.full_name || user?.email || 'Doctor';
+    const query = new URLSearchParams();
+    query.set('participant', participantName);
+    query.set('consultationType', 'video');
+
+    navigate(`/consultation/${appointmentId}?${query.toString()}`);
+  };
+
+  const handleViewPatientProfile = () => {
+    if (!selectedThread) return;
+    // Navigate to patient profile or show patient details
+    toast({ title: 'Patient Profile', description: `Viewing profile for ${selectedThread.patientName}` });
+  };
+
+  const handleViewAppointmentDetails = () => {
+    if (!selectedThread) return;
+    // Navigate to appointment details
+    toast({ title: 'Appointment Details', description: 'Opening appointment details...' });
+  };
+
+  const handleViewMedicalRecords = () => {
+    if (!selectedThread) return;
+    // Navigate to patient's medical records
+    toast({ title: 'Medical Records', description: 'Opening patient medical records...' });
   };
 
   const formatMessageTime = (dateString: string) => formatTime(dateString);
@@ -774,15 +851,47 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
               </div>
             </div>
             <div className="hidden sm:flex items-center gap-1">
-              <Button variant="ghost" size="icon">
-                <Phone className="w-5 h-5 text-muted-foreground" />
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={handleStartAudioCall}
+                title="Start audio call"
+              >
+                <Phone className="w-5 h-5 text-muted-foreground hover:text-primary" />
               </Button>
-              <Button variant="ghost" size="icon">
-                <Video className="w-5 h-5 text-muted-foreground" />
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={handleStartVideoCall}
+                title="Start video call"
+              >
+                <Video className="w-5 h-5 text-muted-foreground hover:text-primary" />
               </Button>
-              <Button variant="ghost" size="icon">
-                <MoreVertical className="w-5 h-5 text-muted-foreground" />
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    title="More options"
+                  >
+                    <MoreVertical className="w-5 h-5 text-muted-foreground hover:text-primary" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={handleViewPatientProfile}>
+                    <User className="w-4 h-4 mr-2" />
+                    View Patient Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleViewAppointmentDetails}>
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Appointment Details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleViewMedicalRecords}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    Medical Records
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
