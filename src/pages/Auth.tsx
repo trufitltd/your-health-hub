@@ -15,7 +15,7 @@ import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { useLocaleFormatter } from '@/lib/locale';
 import { useLanguage } from '@/contexts/LanguageContext';
 
-type AuthMode = 'login' | 'register' | 'verify';
+type AuthMode = 'login' | 'register' | 'verify' | 'reset';
 type UserRole = 'patient' | 'doctor';
 type CountryPhoneCode = { iso: string; name: string; dialCode: string };
 
@@ -218,7 +218,7 @@ const COUNTRY_PHONE_CODES: CountryPhoneCode[] = [
 export default function AuthPage() {
   const { t } = useLanguage();
   const [searchParams] = useSearchParams();
-  const initialMode = searchParams.get('mode') === 'register' ? 'register' : 'login';
+  const initialMode = searchParams.get('mode') === 'register' ? 'register' : searchParams.get('mode') === 'reset' ? 'reset' : 'login';
 
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [role, setRole] = useState<UserRole>('patient');
@@ -311,6 +311,58 @@ export default function AuthPage() {
     setIsLoading(true);
 
     try {
+      if (mode === 'reset') {
+        // Handle password reset - first establish session if needed
+        if (!password) {
+          toast({ title: 'Password required', description: 'Please enter a new password.' });
+          setIsLoading(false);
+          return;
+        }
+
+        // For password reset, Supabase should have automatically established the session
+        // from URL parameters via detectSessionInUrl. Just verify we have a session.
+        const { data: sessionData } = await supabase.auth.getSession();
+        
+        console.log('Password reset - checking session:', { 
+          hasSession: !!sessionData.session, 
+          hasUser: !!sessionData.session?.user,
+          userId: sessionData.session?.user?.id 
+        });
+
+        if (!sessionData.session) {
+          console.error('No session found for password reset');
+          toast({
+            title: 'Session expired',
+            description: 'Your password reset session has expired. Please request a new reset link.',
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        // Clear URL parameters for security
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('access_token');
+        newUrl.searchParams.delete('refresh_token');
+        newUrl.searchParams.delete('type');
+        newUrl.searchParams.delete('code');
+        window.history.replaceState({}, '', newUrl.toString());
+
+        // Now update the password
+        const { error } = await supabase.auth.updateUser({ password });
+
+        if (error) {
+          console.error('Password reset error:', error);
+          toast({ title: 'Password reset failed', description: error.message });
+          setIsLoading(false);
+          return;
+        }
+
+        toast({ title: 'Password updated', description: 'Your password has been successfully updated.' });
+        setIsLoading(false);
+        setMode('login');
+        return;
+      }
+
       if (mode === 'register') {
         // Validate email for all users
         if (!email) {
@@ -809,6 +861,8 @@ export default function AuthPage() {
               ? t('auth.title.welcomeBack', 'Welcome back')
               : mode === 'verify'
               ? t('auth.title.verifyEmail', 'Verify your email')
+              : mode === 'reset'
+              ? t('auth.resetPassword.title', 'Reset your password')
               : t('auth.title.createAccount', 'Create your account')}
           </h1>
           <p className="text-muted-foreground mb-8">
@@ -816,6 +870,8 @@ export default function AuthPage() {
               ? t('auth.subtitle.signIn', 'Sign in with your email to access your health dashboard')
               : mode === 'verify'
               ? `${t('auth.subtitle.enterVerificationCode', 'Enter the verification code sent to')} ${email}`
+              : mode === 'reset'
+              ? t('auth.resetPassword.subtitle', 'Enter your new password below')
               : t('auth.subtitle.joinPatients', 'Join thousands of patients getting quality healthcare')}
           </p>
 
@@ -898,6 +954,29 @@ export default function AuthPage() {
                       {t('auth.verification.startOver', 'Start over')}
                     </button>
                   </p>
+                </div>
+              </div>
+            ) : mode === 'reset' ? (
+              <div>
+                <Label htmlFor="password">{t('auth.fields.password', 'Password')}</Label>
+                <div className="relative mt-1.5">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder={t('auth.fields.passwordPlaceholderRegister', 'Create a password')}
+                    className="pl-10 pr-10 h-12"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
                 </div>
               </div>
             ) : (
@@ -1498,11 +1577,11 @@ export default function AuthPage() {
               {isLoading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                  {mode === 'login' ? `${t('common.login', 'Login')}...` : mode === 'verify' ? t('auth.verifying', 'Verifying...') : `${t('common.getStarted', 'Get Started')}...`}
+                  {mode === 'login' ? `${t('common.login', 'Login')}...` : mode === 'verify' ? t('auth.verifying', 'Verifying...') : mode === 'reset' ? `${t('auth.resetPassword.title', 'Reset your password')}...` : `${t('common.getStarted', 'Get Started')}...`}
                 </span>
               ) : (
                 <>
-                  {mode === 'login' ? t('common.login', 'Login') : mode === 'verify' ? t('auth.verifyCode', 'Verify Code') : t('common.getStarted', 'Get Started')}
+                  {mode === 'login' ? t('common.login', 'Login') : mode === 'verify' ? t('auth.verifyCode', 'Verify Code') : mode === 'reset' ? t('auth.resetPassword.title', 'Reset your password') : t('common.getStarted', 'Get Started')}
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -1510,7 +1589,7 @@ export default function AuthPage() {
           </form>
 
           {/* Toggle Mode */}
-          {mode !== 'verify' && (
+          {mode !== 'verify' && mode !== 'reset' && (
             <p className="text-center text-sm text-muted-foreground mt-6">
               {mode === 'login' ? `${t('common.getStarted', 'Get Started')}? ` : `${t('common.login', 'Login')}? `}
               <button
