@@ -729,7 +729,7 @@ const DoctorPortal = () => {
     }
   }, [doctorAvailability]);
 
-  // Real-time subscription for schedule changes to update availability
+  // Real-time subscription for schedule changes to update availability and appointments
   useEffect(() => {
     if (!user?.id) return;
 
@@ -757,6 +757,18 @@ const DoctorPortal = () => {
         },
         () => {
           queryClient.invalidateQueries({ queryKey: ['doctor-availability', user.id] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'appointments',
+          filter: `doctor_id=eq.${user.id}`
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['doctor-appointments', user.id] });
         }
       )
       .subscribe();
