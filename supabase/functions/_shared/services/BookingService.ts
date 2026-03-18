@@ -371,8 +371,9 @@ export class BookingService {
       let chargedAmount = 0;
 
       try {
+        // Use the _up_to variant to debit only what's available, preventing insufficient balance errors
         const { data: walletDebitData, error: walletDebitError } = await this.supabase.rpc(
-          'debit_patient_wallet_for_booking',
+          'debit_patient_wallet_for_booking_up_to',
           {
             p_patient_id: input.patientId,
             p_appointment_id: appointment.id,
@@ -382,7 +383,25 @@ export class BookingService {
         );
 
         if (walletDebitError) {
-          throw new Error(walletDebitError.message || 'Wallet debit failed');
+          const walletDebitMessage = String(walletDebitError.message || '');
+          const isMissingRpc = walletDebitMessage.includes('debit_patient_wallet_for_booking_up_to');
+          if (!isMissingRpc) {
+            throw new Error(walletDebitMessage || 'Wallet debit failed');
+          }
+          // Fallback to exact debit if the newer RPC is not available
+          const fallbackResponse = await this.supabase.rpc(
+            'debit_patient_wallet_for_booking',
+            {
+              p_patient_id: input.patientId,
+              p_appointment_id: appointment.id,
+              p_amount: amount,
+              p_narration: `Appointment payment from wallet (${appointment.id})`,
+            },
+          );
+          if (fallbackResponse.error) {
+            throw new Error(fallbackResponse.error.message || 'Wallet debit failed');
+          }
+          walletDebitData = fallbackResponse.data;
         }
 
         const walletDebit = (walletDebitData || {}) as Record<string, unknown>;
@@ -390,51 +409,106 @@ export class BookingService {
         const balanceAfterRaw = Number(walletDebit.balance_after);
         const balanceAfter = Number.isFinite(balanceAfterRaw) ? balanceAfterRaw : null;
 
-        if (!Number.isFinite(chargedAmount) || chargedAmount <= 0) {
+        // If wallet couldn't cover the full amount, we need to collect the remainder via Paystack
+        const remainingAmount = Math.max(amount - chargedAmount, 0);
+        
+        if (!Number.isFinite(chargedAmount) || chargedAmount < 0) {
           throw new Error('Wallet debit returned invalid charged amount');
         }
 
-        const { error: walletPaymentSuccessError } = await this.supabase
-          .from('payments')
-          .update({
-            status: 'completed',
-            verified_at: nowIso,
-            metadata: {
-              ...basePaymentMetadata,
-              type: 'booking_wallet',
-              charged_amount: chargedAmount,
-              balance_after: balanceAfter,
+        // Mark wallet payment as completed if any amount was charged
+        if (chargedAmount > 0) {
+          const { error: walletPaymentSuccessError } = await this.supabase
+            .from('payments')
+            .update({
+              status: 'completed',
               verified_at: nowIso,
-            },
-          })
-          .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
+              metadata: {
+                ...basePaymentMetadata,
+                type: 'booking_wallet',
+                charged_amount: chargedAmount,
+                balance_after: balanceAfter,
+                verified_at: nowIso,
+              },
+            })
+            .or(`provider_reference.eq.${walletReference},payment_reference.eq.${walletReference}`);
 
-        if (walletPaymentSuccessError) {
-          throw new Error(`Failed to mark wallet payment success: ${walletPaymentSuccessError.message}`);
+          if (walletPaymentSuccessError) {
+            throw new Error(`Failed to mark wallet payment success: ${walletPaymentSuccessError.message}`);
+          }
         }
 
-        try {
-          await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
-        } catch (confirmError: any) {
-          throw new Error(`Failed to confirm wallet booking: ${confirmError?.message || confirmError}`);
+        // If wallet covered the full amount, complete the booking
+        if (remainingAmount <= 0) {
+          try {
+            await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+          } catch (confirmError: any) {
+            throw new Error(`Failed to confirm wallet booking: ${confirmError?.message || confirmError}`);
+          }
+
+          await this.walletService.addPendingEarning({
+            id: appointment.id,
+            doctor_id: appointment.doctor_id,
+            final_price: amount,
+            price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+          });
+
+          return {
+            appointmentId: appointment.id,
+            finalPrice: amount,
+            slot,
+            paymentInitialization: null,
+            paymentMethod: 'wallet',
+            paidWithWallet: true,
+            walletChargedAmount: chargedAmount,
+            paystackAmountDue: 0,
+          };
         }
 
-        await this.walletService.addPendingEarning({
-          id: appointment.id,
-          doctor_id: appointment.doctor_id,
-          final_price: amount,
-          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+        // Wallet covered partial amount - need Paystack for remainder
+        // Initialize Paystack payment for the remaining amount
+        const paystackReference = `PS-WALLET-${Date.now()}-${appointment.id.slice(0, 8)}`;
+        
+        const paymentMetadata = {
+          ...basePaymentMetadata,
+          type: 'booking_hybrid_paystack',
+          wallet_applied_amount: chargedAmount,
+          wallet_payment_reference: walletReference,
+        };
+
+        const { error: paystackPaymentInitError } = await this.supabase.from('payments').insert({
+          appointment_id: appointment.id,
+          patient_id: input.patientId,
+          amount: remainingAmount,
+          status: 'pending',
+          provider_reference: paystackReference,
+          provider: 'paystack',
+          payment_reference: paystackReference,
+          payment_method: 'paystack',
+          metadata: paymentMetadata,
         });
+
+        if (paystackPaymentInitError) {
+          throw new Error(`Failed to initialize Paystack payment for wallet remainder: ${paystackPaymentInitError.message}`);
+        }
+
+        // Initialize Paystack payment
+        const paystackPayload = {
+          email: input.patientEmail,
+          amountInKobo: Math.round(remainingAmount * 100),
+          reference: paystackReference,
+          metadata: paymentMetadata,
+        };
 
         return {
           appointmentId: appointment.id,
           finalPrice: amount,
           slot,
-          paymentInitialization: null,
-          paymentMethod: 'wallet',
-          paidWithWallet: true,
+          paymentMethod: 'hybrid',
+          paymentInitialization: paystackPayload,
+          paidWithWallet: false,
           walletChargedAmount: chargedAmount,
-          paystackAmountDue: 0,
+          paystackAmountDue: remainingAmount,
         };
       } catch (walletFlowError) {
         const message = walletFlowError instanceof Error ? walletFlowError.message : String(walletFlowError);
