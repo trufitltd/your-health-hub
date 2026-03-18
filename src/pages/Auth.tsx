@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check, Phone, MapPin, Upload } from 'lucide-react';
@@ -231,6 +231,7 @@ export default function AuthPage() {
   const [phoneLocalNumber, setPhoneLocalNumber] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [pendingUserData, setPendingUserData] = useState<any>(null);
+  const [rateLimitBlockedUntil, setRateLimitBlockedUntil] = useState<number | null>(null);
   const navigate = useNavigate();
 
   // Patient registration fields
@@ -300,6 +301,38 @@ export default function AuthPage() {
   const parsedConsultationRate = parseConsultationRate(consultationRate);
   const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
   const selectedPhoneDialCode = selectedPhoneCountry?.dialCode || '+234';
+
+  const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  const RATE_LIMIT_STORAGE_KEY = 'authRateLimitBlockedUntil';
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const value = window.localStorage.getItem(RATE_LIMIT_STORAGE_KEY);
+    const parsed = value ? Number(value) : NaN;
+    if (!Number.isNaN(parsed) && parsed > Date.now()) {
+      setRateLimitBlockedUntil(parsed);
+    }
+  }, []);
+
+  const setRateLimitBlock = (until: number) => {
+    setRateLimitBlockedUntil(until);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RATE_LIMIT_STORAGE_KEY, String(until));
+    }
+  };
+
+  const getRateLimitRemainingMs = () => {
+    if (!rateLimitBlockedUntil) return 0;
+    return Math.max(0, rateLimitBlockedUntil - Date.now());
+  };
+
+  const formatRemaining = (ms: number) => {
+    const seconds = Math.ceil(ms / 1000);
+    if (seconds <= 60) return `${seconds}s`;
+    const minutes = Math.ceil(seconds / 60);
+    return `${minutes}m`;
+  };
+
   const toggleConsultationLanguage = (language: string) => {
     setConsultationLanguages((prev) =>
       prev.includes(language) ? prev.filter((item) => item !== language) : [...prev, language]
@@ -455,9 +488,13 @@ export default function AuthPage() {
             });
             setMode('login');
           } else if (error.message.toLowerCase().includes('rate limit')) {
+            const blockedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+            setRateLimitBlock(blockedUntil);
+            const remaining = formatRemaining(blockedUntil - Date.now());
+
             toast({
               title: 'Email rate limit exceeded',
-              description: 'Too many verification emails were sent recently. Please wait a few minutes and check your inbox (including spam/junk) before trying again.',
+              description: `Too many verification emails were sent recently. Try again in ${remaining}.`,
               variant: 'destructive',
             });
           } else {
