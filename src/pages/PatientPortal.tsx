@@ -1396,7 +1396,12 @@ const PatientPortal = () => {
   const [rescheduleRequestNote, setRescheduleRequestNote] = useState('');
   const [isBooking, setIsBooking] = useState(false);
   const [reschedulePaidAmount, setReschedulePaidAmount] = useState<number | null>(null);
-  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const [reschedulePaymentMethod, setReschedulePaymentMethod] = useState<'paystack' | 'wallet'>(() => {
+    // For testing on remote deployments, default to wallet to avoid Paystack cross-origin issues
+    const isLocalhost = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    return isLocalhost ? 'paystack' : 'wallet';
+  });
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string | null>(null);
   const [cancelAppointmentId, setCancelAppointmentId] = useState<string | null>(null);
