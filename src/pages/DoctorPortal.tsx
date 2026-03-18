@@ -1199,12 +1199,40 @@ const DoctorPortal = () => {
       
       // Then fetch patient ages for these appointments
       const patientIds = appointments.map(apt => apt.patient_id).filter(Boolean);
+      const appointmentIds = appointments.map(apt => apt.id).filter(Boolean);
       console.log('Patient IDs:', patientIds);
+
+      const paidAppointmentIdSet = new Set<string>();
+      if (appointmentIds.length > 0) {
+        const { data: paymentRows, error: paymentError } = await supabase
+          .from('payments')
+          .select('appointment_id, status')
+          .in('appointment_id', appointmentIds);
+
+        if (paymentError) {
+          console.warn('[DoctorPortal] Failed to fetch payment rows for appointment status reconciliation:', paymentError);
+        } else {
+          (paymentRows || []).forEach((row: any) => {
+            const appointmentId = String(row?.appointment_id || '').trim();
+            const paymentStatus = String(row?.status || '').trim().toLowerCase();
+            if (!appointmentId) return;
+            if (paymentStatus === 'success' || paymentStatus === 'completed') {
+              paidAppointmentIdSet.add(appointmentId);
+            }
+          });
+        }
+      }
       
       if (patientIds.length === 0) {
         return appointments.map((apt: any) => ({
           ...apt,
-          status: normalizeAppointmentStatus(apt.status),
+          status: (() => {
+            const normalizedStatus = normalizeAppointmentStatus(apt.status);
+            if (normalizedStatus === 'pending_payment' && paidAppointmentIdSet.has(String(apt.id || ''))) {
+              return 'pending_approval';
+            }
+            return normalizedStatus;
+          })(),
           reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
           patient_age: null,
         }));
@@ -1221,7 +1249,13 @@ const DoctorPortal = () => {
       const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
       return appointments.map((apt: any) => ({
         ...apt,
-        status: normalizeAppointmentStatus(apt.status),
+        status: (() => {
+          const normalizedStatus = normalizeAppointmentStatus(apt.status);
+          if (normalizedStatus === 'pending_payment' && paidAppointmentIdSet.has(String(apt.id || ''))) {
+            return 'pending_approval';
+          }
+          return normalizedStatus;
+        })(),
         reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
         patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
