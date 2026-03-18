@@ -479,14 +479,24 @@ export default function AuthPage() {
           password,
         });
 
+        const isExistingEmailMessage = (message: string) => {
+          const normalized = message.toLowerCase();
+          return (
+            normalized.includes('already registered')
+            || normalized.includes('already been registered')
+            || normalized.includes('user already registered')
+            || normalized.includes('email already')
+            || normalized.includes('already exists')
+          );
+        };
+
         if (error) {
           // Check if user already exists
-          if (error.message.includes('already registered') || error.message.includes('already been registered')) {
+          if (isExistingEmailMessage(error.message)) {
             toast({ 
               title: 'Email already in use', 
-              description: 'This email is already registered. Please use a different email or try logging in.' 
+              description: 'This email already exists. Please use a different email.'
             });
-            setMode('login');
           } else if (error.message.toLowerCase().includes('rate limit')) {
             const blockedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
             setRateLimitBlock(blockedUntil);
@@ -500,6 +510,22 @@ export default function AuthPage() {
           } else {
             toast({ title: 'Registration failed', description: error.message });
           }
+          setIsLoading(false);
+          return;
+        }
+
+        // Supabase can return no error for existing users (anti-enumeration behavior).
+        // In that case, identities may be empty: treat as duplicate email for signup UX.
+        const existingUserWithoutNewIdentity =
+          !!data?.user
+          && Array.isArray((data.user as { identities?: unknown[] }).identities)
+          && ((data.user as { identities?: unknown[] }).identities?.length ?? 0) === 0;
+
+        if (existingUserWithoutNewIdentity) {
+          toast({
+            title: 'Email already in use',
+            description: 'This email already exists. Please use a different email.',
+          });
           setIsLoading(false);
           return;
         }
