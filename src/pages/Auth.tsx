@@ -365,14 +365,15 @@ export default function AuthPage() {
 
       if (mode === 'register') {
         // Validate email for all users
-        if (!email) {
+        const normalizedEmail = String(email || '').trim();
+        if (!normalizedEmail) {
           toast({ title: 'Email required', description: 'Please enter your email address.' });
           setIsLoading(false);
           return;
         }
         // Basic email validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
+        if (!emailRegex.test(normalizedEmail)) {
           toast({ title: 'Invalid email', description: 'Please enter a valid email address.' });
           setIsLoading(false);
           return;
@@ -441,7 +442,7 @@ export default function AuthPage() {
 
         // Sign up with Supabase using email - keep metadata minimal to debug 500 error
         const { data, error } = await supabase.auth.signUp({
-          email,
+          email: normalizedEmail,
           password,
         });
 
@@ -532,13 +533,7 @@ export default function AuthPage() {
               gender,
               age: parseInt(age || '0') || 18,
               phone_number: normalizedPhone,
-              email,
-              city,
-              state,
-              country,
-              marital_status: maritalStatus,
-              emergency_contact_name: emergencyContactName,
-              emergency_contact_phone: emergencyContactPhone,
+              email: normalizedEmail,
               identification_type: identificationType,
               identification_number: identificationNumber,
             };
