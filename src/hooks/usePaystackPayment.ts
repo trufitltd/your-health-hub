@@ -44,23 +44,25 @@ const sanitizeMetadata = (metadata?: Record<string, unknown>) => {
 
 export const usePaystackPayment = () => {
   const initializePayment = useCallback((config: PaystackConfig) => {
-    // Only enable Paystack for localhost by default.
-    // Use ?enablePaystackRemote=true or set localStorage.enablePaystackRemote=true for remote testing.
+    // Enable Paystack on all environments by default
+    // Only disable if explicitly requested via query string or localStorage
     const isLocalhost = typeof window !== 'undefined' &&
       (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-    const enableRemote = typeof window !== 'undefined' && (() => {
+    const disablePaystack = typeof window !== 'undefined' && (() => {
       try {
         const params = new URLSearchParams(window.location.search);
-        if (params.get('enablePaystackRemote') === 'true') return true;
-        return window.localStorage?.getItem('enablePaystackRemote') === 'true';
+        if (params.get('disablePaystackRemote') === 'true') return true;
+        return window.localStorage?.getItem('disablePaystackRemote') === 'true';
       } catch {
         return false;
       }
     })();
 
-    if (!isLocalhost && !enableRemote) {
-      console.warn('Paystack payment skipped on remote deployment for testing. Use wallet payments or set enablePaystackRemote=true via query string or localStorage to enable Paystack.');
+    // Paystack is enabled by default on all environments
+    // Only disable if explicitly requested (for testing purposes)
+    if (disablePaystack) {
+      console.warn('Paystack payment disabled. Remove disablePaystackRemote=true to enable Paystack.');
       // Call onClose to indicate payment was cancelled/skipped
       config.onClose();
       return;
