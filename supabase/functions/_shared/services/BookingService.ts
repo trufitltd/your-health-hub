@@ -465,51 +465,9 @@ export class BookingService {
           };
         }
 
-        // Wallet covered partial amount - need Paystack for remainder
-        // Initialize Paystack payment for the remaining amount
-        const paystackReference = `PS-WALLET-${Date.now()}-${appointment.id.slice(0, 8)}`;
-        
-        const paymentMetadata = {
-          ...basePaymentMetadata,
-          type: 'booking_hybrid_paystack',
-          wallet_applied_amount: chargedAmount,
-          wallet_payment_reference: walletReference,
-        };
-
-        const { error: paystackPaymentInitError } = await this.supabase.from('payments').insert({
-          appointment_id: appointment.id,
-          patient_id: input.patientId,
-          amount: remainingAmount,
-          status: 'pending',
-          provider_reference: paystackReference,
-          provider: 'paystack',
-          payment_reference: paystackReference,
-          payment_method: 'paystack',
-          metadata: paymentMetadata,
-        });
-
-        if (paystackPaymentInitError) {
-          throw new Error(`Failed to initialize Paystack payment for wallet remainder: ${paystackPaymentInitError.message}`);
-        }
-
-        // Initialize Paystack payment
-        const paystackPayload = {
-          email: input.patientEmail,
-          amountInKobo: Math.round(remainingAmount * 100),
-          reference: paystackReference,
-          metadata: paymentMetadata,
-        };
-
-        return {
-          appointmentId: appointment.id,
-          finalPrice: amount,
-          slot,
-          paymentMethod: 'hybrid',
-          paymentInitialization: paystackPayload,
-          paidWithWallet: false,
-          walletChargedAmount: chargedAmount,
-          paystackAmountDue: remainingAmount,
-        };
+        // Wallet covered partial amount but not full amount
+        // This requires Paystack for the remainder, which must be available
+        throw new Error(`Insufficient wallet balance. Add ${Math.round(remainingAmount * 100) / 100} to your wallet or enable Paystack to complete the booking.`);
       } catch (walletFlowError) {
         const message = walletFlowError instanceof Error ? walletFlowError.message : String(walletFlowError);
 
