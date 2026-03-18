@@ -98,7 +98,12 @@ export default function SlotSelection() {
   );
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>('paystack');
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>(() => {
+    // For testing on remote deployments, default to wallet to avoid Paystack cross-origin issues
+    const isLocalhost = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    return isLocalhost ? 'paystack' : 'wallet';
+  });
   const paystackFlowActiveRef = useRef(false);
   const { initializePayment } = usePaystackPayment();
 

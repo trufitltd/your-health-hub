@@ -44,6 +44,17 @@ const sanitizeMetadata = (metadata?: Record<string, unknown>) => {
 
 export const usePaystackPayment = () => {
   const initializePayment = useCallback((config: PaystackConfig) => {
+    // For testing on remote deployments, skip Paystack initialization to avoid cross-origin errors
+    const isLocalhost = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (!isLocalhost) {
+      console.warn('Paystack payment skipped on remote deployment for testing. Use wallet payments or localhost for full Paystack functionality.');
+      // Call onClose to indicate payment was cancelled/skipped
+      config.onClose();
+      return;
+    }
+
     const key = String(config.publicKey || '').trim();
     const email = String(config.email || '').trim();
     const reference = String(config.reference || '').trim();
