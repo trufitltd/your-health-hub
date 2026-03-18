@@ -454,6 +454,12 @@ export default function AuthPage() {
               description: 'This email is already registered. Please use a different email or try logging in.' 
             });
             setMode('login');
+          } else if (error.message.toLowerCase().includes('rate limit')) {
+            toast({
+              title: 'Email rate limit exceeded',
+              description: 'Too many verification emails were sent recently. Please wait a few minutes and check your inbox (including spam/junk) before trying again.',
+              variant: 'destructive',
+            });
           } else {
             toast({ title: 'Registration failed', description: error.message });
           }
