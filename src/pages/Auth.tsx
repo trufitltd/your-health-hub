@@ -339,6 +339,129 @@ export default function AuthPage() {
     );
   };
 
+  const getMetadataRole = (user: any): UserRole | null => {
+    const rawRole = String(user?.user_metadata?.role || user?.app_metadata?.role || '').toLowerCase();
+    if (rawRole === 'doctor') return 'doctor';
+    if (rawRole === 'patient') return 'patient';
+    return null;
+  };
+
+  const getMetadataFullName = (user: any): string => {
+    const candidate = String(user?.user_metadata?.full_name || user?.user_metadata?.name || '').trim();
+    if (!candidate || candidate.includes('@')) {
+      return 'User';
+    }
+    return candidate;
+  };
+
+  const getMetadataString = (user: any, key: string, fallback = ''): string => {
+    const raw = user?.user_metadata?.[key];
+    if (raw === null || raw === undefined) return fallback;
+    const value = String(raw).trim();
+    return value || fallback;
+  };
+
+  const getMetadataInt = (user: any, key: string, fallback: number): number => {
+    const raw = user?.user_metadata?.[key];
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.floor(parsed);
+  };
+
+  const ensurePatientRegistrationFallback = async (user: any) => {
+    if (!user?.id) return;
+    const fullName = getMetadataFullName(user);
+    const gender = getMetadataString(user, 'gender', 'other');
+    const age = getMetadataInt(user, 'age', 18);
+    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'N/A');
+    const city = getMetadataString(user, 'city', 'Unknown');
+    const state = getMetadataString(user, 'state', 'Unknown');
+    const country = getMetadataString(user, 'country', 'Unknown');
+    const maritalStatus = getMetadataString(user, 'marital_status', 'single');
+    const emergencyContactName = getMetadataString(user, 'emergency_contact_name', 'Not Provided');
+    const emergencyContactPhone = getMetadataString(user, 'emergency_contact_phone', phoneNumber);
+    const identificationType = getMetadataString(user, 'identification_type', 'hospital_id');
+    const identificationNumber = getMetadataString(user, 'identification_number', String(user.id));
+    const { error } = await supabase
+      .from('patient_registrations')
+      .upsert(
+        [{
+          user_id: user.id,
+          full_name: fullName,
+          gender,
+          age,
+          phone_number: phoneNumber,
+          email: user.email || null,
+          city,
+          state,
+          country,
+          marital_status: maritalStatus,
+          emergency_contact_name: emergencyContactName,
+          emergency_contact_phone: emergencyContactPhone,
+          identification_type: identificationType,
+          identification_number: identificationNumber,
+        }],
+        { onConflict: 'user_id' }
+      );
+    if (error) {
+      console.error('Failed ensuring patient registration fallback:', error);
+    }
+  };
+
+  const ensureDoctorRegistrationFallback = async (user: any) => {
+    if (!user?.id) return;
+
+    const { data: existingDoctor } = await supabase
+      .from('doctor_registrations')
+      .select('id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (existingDoctor?.id) return;
+
+    const fullName = getMetadataFullName(user);
+    const gender = getMetadataString(user, 'gender', 'other');
+    const age = getMetadataInt(user, 'age', 18);
+    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'N/A');
+    const city = getMetadataString(user, 'city', 'Unknown');
+    const state = getMetadataString(user, 'state', 'Unknown');
+    const country = getMetadataString(user, 'country', 'Unknown');
+    const maritalStatus = getMetadataString(user, 'marital_status', 'single');
+    const hospitalAffiliation = getMetadataString(user, 'hospital_affiliation', 'Pending update');
+    const specialty = getMetadataString(user, 'specialty', 'general_practitioner');
+    const doctorIdType = getMetadataString(user, 'doctor_id_type', 'nin');
+    const doctorIdNumber = getMetadataString(user, 'doctor_id_number', String(user.id).slice(0, 16));
+    const fallbackDoctorPayload = {
+      user_id: user.id,
+      full_name: fullName,
+      gender,
+      age,
+      phone_number: phoneNumber,
+      email: user.email || null,
+      city,
+      state,
+      country,
+      marital_status: maritalStatus,
+      hospital_affiliation: hospitalAffiliation,
+      specialty,
+      medical_license_url: 'pending_upload',
+      identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
+      identification_number: doctorIdNumber,
+      verification_status: 'pending' as const,
+    };
+
+    const { error: doctorInsertError } = await supabase
+      .from('doctor_registrations')
+      .insert([fallbackDoctorPayload]);
+
+    if (doctorInsertError) {
+      console.error('Failed ensuring doctor registration fallback:', doctorInsertError);
+      return;
+    }
+
+    await createDefaultSchedule(user.id);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -399,6 +522,35 @@ export default function AuthPage() {
       if (mode === 'register') {
         // Validate email for all users
         const normalizedEmail = String(email || '').trim();
+        const normalizedFullName = String(name || '').trim();
+        if (!normalizedFullName) {
+          toast({ title: 'Full name required', description: 'Please enter your full name.' });
+          setIsLoading(false);
+          return;
+        }
+        const normalizedNameForCompare = normalizedFullName.toLowerCase();
+        const normalizedEmailForCompare = normalizedEmail.toLowerCase();
+        const normalizedEmailLocalPart = normalizedEmailForCompare.split('@')[0] || '';
+        if (
+          normalizedNameForCompare.includes('@')
+          || normalizedNameForCompare === normalizedEmailForCompare
+          || normalizedNameForCompare === normalizedEmailLocalPart
+        ) {
+          toast({
+            title: 'Enter your real full name',
+            description: 'Full name cannot be your email. Please enter your first and last name.',
+          });
+          setIsLoading(false);
+          return;
+        }
+        if (normalizedFullName.split(/\s+/).filter(Boolean).length < 2) {
+          toast({
+            title: 'Full name required',
+            description: 'Please enter at least first name and last name.',
+          });
+          setIsLoading(false);
+          return;
+        }
         if (!normalizedEmail) {
           toast({ title: 'Email required', description: 'Please enter your email address.' });
           setIsLoading(false);
@@ -477,6 +629,38 @@ export default function AuthPage() {
         const { data, error } = await supabase.auth.signUp({
           email: normalizedEmail,
           password,
+          options: {
+            data: {
+              full_name: normalizedFullName,
+              name: normalizedFullName,
+              role,
+              phone_number: normalizedPhone,
+              gender: gender || 'other',
+              age: age || '18',
+              city: city || 'Unknown',
+              state: state || 'Unknown',
+              country: country || 'Unknown',
+              marital_status: maritalStatus || 'single',
+              emergency_contact_name: emergencyContactName || 'Not Provided',
+              emergency_contact_phone: emergencyContactPhone || normalizedPhone,
+              identification_type: role === 'doctor' ? (doctorIdType || 'nin') : (identificationType || 'hospital_id'),
+              identification_number:
+                role === 'doctor'
+                  ? (doctorIdNumber || String(Date.now()))
+                  : (identificationNumber || String(Date.now())),
+              hospital_affiliation: role === 'doctor' ? (hospitalAffiliation || 'Pending update') : undefined,
+              specialty:
+                role === 'doctor'
+                  ? ((specialty === 'others' ? otherSpecialty : specialty) || 'general_practitioner')
+                  : undefined,
+              doctor_id_type: role === 'doctor' ? (doctorIdType || 'nin') : undefined,
+              doctor_id_number: role === 'doctor' ? (doctorIdNumber || String(Date.now())) : undefined,
+              preferred_consultation_languages:
+                role === 'doctor'
+                  ? (consultationLanguages.length ? consultationLanguages : ['english'])
+                  : undefined,
+            },
+          },
         });
 
         const isExistingEmailMessage = (message: string) => {
@@ -514,24 +698,10 @@ export default function AuthPage() {
           return;
         }
 
-        // Supabase can return no error for existing users (anti-enumeration behavior).
-        // In that case, identities may be empty: treat as duplicate email for signup UX.
-        const existingUserWithoutNewIdentity =
-          !!data?.user
-          && Array.isArray((data.user as { identities?: unknown[] }).identities)
-          && ((data.user as { identities?: unknown[] }).identities?.length ?? 0) === 0;
+        const canWriteRegistrationImmediately = !!data.session;
 
-        if (existingUserWithoutNewIdentity) {
-          toast({
-            title: 'Email already in use',
-            description: 'This email already exists. Please use a different email.',
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        // Immediately save doctor registration data if role is doctor
-        if (role === 'doctor' && data.user?.id) {
+        // Immediately save doctor registration data only when a valid session exists.
+        if (role === 'doctor' && data.user?.id && canWriteRegistrationImmediately) {
           try {
             // Upload files first
             let profilePictureUrl = null;
@@ -563,7 +733,7 @@ export default function AuthPage() {
             const parsedRate = parseConsultationRate(consultationRate);
             const doctorPayload = {
               user_id: data.user.id,
-              full_name: name,
+              full_name: normalizedFullName,
               gender,
               age: parseInt(age),
               phone_number: normalizedPhone,
@@ -593,12 +763,12 @@ export default function AuthPage() {
           }
         }
 
-        // Immediately save patient registration if role is patient so data exists in DB
-        if (role === 'patient' && data.user?.id) {
+        // Immediately save patient registration only when a valid session exists.
+        if (role === 'patient' && data.user?.id && canWriteRegistrationImmediately) {
           try {
             const patientPayload = {
               user_id: data.user.id,
-              full_name: name,
+              full_name: normalizedFullName,
               gender,
               age: parseInt(age || '0') || 18,
               phone_number: normalizedPhone,
@@ -625,7 +795,7 @@ export default function AuthPage() {
         // Store registration data for after verification
         const registrationData = {
           role,
-          name,
+          name: normalizedFullName,
           email,
           phoneNumber: normalizedPhone,
           gender,
@@ -826,9 +996,18 @@ export default function AuthPage() {
           console.error('Missing pending user data or user ID');
         }
 
-        // Get user role from pendingUserData (set during signup)
-        const userRole = pendingUserData?.role || 'patient';
+        // Resolve role from signup context first, then auth metadata.
+        const userRole: UserRole = pendingUserData?.role || getMetadataRole(data.user) || 'patient';
         localStorage.setItem('userRole', userRole);
+
+        // Safety net when verify opens in a fresh tab and in-memory pendingUserData is lost.
+        if (!pendingUserData && data.user?.id) {
+          if (userRole === 'doctor') {
+            await ensureDoctorRegistrationFallback(data.user);
+          } else {
+            await ensurePatientRegistrationFallback(data.user);
+          }
+        }
 
         // Check if user session is valid
         const { data: sessionData } = await supabase.auth.getSession();
@@ -869,18 +1048,24 @@ export default function AuthPage() {
         console.log('Login successful, user:', data.user?.id);
 
         // Determine user role by checking if they have a doctor registration
-        let userRole = 'patient';
+        let userRole: UserRole = getMetadataRole(data.user) || 'patient';
         if (data.user?.id) {
           const { data: doctorReg } = await supabase
             .from('doctor_registrations')
             .select('id')
             .eq('user_id', data.user.id)
-            .single();
+            .maybeSingle();
           
           if (doctorReg) {
             userRole = 'doctor';
             // Backfill default availability for existing doctors who have no schedules yet.
             await createDefaultSchedule(data.user.id);
+          } else if (userRole === 'doctor') {
+            // Metadata says doctor but row is missing: recreate fallback so admin sees verification request.
+            await ensureDoctorRegistrationFallback(data.user);
+          } else {
+            // Ensure patient users always have a patient registration row.
+            await ensurePatientRegistrationFallback(data.user);
           }
         }
         localStorage.setItem('userRole', userRole);
