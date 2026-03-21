@@ -429,8 +429,11 @@ export default function AuthPage() {
     const maritalStatus = getMetadataString(user, 'marital_status', 'single');
     const hospitalAffiliation = getMetadataString(user, 'hospital_affiliation', 'Pending update');
     const specialty = getMetadataString(user, 'specialty', 'general_practitioner');
+    const experience = getMetadataString(user, 'doctor_experience', 'Pending update');
     const doctorIdType = getMetadataString(user, 'doctor_id_type', 'nin');
     const doctorIdNumber = getMetadataString(user, 'doctor_id_number', String(user.id).slice(0, 16));
+    const profilePictureUrl = getMetadataString(user, 'profile_picture_url', '') || null;
+    const medicalLicenseUrl = getMetadataString(user, 'medical_license_url', '') || 'pending_upload';
     const fallbackDoctorPayload = {
       user_id: user.id,
       full_name: fullName,
@@ -444,7 +447,9 @@ export default function AuthPage() {
       marital_status: maritalStatus,
       hospital_affiliation: hospitalAffiliation,
       specialty,
-      medical_license_url: 'pending_upload',
+      experience,
+      profile_picture_url: profilePictureUrl,
+      medical_license_url: medicalLicenseUrl,
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
       identification_number: doctorIdNumber,
       verification_status: 'pending' as const,
@@ -655,6 +660,7 @@ export default function AuthPage() {
                   : undefined,
               doctor_id_type: role === 'doctor' ? (doctorIdType || 'nin') : undefined,
               doctor_id_number: role === 'doctor' ? (doctorIdNumber || String(Date.now())) : undefined,
+              doctor_experience: role === 'doctor' ? (doctorExperience || 'Pending update') : undefined,
               preferred_consultation_languages:
                 role === 'doctor'
                   ? (consultationLanguages.length ? consultationLanguages : ['english'])
@@ -731,6 +737,12 @@ export default function AuthPage() {
 
             const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
             const parsedRate = parseConsultationRate(consultationRate);
+            const { data: existingDoctorRegistration } = await supabase
+              .from('doctor_registrations')
+              .select('profile_picture_url, medical_license_url, experience')
+              .eq('user_id', data.user.id)
+              .maybeSingle();
+
             const doctorPayload = {
               user_id: data.user.id,
               full_name: normalizedFullName,
@@ -745,18 +757,20 @@ export default function AuthPage() {
               hospital_affiliation: hospitalAffiliation,
               specialty: resolvedSpecialty,
               preferred_consultation_languages: consultationLanguages,
-              experience: doctorExperience,
+              experience: doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
               rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '') || !parsedRate
                 ? null
                 : parsedRate,
-              profile_picture_url: profilePictureUrl,
-              medical_license_url: medicalLicenseUrl,
+              profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
+              medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || 'pending_upload',
               identification_type: doctorIdType,
               identification_number: doctorIdNumber,
               verification_status: 'pending'
             };
 
-            await supabase.from('doctor_registrations').insert([doctorPayload]);
+            await supabase
+              .from('doctor_registrations')
+              .upsert([doctorPayload], { onConflict: 'user_id' });
             await createDefaultSchedule(data.user.id);
           } catch (err) {
             console.error('Failed to save doctor registration:', err);
@@ -935,6 +949,12 @@ export default function AuthPage() {
                 ? pendingUserData.otherSpecialty
                 : pendingUserData.specialty;
               const parsedRate = parseConsultationRate(String(pendingUserData.consultationRate || ''));
+              const { data: existingDoctorRegistration } = await supabase
+                .from('doctor_registrations')
+                .select('profile_picture_url, medical_license_url, experience')
+                .eq('user_id', data.user.id)
+                .maybeSingle();
+
               const doctorPayload = {
                 user_id: data.user.id,
                 full_name: pendingUserData.name,
@@ -949,19 +969,21 @@ export default function AuthPage() {
                 hospital_affiliation: pendingUserData.hospitalAffiliation,
                 specialty: resolvedSpecialty,
                 preferred_consultation_languages: pendingUserData.consultationLanguages || [],
-                experience: pendingUserData.doctorExperience,
+                experience: pendingUserData.doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
                 rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
                   ? null
                   : parsedRate,
-                profile_picture_url: profilePictureUrl,
-                medical_license_url: medicalLicenseUrl,
+                profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
+                medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || 'pending_upload',
                 identification_type: pendingUserData.doctorIdType,
                 identification_number: pendingUserData.doctorIdNumber,
                 verification_status: 'pending', //Todo: Implement set status from backend, dont trust user input for process flow
               };
 
               console.log('Inserting doctor registration:', doctorPayload);
-              const { error: doctorError } = await supabase.from('doctor_registrations').insert([doctorPayload]);
+              const { error: doctorError } = await supabase
+                .from('doctor_registrations')
+                .upsert([doctorPayload], { onConflict: 'user_id' });
               if (doctorError) {
                 console.error('Doctor registration error:', doctorError);
                 throw doctorError;
