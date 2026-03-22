@@ -896,16 +896,39 @@ export default function AuthPage() {
           return;
         }
 
+        // Email can verify without establishing a durable client session in some setups.
+        // Ensure we have an authenticated session before storage/database writes.
+        let verifiedUser = data.user;
+        let { data: verifiedSession } = await supabase.auth.getSession();
+        if (!verifiedSession.session && email && password) {
+          const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
+          if (loginError) {
+            console.error('Post-verification sign-in failed:', loginError);
+            toast({
+              title: 'Email verified',
+              description: 'Verification succeeded. Please sign in to complete your registration.',
+            });
+            setIsLoading(false);
+            setMode('login');
+            return;
+          }
+          verifiedUser = loginData.user;
+          verifiedSession = await supabase.auth.getSession();
+        }
+
         // Now complete the registration process
-        if (pendingUserData && data.user?.id) {
+        if (pendingUserData && verifiedUser?.id && verifiedSession.session) {
           try {
-            console.log('Completing registration for user:', data.user.id, 'Role:', pendingUserData.role);
+            console.log('Completing registration for user:', verifiedUser.id, 'Role:', pendingUserData.role);
             
             if (pendingUserData.role === 'patient') {
               let patientProfilePictureUrl: string | null = null;
               if (pendingUserData.patientProfilePicture) {
                 const profileExt = pendingUserData.patientProfilePicture.name.split('.').pop();
-                const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+                const profilePath = `${verifiedUser.id}/profile-pictures/profile.${profileExt}`;
                 const { error: profileError } = await supabase.storage
                   .from('patient-files')
                   .upload(profilePath, pendingUserData.patientProfilePicture, { upsert: true });
@@ -917,7 +940,7 @@ export default function AuthPage() {
               }
 
               const registrationPayload = {
-                user_id: data.user.id,
+                user_id: verifiedUser.id,
                 full_name: pendingUserData.name,
                 gender: pendingUserData.gender,
                 age: parseInt(pendingUserData.age),
@@ -958,7 +981,7 @@ export default function AuthPage() {
 
               if (pendingUserData.profilePicture) {
                 const profileExt = pendingUserData.profilePicture.name.split('.').pop();
-                const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+                const profilePath = `${verifiedUser.id}/profile-pictures/profile.${profileExt}`;
                 const { error: profileError } = await supabase.storage
                   .from('doctor-files')
                   .upload(profilePath, pendingUserData.profilePicture, { upsert: true });
@@ -971,7 +994,7 @@ export default function AuthPage() {
 
               if (pendingUserData.medicalLicense) {
                 const licenseExt = pendingUserData.medicalLicense.name.split('.').pop();
-                const licensePath = `${data.user.id}/credentials/medical-license.${licenseExt}`;
+                const licensePath = `${verifiedUser.id}/credentials/medical-license.${licenseExt}`;
                 const { error: licenseError } = await supabase.storage
                   .from('doctor-files')
                   .upload(licensePath, pendingUserData.medicalLicense, { upsert: true });
@@ -989,11 +1012,11 @@ export default function AuthPage() {
               const { data: existingDoctorRegistration } = await supabase
                 .from('doctor_registrations')
                 .select('profile_picture_url, medical_license_url, experience')
-                .eq('user_id', data.user.id)
+                .eq('user_id', verifiedUser.id)
                 .maybeSingle();
 
               const doctorPayload = {
-                user_id: data.user.id,
+                user_id: verifiedUser.id,
                 full_name: pendingUserData.name,
                 gender: pendingUserData.gender,
                 age: parseInt(pendingUserData.age),
@@ -1037,14 +1060,14 @@ export default function AuthPage() {
                   phone: pendingUserData.phoneNumber,
                   avatar_url: profilePictureUrl || null,
                 })
-                .eq('id', data.user.id);
+                .eq('id', verifiedUser.id);
 
               if (doctorProfileError) {
                 console.error('Doctor profile sync error:', doctorProfileError);
               }
               
-              console.log('Creating default schedule for doctor:', data.user.id);
-              await createDefaultSchedule(data.user.id);
+              console.log('Creating default schedule for doctor:', verifiedUser.id);
+              await createDefaultSchedule(verifiedUser.id);
               console.log('Doctor registration completed successfully');
             }
           } catch (regError) {
@@ -1052,19 +1075,19 @@ export default function AuthPage() {
             toast({ title: 'Registration incomplete', description: 'Account verified but registration data failed to save. Please contact support.' });
           }
         } else {
-          console.error('Missing pending user data or user ID');
+          console.error('Missing pending user data, verified user, or session');
         }
 
         // Resolve role from signup context first, then auth metadata.
-        const userRole: UserRole = pendingUserData?.role || getMetadataRole(data.user) || 'patient';
+        const userRole: UserRole = pendingUserData?.role || getMetadataRole(verifiedUser) || 'patient';
         localStorage.setItem('userRole', userRole);
 
         // Safety net when verify opens in a fresh tab and in-memory pendingUserData is lost.
-        if (!pendingUserData && data.user?.id) {
+        if (!pendingUserData && verifiedUser?.id && verifiedSession.session) {
           if (userRole === 'doctor') {
-            await ensureDoctorRegistrationFallback(data.user);
+            await ensureDoctorRegistrationFallback(verifiedUser);
           } else {
-            await ensurePatientRegistrationFallback(data.user);
+            await ensurePatientRegistrationFallback(verifiedUser);
           }
         }
 
@@ -1076,11 +1099,18 @@ export default function AuthPage() {
           return;
         }
 
-        toast({ title: 'Email verified', description: 'Welcome to MyEdoctor!' });
+        // Require fresh login for both patient and doctor after verification.
+        await supabase.auth.signOut();
+        localStorage.removeItem('userRole');
+        setPendingUserData(null);
+        setVerificationCode('');
+        toast({
+          title: 'Email verified',
+          description: 'Verification succeeded. Please sign in to continue.',
+        });
         setIsLoading(false);
-
-        // Redirect based on role
-        navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
+        setMode('login');
+        navigate('/auth?mode=login');
       } else {
         // Validate email for login
         if (!email) {
