@@ -601,6 +601,28 @@ export default function AuthPage() {
           return;
         }
 
+        // Pre-check existing registration tables for duplicate email before attempting sign up.
+        const normalizedEmailLower = normalizedEmail.toLowerCase();
+        const [{ data: existingDoctorByEmail, error: existingDoctorByEmailError }, { data: existingPatientByEmail, error: existingPatientByEmailError }] = await Promise.all([
+          supabase.from('doctor_registrations').select('user_id').ilike('email', normalizedEmailLower).limit(1).maybeSingle(),
+          supabase.from('patient_registrations').select('user_id').ilike('email', normalizedEmailLower).limit(1).maybeSingle(),
+        ]);
+
+        if (existingDoctorByEmailError) {
+          console.warn('Doctor email pre-check warning:', existingDoctorByEmailError);
+        }
+        if (existingPatientByEmailError) {
+          console.warn('Patient email pre-check warning:', existingPatientByEmailError);
+        }
+        if (existingDoctorByEmail || existingPatientByEmail) {
+          toast({
+            title: 'Email already in use',
+            description: 'This email already exists. Please use a different email.',
+          });
+          setIsLoading(false);
+          return;
+        }
+
         const cleanedLocalPhone = phoneLocalNumber.replace(/\D/g, '').replace(/^0+/, '');
         const normalizedPhone = `${selectedPhoneDialCode}${cleanedLocalPhone}`;
         const phoneDigits = normalizedPhone.replace(/\D/g, '');
@@ -733,6 +755,17 @@ export default function AuthPage() {
           } else {
             toast({ title: 'Registration failed', description: error.message });
           }
+          setIsLoading(false);
+          return;
+        }
+
+        // Supabase may return a "successful" obfuscated response for existing users.
+        // In that case, the user has no identities and should be treated as duplicate.
+        if (Array.isArray(data.user?.identities) && data.user.identities.length === 0) {
+          toast({
+            title: 'Email already in use',
+            description: 'This email already exists. Please use a different email.',
+          });
           setIsLoading(false);
           return;
         }
