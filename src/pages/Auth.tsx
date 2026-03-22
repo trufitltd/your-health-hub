@@ -435,7 +435,7 @@ export default function AuthPage() {
     const doctorIdType = getMetadataString(user, 'doctor_id_type', 'nin');
     const doctorIdNumber = getMetadataString(user, 'doctor_id_number', String(user.id).slice(0, 16));
     const profilePictureUrl = getMetadataString(user, 'profile_picture_url', '') || null;
-    const medicalLicenseUrl = getMetadataString(user, 'medical_license_url', '') || 'pending_upload';
+    const medicalLicenseUrl = getMetadataString(user, 'medical_license_url', '') || '';
     const fallbackDoctorPayload = {
       user_id: user.id,
       full_name: fullName,
@@ -451,7 +451,7 @@ export default function AuthPage() {
       specialty,
       experience,
       profile_picture_url: profilePictureUrl,
-      medical_license_url: medicalLicenseUrl,
+      medical_license_url: medicalLicenseUrl || '',
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
       identification_number: doctorIdNumber,
       verification_status: 'pending' as const,
@@ -768,7 +768,7 @@ export default function AuthPage() {
                 ? null
                 : parsedRate,
               profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
-              medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || 'pending_upload',
+              medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || '',
               identification_type: doctorIdType,
               identification_number: doctorIdNumber,
               verification_status: 'pending'
@@ -875,7 +875,13 @@ export default function AuthPage() {
         }
 
         setIsLoading(false);
-        setMode('verify');
+        // Supabase is configured for email confirmation links, not OTP codes.
+        // Send users straight to login after they click the email link.
+        setMode('login');
+        toast({
+          title: 'Confirm your email',
+          description: 'Open the confirmation link in your email, then sign in.',
+        });
       } else if (mode === 'verify') {
         // Verify email with code
         if (!verificationCode) {
@@ -1034,7 +1040,7 @@ export default function AuthPage() {
                   ? null
                   : parsedRate,
                 profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
-                medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || 'pending_upload',
+                medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || '',
                 identification_type: pendingUserData.doctorIdType,
                 identification_number: pendingUserData.doctorIdNumber,
                 verification_status: 'pending', //Todo: Implement set status from backend, dont trust user input for process flow
