@@ -18,12 +18,20 @@ export function ProtectedRoute({
 }: ProtectedRouteProps) {
   const { user, role, isLoading } = useAuth();
   const location = useLocation();
-  const [checkingRegistration, setCheckingRegistration] = useState(requireCompletedRegistration);
+  const [checkingRegistration, setCheckingRegistration] = useState(false);
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!requireCompletedRegistration) return;
-    if (!user) return;
+    if (!requireCompletedRegistration) {
+      setCheckingRegistration(false);
+      setRedirectPath(null);
+      return;
+    }
+    if (!user) {
+      setCheckingRegistration(false);
+      setRedirectPath(null);
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -67,7 +75,7 @@ export function ProtectedRoute({
     };
   }, [requireCompletedRegistration, role, user]);
 
-  if (isLoading || checkingRegistration) {
+  if (isLoading || (requireCompletedRegistration && !!user && checkingRegistration)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
