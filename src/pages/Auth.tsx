@@ -10,7 +10,6 @@ import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { createDefaultSchedule } from '@/services/scheduleService';
-import { smsService } from '@/services/smsService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { useLocaleFormatter } from '@/lib/locale';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -232,6 +231,7 @@ export default function AuthPage() {
   const [verificationCode, setVerificationCode] = useState('');
   const [pendingUserData, setPendingUserData] = useState<any>(null);
   const [rateLimitBlockedUntil, setRateLimitBlockedUntil] = useState<number | null>(null);
+  const handledSignupRedirectRef = useRef(false);
   const navigate = useNavigate();
 
   // Patient registration fields
@@ -315,6 +315,43 @@ export default function AuthPage() {
       setRateLimitBlockedUntil(parsed);
     }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (handledSignupRedirectRef.current) return;
+
+    const queryType = (searchParams.get('type') || '').toLowerCase();
+    const queryVerified = searchParams.get('verified') === '1';
+    const hash = window.location.hash || '';
+    const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+    const hashType = (hashParams.get('type') || '').toLowerCase();
+    const isSignupLinkReturn = queryVerified || queryType === 'signup' || hashType === 'signup';
+    if (!isSignupLinkReturn) return;
+
+    handledSignupRedirectRef.current = true;
+    (async () => {
+      await supabase.auth.signOut();
+      localStorage.removeItem('userRole');
+      setPendingUserData(null);
+      setVerificationCode('');
+      setMode('login');
+
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('verified');
+      cleanUrl.searchParams.delete('type');
+      cleanUrl.searchParams.delete('code');
+      cleanUrl.searchParams.delete('token_hash');
+      window.history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}`);
+      if (window.location.hash) {
+        window.history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}`);
+      }
+
+      toast({
+        title: 'Email confirmed',
+        description: 'Please sign in to continue.',
+      });
+    })();
+  }, [searchParams]);
 
   const setRateLimitBlock = (until: number) => {
     setRateLimitBlockedUntil(until);
@@ -637,6 +674,7 @@ export default function AuthPage() {
           email: normalizedEmail,
           password,
           options: {
+            emailRedirectTo: `${window.location.origin}/auth?mode=login&verified=1`,
             data: {
               full_name: normalizedFullName,
               name: normalizedFullName,
@@ -883,240 +921,14 @@ export default function AuthPage() {
           description: 'Open the confirmation link in your email, then sign in.',
         });
       } else if (mode === 'verify') {
-        // Verify email with code
-        if (!verificationCode) {
-          toast({ title: 'Verification code required', description: 'Please enter the verification code.' });
-          setIsLoading(false);
-          return;
-        }
-
-        const { data, error } = await supabase.auth.verifyOtp({
-          email,
-          token: verificationCode,
-          type: 'email'
-        });
-
-        if (error) {
-          toast({ title: 'Verification failed', description: error.message });
-          setIsLoading(false);
-          return;
-        }
-
-        // Email can verify without establishing a durable client session in some setups.
-        // Ensure we have an authenticated session before storage/database writes.
-        let verifiedUser = data.user;
-        let { data: verifiedSession } = await supabase.auth.getSession();
-        if (!verifiedSession.session && email && password) {
-          const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
-          if (loginError) {
-            console.error('Post-verification sign-in failed:', loginError);
-            toast({
-              title: 'Email verified',
-              description: 'Verification succeeded. Please sign in to complete your registration.',
-            });
-            setIsLoading(false);
-            setMode('login');
-            return;
-          }
-          verifiedUser = loginData.user;
-          verifiedSession = await supabase.auth.getSession();
-        }
-
-        // Now complete the registration process
-        if (pendingUserData && verifiedUser?.id && verifiedSession.session) {
-          try {
-            console.log('Completing registration for user:', verifiedUser.id, 'Role:', pendingUserData.role);
-            
-            if (pendingUserData.role === 'patient') {
-              let patientProfilePictureUrl: string | null = null;
-              if (pendingUserData.patientProfilePicture) {
-                const profileExt = pendingUserData.patientProfilePicture.name.split('.').pop();
-                const profilePath = `${verifiedUser.id}/profile-pictures/profile.${profileExt}`;
-                const { error: profileError } = await supabase.storage
-                  .from('patient-files')
-                  .upload(profilePath, pendingUserData.patientProfilePicture, { upsert: true });
-                if (profileError) {
-                  console.error('Patient profile picture upload error:', profileError);
-                } else {
-                  patientProfilePictureUrl = supabase.storage.from('patient-files').getPublicUrl(profilePath).data.publicUrl;
-                }
-              }
-
-              const registrationPayload = {
-                user_id: verifiedUser.id,
-                full_name: pendingUserData.name,
-                gender: pendingUserData.gender,
-                age: parseInt(pendingUserData.age),
-                phone_number: pendingUserData.phoneNumber,
-                email: pendingUserData.email || null,
-                profile_picture_url: patientProfilePictureUrl,
-                city: pendingUserData.city,
-                state: pendingUserData.state,
-                country: pendingUserData.country,
-                marital_status: pendingUserData.maritalStatus,
-                emergency_contact_name: pendingUserData.emergencyContactName,
-                emergency_contact_phone: pendingUserData.emergencyContactPhone,
-                identification_type: pendingUserData.identificationType,
-                identification_number: pendingUserData.identificationNumber
-              };
-
-              // Direct upsert to ensure patient record exists
-              const { error: patientError } = await supabase
-                .from('patient_registrations')
-                .upsert([registrationPayload], { onConflict: 'user_id' });
-              
-              if (patientError) {
-                console.error('Patient registration error:', patientError);
-              } else {
-                console.log('Patient registration confirmed/updated after verification');
-              }
-              
-              // Send welcome SMS
-              try {
-                await smsService.sendWelcomeSMS(pendingUserData.phoneNumber, pendingUserData.name);
-              } catch (smsError) {
-                console.error('SMS sending failed:', smsError);
-              }
-            } else if (pendingUserData.role === 'doctor') {
-              // Upload files
-              let profilePictureUrl = null;
-              let medicalLicenseUrl = null;
-
-              if (pendingUserData.profilePicture) {
-                const profileExt = pendingUserData.profilePicture.name.split('.').pop();
-                const profilePath = `${verifiedUser.id}/profile-pictures/profile.${profileExt}`;
-                const { error: profileError } = await supabase.storage
-                  .from('doctor-files')
-                  .upload(profilePath, pendingUserData.profilePicture, { upsert: true });
-                if (profileError) {
-                  console.error('Profile picture upload error:', profileError);
-                } else {
-                  profilePictureUrl = supabase.storage.from('doctor-files').getPublicUrl(profilePath).data.publicUrl;
-                }
-              }
-
-              if (pendingUserData.medicalLicense) {
-                const licenseExt = pendingUserData.medicalLicense.name.split('.').pop();
-                const licensePath = `${verifiedUser.id}/credentials/medical-license.${licenseExt}`;
-                const { error: licenseError } = await supabase.storage
-                  .from('doctor-files')
-                  .upload(licensePath, pendingUserData.medicalLicense, { upsert: true });
-                if (licenseError) {
-                  console.error('Medical license upload error:', licenseError);
-                  throw new Error('Medical license upload failed. Please retry.');
-                }
-                medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
-              }
-
-              const resolvedSpecialty = pendingUserData.specialty === 'others'
-                ? pendingUserData.otherSpecialty
-                : pendingUserData.specialty;
-              const parsedRate = parseConsultationRate(String(pendingUserData.consultationRate || ''));
-              const { data: existingDoctorRegistration } = await supabase
-                .from('doctor_registrations')
-                .select('profile_picture_url, medical_license_url, experience')
-                .eq('user_id', verifiedUser.id)
-                .maybeSingle();
-
-              const doctorPayload = {
-                user_id: verifiedUser.id,
-                full_name: pendingUserData.name,
-                gender: pendingUserData.gender,
-                age: parseInt(pendingUserData.age),
-                phone_number: pendingUserData.phoneNumber,
-                email: pendingUserData.email || null,
-                city: pendingUserData.city,
-                state: pendingUserData.state,
-                country: pendingUserData.country,
-                marital_status: pendingUserData.maritalStatus,
-                hospital_affiliation: pendingUserData.hospitalAffiliation,
-                specialty: resolvedSpecialty,
-                preferred_consultation_languages: pendingUserData.consultationLanguages || [],
-                experience: pendingUserData.doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
-                rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
-                  ? null
-                  : parsedRate,
-                profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
-                medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || '',
-                identification_type: pendingUserData.doctorIdType,
-                identification_number: pendingUserData.doctorIdNumber,
-                verification_status: 'pending', //Todo: Implement set status from backend, dont trust user input for process flow
-              };
-
-              console.log('Inserting doctor registration:', doctorPayload);
-              const { error: doctorError } = await supabase
-                .from('doctor_registrations')
-                .upsert([doctorPayload], { onConflict: 'user_id' });
-              if (doctorError) {
-                console.error('Doctor registration error:', doctorError);
-                throw doctorError;
-              }
-
-              // Keep public.doctors in sync for discovery/booking
-              const { error: doctorProfileError } = await supabase
-                .from('doctors')
-                .update({
-                  name: doctorPayload.full_name,
-                  specialty: doctorPayload.specialty,
-                  rate_per_consultation: doctorPayload.rate_per_consultation,
-                  preferred_consultation_languages: doctorPayload.preferred_consultation_languages,
-                  phone: pendingUserData.phoneNumber,
-                  avatar_url: profilePictureUrl || null,
-                })
-                .eq('id', verifiedUser.id);
-
-              if (doctorProfileError) {
-                console.error('Doctor profile sync error:', doctorProfileError);
-              }
-              
-              console.log('Creating default schedule for doctor:', verifiedUser.id);
-              await createDefaultSchedule(verifiedUser.id);
-              console.log('Doctor registration completed successfully');
-            }
-          } catch (regError) {
-            console.error('Registration completion error:', regError);
-            toast({ title: 'Registration incomplete', description: 'Account verified but registration data failed to save. Please contact support.' });
-          }
-        } else {
-          console.error('Missing pending user data, verified user, or session');
-        }
-
-        // Resolve role from signup context first, then auth metadata.
-        const userRole: UserRole = pendingUserData?.role || getMetadataRole(verifiedUser) || 'patient';
-        localStorage.setItem('userRole', userRole);
-
-        // Safety net when verify opens in a fresh tab and in-memory pendingUserData is lost.
-        if (!pendingUserData && verifiedUser?.id && verifiedSession.session) {
-          if (userRole === 'doctor') {
-            await ensureDoctorRegistrationFallback(verifiedUser);
-          } else {
-            await ensurePatientRegistrationFallback(verifiedUser);
-          }
-        }
-
-        // Check if user session is valid
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (!sessionData.session) {
-          toast({ title: 'Session error', description: 'Please try logging in again.' });
-          setIsLoading(false);
-          return;
-        }
-
-        // Require fresh login for both patient and doctor after verification.
-        await supabase.auth.signOut();
-        localStorage.removeItem('userRole');
-        setPendingUserData(null);
-        setVerificationCode('');
-        toast({
-          title: 'Email verified',
-          description: 'Verification succeeded. Please sign in to continue.',
-        });
         setIsLoading(false);
+        toast({
+          title: 'Use verification link',
+          description: 'Your project uses email links. Please confirm from email and sign in.',
+        });
         setMode('login');
         navigate('/auth?mode=login');
+        return;
       } else {
         // Validate email for login
         if (!email) {
