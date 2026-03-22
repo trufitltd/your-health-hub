@@ -39,7 +39,7 @@ export function ProtectedRoute({
       try {
         const [{ data: doctorRow, error: doctorError }, { data: patientRow, error: patientError }] = await Promise.all([
           supabase.from('doctor_registrations').select('profile_picture_url, medical_license_url').eq('user_id', user.id).maybeSingle(),
-          supabase.from('patient_registrations').select('profile_picture_url').eq('user_id', user.id).maybeSingle(),
+          supabase.from('patient_registrations').select('profile_picture_url, post_auth_prompt_completed').eq('user_id', user.id).maybeSingle(),
         ]);
 
         if (cancelled) return;
@@ -55,7 +55,10 @@ export function ProtectedRoute({
           doctorRow ? 'doctor' : ((role || (String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient')) as 'patient' | 'doctor');
 
         const doctorComplete = !!doctorRow && isFilled((doctorRow as any).medical_license_url);
-        const patientComplete = true;
+        const patientComplete = !!patientRow && (
+          isFilled((patientRow as any).profile_picture_url)
+          || Boolean((patientRow as any).post_auth_prompt_completed)
+        );
         const complete = effectiveRole === 'doctor' ? doctorComplete : patientComplete;
 
         if (!complete) {
