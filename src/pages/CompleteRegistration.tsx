@@ -141,6 +141,10 @@ export default function CompleteRegistration() {
       toast({ title: 'Medical license required', description: 'Please upload your medical license.' });
       return;
     }
+    if (role === 'patient' && !profileFile && !isFilled(patientRow?.profile_picture_url)) {
+      toast({ title: 'Profile picture required', description: 'Please upload your profile picture or use "Continue without profile picture".' });
+      return;
+    }
 
     setSaving(true);
     try {
