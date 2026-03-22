@@ -1215,7 +1215,15 @@ export function ConsultationRoom({
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !sessionData) return;
+    if (!newMessage.trim()) return;
+    if (!sessionData) {
+      toast({
+        title: ui('Chat not ready'),
+        description: ui('Please wait a moment and try again.'),
+        variant: 'destructive'
+      });
+      return;
+    }
 
     try {
       const sentMessage = await consultationService.sendMessage(
@@ -1287,7 +1295,26 @@ export function ConsultationRoom({
   // Doctor waiting for patient overlay
   if (participantRole === 'doctor' && waitingForPatient && !isPatientWaiting) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-[#1a1a2e] via-[#16213e] to-[#0f0f23]">
+      <div className="relative flex items-center justify-center h-screen bg-gradient-to-br from-[#1a1a2e] via-[#16213e] to-[#0f0f23] overflow-hidden">
+        <div className="absolute top-4 right-4 z-50">
+          <Button
+            variant="secondary"
+            size="icon"
+            className={`relative w-11 h-11 rounded-full ${isChatOpen ? 'bg-primary text-primary-foreground' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            onClick={() => {
+              const nextOpen = !isChatOpen;
+              setIsChatOpen(nextOpen);
+              if (nextOpen) setUnreadMessageCount(0);
+            }}
+          >
+            <MessageSquare className="w-5 h-5" />
+            {unreadMessageCount > 0 && !isChatOpen && (
+              <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-[10px] rounded-full flex items-center justify-center text-white font-bold">
+                {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+              </span>
+            )}
+          </Button>
+        </div>
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -1393,6 +1420,17 @@ export function ConsultationRoom({
             </div>
           </div>
         </motion.div>
+
+        <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
+          <ChatSidebar
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+            messages={messages}
+            newMessage={newMessage}
+            onMessageChange={setNewMessage}
+            onSendMessage={handleSendMessage}
+          />
+        </div>
       </div>
     );
   }
@@ -1400,7 +1438,26 @@ export function ConsultationRoom({
   // Patient waiting room
   if (!isAdmitted && participantRole === 'patient') {
     return (
-      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-[#1a1a2e] via-[#16213e] to-[#0f0f23]">
+      <div className="relative flex items-center justify-center h-screen bg-gradient-to-br from-[#1a1a2e] via-[#16213e] to-[#0f0f23] overflow-hidden">
+        <div className="absolute top-4 right-4 z-50">
+          <Button
+            variant="secondary"
+            size="icon"
+            className={`relative w-11 h-11 rounded-full ${isChatOpen ? 'bg-primary text-primary-foreground' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            onClick={() => {
+              const nextOpen = !isChatOpen;
+              setIsChatOpen(nextOpen);
+              if (nextOpen) setUnreadMessageCount(0);
+            }}
+          >
+            <MessageSquare className="w-5 h-5" />
+            {unreadMessageCount > 0 && !isChatOpen && (
+              <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-[10px] rounded-full flex items-center justify-center text-white font-bold">
+                {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+              </span>
+            )}
+          </Button>
+        </div>
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -1488,6 +1545,17 @@ export function ConsultationRoom({
             {ui('Leave Waiting Room')}
           </Button>
         </motion.div>
+
+        <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
+          <ChatSidebar
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+            messages={messages}
+            newMessage={newMessage}
+            onMessageChange={setNewMessage}
+            onSendMessage={handleSendMessage}
+          />
+        </div>
       </div>
     );
   }
