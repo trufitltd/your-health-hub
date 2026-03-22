@@ -1464,8 +1464,13 @@ export function ConsultationRoom({
             </div>
           </div>
 
-          {renderWaitingChatPanel()}
         </motion.div>
+
+        <div className="absolute bottom-4 left-4 right-4 z-50 pointer-events-none">
+          <div className="mx-auto max-w-md pointer-events-auto">
+            {renderWaitingChatPanel()}
+          </div>
+        </div>
 
         <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
           <ChatSidebar
@@ -1591,8 +1596,13 @@ export function ConsultationRoom({
             {ui('Leave Waiting Room')}
           </Button>
 
-          {renderWaitingChatPanel()}
         </motion.div>
+
+        <div className="absolute bottom-4 left-4 right-4 z-50 pointer-events-none">
+          <div className="mx-auto max-w-md pointer-events-auto">
+            {renderWaitingChatPanel()}
+          </div>
+        </div>
 
         <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
           <ChatSidebar
