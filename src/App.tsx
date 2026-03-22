@@ -21,6 +21,8 @@ import SlotSelection from "./pages/SlotSelection";
 import Consultation from "./pages/Consultation";
 import AdminLogin from "./pages/AdminLogin";
 import CentralAdmin from "./pages/CentralAdmin";
+import CooLogin from "./pages/CooLogin";
+import COOPortal from "./pages/COOPortal";
 import VerifyPrescription from "./pages/VerifyPrescription";
 import NotFound from "./pages/NotFound";
 import CompleteRegistration from "./pages/CompleteRegistration";
@@ -119,6 +121,8 @@ const App = () => (
               <Route path="/verify/:code" element={<VerifyPrescription />} />
               <Route path="/admin/login" element={<AdminLogin />} />
               <Route path="/admin" element={<CentralAdmin />} />
+              <Route path="/coo/login" element={<CooLogin />} />
+              <Route path="/coo" element={<COOPortal />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
