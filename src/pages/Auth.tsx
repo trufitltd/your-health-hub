@@ -601,8 +601,24 @@ export default function AuthPage() {
           return;
         }
 
-        // Pre-check existing registration tables for duplicate email before attempting sign up.
+        // Authoritative pre-check against auth.users via SECURITY DEFINER RPC.
         const normalizedEmailLower = normalizedEmail.toLowerCase();
+        const { data: authEmailExists, error: authEmailExistsError } = await supabase
+          .rpc('is_email_registered', { p_email: normalizedEmailLower });
+
+        if (authEmailExistsError) {
+          console.warn('Auth email existence RPC warning:', authEmailExistsError);
+        }
+        if (authEmailExists === true) {
+          toast({
+            title: 'Email already in use',
+            description: 'This email already exists. Please use a different email.',
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        // Fallback pre-check on registration tables (useful if RPC migration is not yet applied).
         const [{ data: existingDoctorByEmail, error: existingDoctorByEmailError }, { data: existingPatientByEmail, error: existingPatientByEmailError }] = await Promise.all([
           supabase.from('doctor_registrations').select('user_id').ilike('email', normalizedEmailLower).limit(1).maybeSingle(),
           supabase.from('patient_registrations').select('user_id').ilike('email', normalizedEmailLower).limit(1).maybeSingle(),
