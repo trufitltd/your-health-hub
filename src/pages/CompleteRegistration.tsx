@@ -46,6 +46,7 @@ type PatientRow = {
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
   profile_picture_url: string | null;
+  post_auth_prompt_completed: boolean | null;
   identification_type: string | null;
   identification_number: string | null;
 };
@@ -110,7 +111,10 @@ export default function CompleteRegistration() {
       setRole(effectiveRole);
 
       const doctorComplete = !!doctorData && isFilled((doctorData as DoctorRow).medical_license_url);
-      const patientComplete = true;
+      const patientComplete = !!patientData && (
+        isFilled((patientData as PatientRow).profile_picture_url)
+        || Boolean((patientData as PatientRow).post_auth_prompt_completed)
+      );
       if (effectiveRole === 'doctor' && doctorComplete) {
         setLoading(false);
         navigate('/doctor-portal', { replace: true });
@@ -225,6 +229,7 @@ export default function CompleteRegistration() {
         profile_picture_url: profileUrl,
         identification_type: patientRow?.identification_type || 'hospital_id',
         identification_number: patientRow?.identification_number || user.id,
+        post_auth_prompt_completed: true,
       };
 
       const { error: upsertError } = await supabase
@@ -279,6 +284,55 @@ export default function CompleteRegistration() {
             <Upload className="w-4 h-4 mr-2" />
             {saving ? 'Saving...' : role === 'doctor' ? 'Save and Continue' : 'Continue'}
           </Button>
+
+          {role === 'patient' && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={saving}
+              onClick={() => {
+                if (!user) return;
+                (async () => {
+                  setSaving(true);
+                  try {
+                    const payload = {
+                      user_id: user.id,
+                      full_name: patientRow?.full_name || String(user.user_metadata?.full_name || user.user_metadata?.name || 'Patient'),
+                      gender: patientRow?.gender || 'other',
+                      age: patientRow?.age || 18,
+                      phone_number: patientRow?.phone_number || user.phone || 'N/A',
+                      email: patientRow?.email || user.email || null,
+                      city: patientRow?.city || 'Unknown',
+                      state: patientRow?.state || 'Unknown',
+                      country: patientRow?.country || 'Unknown',
+                      marital_status: patientRow?.marital_status || 'single',
+                      emergency_contact_name: patientRow?.emergency_contact_name || 'Not Provided',
+                      emergency_contact_phone: patientRow?.emergency_contact_phone || user.phone || 'N/A',
+                      profile_picture_url: patientRow?.profile_picture_url || null,
+                      identification_type: patientRow?.identification_type || 'hospital_id',
+                      identification_number: patientRow?.identification_number || user.id,
+                      post_auth_prompt_completed: true,
+                    };
+
+                    const { error } = await supabase
+                      .from('patient_registrations')
+                      .upsert([payload], { onConflict: 'user_id' });
+
+                    if (error) throw error;
+                    toast({ title: 'Registration completed', description: 'You can add a profile picture later in settings.' });
+                    navigate('/patient-portal', { replace: true });
+                  } catch (error: any) {
+                    toast({ title: 'Could not continue', description: error?.message || 'Please try again.' });
+                  } finally {
+                    setSaving(false);
+                  }
+                })();
+              }}
+            >
+              Continue without profile picture
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>
