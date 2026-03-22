@@ -4,7 +4,7 @@ import {
   Video, VideoOff, Mic, MicOff, Phone, MessageSquare,
   X, User, AlertCircle, Camera, Users, Maximize2,
   Minimize2, MoreVertical, Hand, Monitor, Settings,
-  PhoneOff, ChevronRight, ChevronLeft, Clock, Bell, Stethoscope, FolderOpen, Send
+  PhoneOff, ChevronRight, ChevronLeft, Clock, Bell, Stethoscope, FolderOpen
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -1292,50 +1292,6 @@ export function ConsultationRoom({
     }
   };
 
-  const renderWaitingChatPanel = () => (
-    <Card className="w-full max-w-md mx-auto bg-[#252542]/85 border-white/10 text-left">
-      <CardContent className="p-3 space-y-3">
-        <div className="flex items-center gap-2 text-white text-sm font-medium">
-          <MessageSquare className="w-4 h-4" />
-          {ui('Waiting Room Chat')}
-        </div>
-        <div className="h-40 rounded-md border border-white/10 bg-black/20 overflow-y-auto p-2 space-y-2">
-          {messages.length === 0 ? (
-            <p className="text-xs text-slate-400">{ui('No messages yet. Start the conversation.')}</p>
-          ) : (
-            messages.slice(-40).map((message) => (
-              <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-lg px-2 py-1 ${message.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-white/10 text-white'}`}>
-                  {message.sender === 'remote' && (
-                    <p className="text-[10px] text-slate-300 mb-0.5">{message.senderName}</p>
-                  )}
-                  <p className="text-xs break-words">{message.content}</p>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleSendMessage();
-          }}
-        >
-          <Input
-            value={newMessage}
-            onChange={(event) => setNewMessage(event.target.value)}
-            placeholder={ui('Type a message...')}
-            className="h-10 bg-black/20 border-white/10 text-white placeholder:text-slate-500"
-          />
-          <Button type="submit" size="icon" className="h-10 w-10" disabled={!newMessage.trim()}>
-            <Send className="w-4 h-4" />
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-
   // Doctor waiting for patient overlay
   if (participantRole === 'doctor' && waitingForPatient && !isPatientWaiting) {
     return (
@@ -1466,12 +1422,6 @@ export function ConsultationRoom({
 
         </motion.div>
 
-        <div className="absolute bottom-4 left-4 right-4 z-50 pointer-events-none">
-          <div className="mx-auto max-w-md pointer-events-auto">
-            {renderWaitingChatPanel()}
-          </div>
-        </div>
-
         <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
           <ChatSidebar
             isOpen={isChatOpen}
@@ -1597,12 +1547,6 @@ export function ConsultationRoom({
           </Button>
 
         </motion.div>
-
-        <div className="absolute bottom-4 left-4 right-4 z-50 pointer-events-none">
-          <div className="mx-auto max-w-md pointer-events-auto">
-            {renderWaitingChatPanel()}
-          </div>
-        </div>
 
         <div className={`${isChatOpen ? 'absolute sm:relative' : 'hidden'} top-0 right-0 bottom-0 z-40 sm:z-auto h-full max-h-screen`}>
           <ChatSidebar
