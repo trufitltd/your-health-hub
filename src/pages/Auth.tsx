@@ -246,6 +246,8 @@ export default function AuthPage() {
   const [identificationType, setIdentificationType] = useState('');
   const [identificationNumber, setIdentificationNumber] = useState('');
   const [consentAgreed, setConsentAgreed] = useState(false);
+  const [patientProfilePicture, setPatientProfilePicture] = useState<File | null>(null);
+  const patientProfilePictureInputRef = useRef<HTMLInputElement | null>(null);
 
   // Doctor registration fields
   const [hospitalAffiliation, setHospitalAffiliation] = useState('');
@@ -719,7 +721,9 @@ export default function AuthPage() {
               const { error: profileError } = await supabase.storage
                 .from('doctor-files')
                 .upload(profilePath, profilePicture, { upsert: true });
-              if (!profileError) {
+              if (profileError) {
+                console.error('Doctor profile upload error:', profileError);
+              } else {
                 profilePictureUrl = supabase.storage.from('doctor-files').getPublicUrl(profilePath).data.publicUrl;
               }
             }
@@ -730,9 +734,11 @@ export default function AuthPage() {
               const { error: licenseError } = await supabase.storage
                 .from('doctor-files')
                 .upload(licensePath, medicalLicense, { upsert: true });
-              if (!licenseError) {
-                medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
+              if (licenseError) {
+                console.error('Medical license upload error:', licenseError);
+                throw new Error('Medical license upload failed. Please retry signup.');
               }
+              medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
             }
 
             const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
@@ -780,6 +786,20 @@ export default function AuthPage() {
         // Immediately save patient registration only when a valid session exists.
         if (role === 'patient' && data.user?.id && canWriteRegistrationImmediately) {
           try {
+            let patientProfilePictureUrl: string | null = null;
+            if (patientProfilePicture) {
+              const profileExt = patientProfilePicture.name.split('.').pop();
+              const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+              const { error: profileError } = await supabase.storage
+                .from('patient-files')
+                .upload(profilePath, patientProfilePicture, { upsert: true });
+              if (profileError) {
+                console.error('Patient profile upload error:', profileError);
+              } else {
+                patientProfilePictureUrl = supabase.storage.from('patient-files').getPublicUrl(profilePath).data.publicUrl;
+              }
+            }
+
             const patientPayload = {
               user_id: data.user.id,
               full_name: normalizedFullName,
@@ -787,6 +807,7 @@ export default function AuthPage() {
               age: parseInt(age || '0') || 18,
               phone_number: normalizedPhone,
               email: normalizedEmail,
+              profile_picture_url: patientProfilePictureUrl,
               identification_type: identificationType,
               identification_number: identificationNumber,
             };
@@ -831,6 +852,7 @@ export default function AuthPage() {
           doctorConsentAgreed,
           profilePicture,
           medicalLicense,
+          patientProfilePicture,
           doctorIdType,
           doctorIdNumber,
           userId: data.user?.id
@@ -880,6 +902,20 @@ export default function AuthPage() {
             console.log('Completing registration for user:', data.user.id, 'Role:', pendingUserData.role);
             
             if (pendingUserData.role === 'patient') {
+              let patientProfilePictureUrl: string | null = null;
+              if (pendingUserData.patientProfilePicture) {
+                const profileExt = pendingUserData.patientProfilePicture.name.split('.').pop();
+                const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
+                const { error: profileError } = await supabase.storage
+                  .from('patient-files')
+                  .upload(profilePath, pendingUserData.patientProfilePicture, { upsert: true });
+                if (profileError) {
+                  console.error('Patient profile picture upload error:', profileError);
+                } else {
+                  patientProfilePictureUrl = supabase.storage.from('patient-files').getPublicUrl(profilePath).data.publicUrl;
+                }
+              }
+
               const registrationPayload = {
                 user_id: data.user.id,
                 full_name: pendingUserData.name,
@@ -887,6 +923,7 @@ export default function AuthPage() {
                 age: parseInt(pendingUserData.age),
                 phone_number: pendingUserData.phoneNumber,
                 email: pendingUserData.email || null,
+                profile_picture_url: patientProfilePictureUrl,
                 city: pendingUserData.city,
                 state: pendingUserData.state,
                 country: pendingUserData.country,
@@ -940,9 +977,9 @@ export default function AuthPage() {
                   .upload(licensePath, pendingUserData.medicalLicense, { upsert: true });
                 if (licenseError) {
                   console.error('Medical license upload error:', licenseError);
-                } else {
-                  medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
+                  throw new Error('Medical license upload failed. Please retry.');
                 }
+                medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
               }
 
               const resolvedSpecialty = pendingUserData.specialty === 'others'
@@ -1345,6 +1382,32 @@ export default function AuthPage() {
                 {mode === 'register' && role === 'patient' && (
                   <div className="space-y-4 pt-4 border-t border-border">
                     <h3 className="text-lg font-semibold">{t('auth.sections.patientInfo', 'Patient Information')}</h3>
+
+                    <div>
+                      <Label htmlFor="patientProfilePicture">{t('auth.fields.profilePictureOptional', 'Profile Picture (Optional)')}</Label>
+                      <div className="mt-1.5 space-y-2">
+                        <input
+                          id="patientProfilePicture"
+                          ref={patientProfilePictureInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => setPatientProfilePicture(e.target.files?.[0] || null)}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start gap-2 h-12"
+                          onClick={() => patientProfilePictureInputRef.current?.click()}
+                        >
+                          <Upload className="w-4 h-4" />
+                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                          {patientProfilePicture?.name || t('auth.fields.noFileSelected', 'No file selected')}
+                        </p>
+                      </div>
+                    </div>
                     
                     {/* Gender & Age */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
