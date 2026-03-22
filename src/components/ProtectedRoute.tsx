@@ -28,26 +28,38 @@ export function ProtectedRoute({
     let cancelled = false;
     (async () => {
       setCheckingRegistration(true);
-      const [{ data: doctorRow }, { data: patientRow }] = await Promise.all([
-        supabase.from('doctor_registrations').select('profile_picture_url, medical_license_url').eq('user_id', user.id).maybeSingle(),
-        supabase.from('patient_registrations').select('profile_picture_url').eq('user_id', user.id).maybeSingle(),
-      ]);
+      try {
+        const [{ data: doctorRow, error: doctorError }, { data: patientRow, error: patientError }] = await Promise.all([
+          supabase.from('doctor_registrations').select('profile_picture_url, medical_license_url').eq('user_id', user.id).maybeSingle(),
+          supabase.from('patient_registrations').select('profile_picture_url').eq('user_id', user.id).maybeSingle(),
+        ]);
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      const effectiveRole: 'patient' | 'doctor' =
-        doctorRow ? 'doctor' : ((role || (String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient')) as 'patient' | 'doctor');
+        if (doctorError) {
+          console.warn('ProtectedRoute doctor registration check warning:', doctorError);
+        }
+        if (patientError) {
+          console.warn('ProtectedRoute patient registration check warning:', patientError);
+        }
 
-      const doctorComplete = !!doctorRow && isFilled((doctorRow as any).profile_picture_url) && isFilled((doctorRow as any).medical_license_url);
-      const patientComplete = !!patientRow && isFilled((patientRow as any).profile_picture_url);
-      const complete = effectiveRole === 'doctor' ? doctorComplete : patientComplete;
+        const effectiveRole: 'patient' | 'doctor' =
+          doctorRow ? 'doctor' : ((role || (String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient')) as 'patient' | 'doctor');
 
-      if (!complete) {
-        setRedirectPath(`/complete-registration?role=${effectiveRole}`);
-      } else {
-        setRedirectPath(null);
+        const doctorComplete = !!doctorRow && isFilled((doctorRow as any).medical_license_url);
+        const patientComplete = true;
+        const complete = effectiveRole === 'doctor' ? doctorComplete : patientComplete;
+
+        if (!complete) {
+          setRedirectPath(`/complete-registration?role=${effectiveRole}`);
+        } else {
+          setRedirectPath(null);
+        }
+      } catch (error) {
+        console.error('ProtectedRoute registration check failed:', error);
+      } finally {
+        if (!cancelled) setCheckingRegistration(false);
       }
-      setCheckingRegistration(false);
     })();
 
     return () => {
