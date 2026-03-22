@@ -23,6 +23,8 @@ import AdminLogin from "./pages/AdminLogin";
 import CentralAdmin from "./pages/CentralAdmin";
 import VerifyPrescription from "./pages/VerifyPrescription";
 import NotFound from "./pages/NotFound";
+import CompleteRegistration from "./pages/CompleteRegistration";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -82,8 +84,30 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/patient-portal" element={<PatientPortal />} />
-              <Route path="/doctor-portal" element={<DoctorPortal />} />
+              <Route
+                path="/patient-portal"
+                element={
+                  <ProtectedRoute requiredRole="patient" requireCompletedRegistration>
+                    <PatientPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/doctor-portal"
+                element={
+                  <ProtectedRoute requiredRole="doctor" requireCompletedRegistration>
+                    <DoctorPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/complete-registration"
+                element={
+                  <ProtectedRoute>
+                    <CompleteRegistration />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="/doctor-discovery" element={<DoctorDiscovery />} />
               <Route path="/slot-selection" element={<SlotSelection />} />
               <Route path="/services" element={<Services />} />
