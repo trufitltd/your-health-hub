@@ -703,7 +703,7 @@ const DoctorPortal = () => {
         .from('doctors')
         .select('is_active')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
       
       // Check if doctor has any available schedules
       const { data: schedules } = await supabase

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Upload, User, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -77,7 +77,7 @@ export default function CompleteRegistration() {
 
     const fetchRows = async () => {
       setLoading(true);
-      const [{ data: doctorData }, { data: patientData }] = await Promise.all([
+      const [{ data: doctorData, error: doctorError }, { data: patientData, error: patientError }] = await Promise.all([
         supabase
           .from('doctor_registrations')
           .select('*')
@@ -89,6 +89,13 @@ export default function CompleteRegistration() {
           .eq('user_id', user.id)
           .maybeSingle(),
       ]);
+
+      if (doctorError) {
+        console.warn('CompleteRegistration doctor row fetch warning:', doctorError);
+      }
+      if (patientError) {
+        console.warn('CompleteRegistration patient row fetch warning:', patientError);
+      }
 
       setDoctorRow((doctorData as DoctorRow | null) ?? null);
       setPatientRow((patientData as PatientRow | null) ?? null);
@@ -102,13 +109,15 @@ export default function CompleteRegistration() {
 
       setRole(effectiveRole);
 
-      const doctorComplete = !!doctorData && isFilled((doctorData as DoctorRow).profile_picture_url) && isFilled((doctorData as DoctorRow).medical_license_url);
-      const patientComplete = !!patientData && isFilled((patientData as PatientRow).profile_picture_url);
+      const doctorComplete = !!doctorData && isFilled((doctorData as DoctorRow).medical_license_url);
+      const patientComplete = true;
       if (effectiveRole === 'doctor' && doctorComplete) {
+        setLoading(false);
         navigate('/doctor-portal', { replace: true });
         return;
       }
       if (effectiveRole === 'patient' && patientComplete) {
+        setLoading(false);
         navigate('/patient-portal', { replace: true });
         return;
       }
@@ -119,22 +128,10 @@ export default function CompleteRegistration() {
     fetchRows();
   }, [authLoading, navigate, roleFromQuery, user]);
 
-  const needsDoctorProfile = role === 'doctor' && !isFilled(doctorRow?.profile_picture_url);
   const needsDoctorLicense = role === 'doctor' && !isFilled(doctorRow?.medical_license_url);
-  const needsPatientProfile = role === 'patient' && !isFilled(patientRow?.profile_picture_url);
-
-  const requiresProfileUpload = useMemo(() => {
-    if (role === 'doctor') return needsDoctorProfile;
-    return needsPatientProfile;
-  }, [needsDoctorProfile, needsPatientProfile, role]);
 
   const handleSubmit = async () => {
     if (!user) return;
-
-    if (requiresProfileUpload && !profileFile) {
-      toast({ title: 'Profile picture required', description: 'Please upload a profile picture.' });
-      return;
-    }
 
     if (role === 'doctor' && needsDoctorLicense && !licenseFile) {
       toast({ title: 'Medical license required', description: 'Please upload your medical license.' });
@@ -163,8 +160,8 @@ export default function CompleteRegistration() {
           licenseUrl = supabase.storage.from('doctor-files').getPublicUrl(path).data.publicUrl;
         }
 
-        if (!isFilled(profileUrl) || !isFilled(licenseUrl)) {
-          throw new Error('Profile picture and license are required.');
+        if (!isFilled(licenseUrl)) {
+          throw new Error('Medical license is required.');
         }
 
         const payload = {
@@ -198,7 +195,7 @@ export default function CompleteRegistration() {
           .update({ avatar_url: profileUrl })
           .eq('id', user.id);
 
-        toast({ title: 'Registration completed', description: 'Doctor profile and license uploaded successfully.' });
+        toast({ title: 'Registration completed', description: 'Doctor license saved successfully.' });
         navigate('/doctor-portal', { replace: true });
         return;
       }
@@ -210,10 +207,6 @@ export default function CompleteRegistration() {
         const { error: uploadError } = await supabase.storage.from('patient-files').upload(path, profileFile, { upsert: true });
         if (uploadError) throw uploadError;
         profileUrl = supabase.storage.from('patient-files').getPublicUrl(path).data.publicUrl;
-      }
-
-      if (!isFilled(profileUrl)) {
-        throw new Error('Profile picture is required.');
       }
 
       const payload = {
@@ -239,7 +232,7 @@ export default function CompleteRegistration() {
         .upsert([payload], { onConflict: 'user_id' });
       if (upsertError) throw upsertError;
 
-      toast({ title: 'Registration completed', description: 'Profile picture uploaded successfully.' });
+      toast({ title: 'Registration completed', description: profileFile ? 'Profile picture uploaded successfully.' : 'You can add a profile picture later in settings.' });
       navigate('/patient-portal', { replace: true });
     } catch (error: any) {
       toast({ title: 'Upload failed', description: error?.message || 'Please try again.' });
@@ -263,13 +256,13 @@ export default function CompleteRegistration() {
           <CardTitle>Complete Registration</CardTitle>
           <CardDescription>
             {role === 'doctor'
-              ? 'Upload required files before accessing Doctor Portal.'
-              : 'Upload your profile picture before accessing Patient Portal.'}
+              ? 'Upload your medical license before accessing Doctor Portal. Profile picture is optional.'
+              : 'Profile picture is optional. You can continue now and upload it later in settings.'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="profileFile">Profile Picture (Required)</Label>
+            <Label htmlFor="profileFile">Profile Picture (Optional)</Label>
             <Input id="profileFile" type="file" accept="image/*" onChange={(e) => setProfileFile(e.target.files?.[0] || null)} />
             <p className="text-xs text-muted-foreground flex items-center gap-1"><User className="w-3 h-3" /> {profileFile?.name || 'No file selected'}</p>
           </div>
@@ -284,7 +277,7 @@ export default function CompleteRegistration() {
 
           <Button className="w-full" onClick={handleSubmit} disabled={saving}>
             <Upload className="w-4 h-4 mr-2" />
-            {saving ? 'Saving...' : 'Upload and Continue'}
+            {saving ? 'Saving...' : role === 'doctor' ? 'Save and Continue' : 'Continue'}
           </Button>
         </CardContent>
       </Card>

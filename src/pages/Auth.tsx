@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check, Phone, MapPin, Upload } from 'lucide-react';
+import { Stethoscope, Mail, Lock, User, Eye, EyeOff, ArrowRight, Check, Phone, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -246,23 +246,16 @@ export default function AuthPage() {
   const [identificationType, setIdentificationType] = useState('');
   const [identificationNumber, setIdentificationNumber] = useState('');
   const [consentAgreed, setConsentAgreed] = useState(false);
-  const [patientProfilePicture, setPatientProfilePicture] = useState<File | null>(null);
-  const patientProfilePictureInputRef = useRef<HTMLInputElement | null>(null);
-
   // Doctor registration fields
   const [hospitalAffiliation, setHospitalAffiliation] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [otherSpecialty, setOtherSpecialty] = useState('');
-  const [profilePicture, setProfilePicture] = useState<File | null>(null);
-  const [medicalLicense, setMedicalLicense] = useState<File | null>(null);
   const [doctorIdType, setDoctorIdType] = useState('');
   const [doctorIdNumber, setDoctorIdNumber] = useState('');
   const [doctorExperience, setDoctorExperience] = useState('');
   const [consultationRate, setConsultationRate] = useState('');
   const [doctorConsentAgreed, setDoctorConsentAgreed] = useState(false);
   const [consultationLanguages, setConsultationLanguages] = useState<string[]>([]);
-  const profilePictureInputRef = useRef<HTMLInputElement | null>(null);
-  const medicalLicenseInputRef = useRef<HTMLInputElement | null>(null);
   const { formatCurrency, formatNumber } = useLocaleFormatter();
   const consultationLanguageOptions = [
     { value: 'english', label: t('auth.values.languages.english', 'English') },
@@ -634,8 +627,8 @@ export default function AuthPage() {
         // Validate doctor registration fields if role is doctor
         if (role === 'doctor') {
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
-              !hospitalAffiliation || !specialty || !medicalLicense || !doctorIdType || !doctorIdNumber || !doctorExperience) {
-            toast({ title: 'Missing information', description: 'Please fill in all required fields and upload medical license.' });
+              !hospitalAffiliation || !specialty || !doctorIdType || !doctorIdNumber || !doctorExperience) {
+            toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
             setIsLoading(false);
             return;
           }
@@ -749,36 +742,6 @@ export default function AuthPage() {
         // Immediately save doctor registration data only when a valid session exists.
         if (role === 'doctor' && data.user?.id && canWriteRegistrationImmediately) {
           try {
-            // Upload files first
-            let profilePictureUrl = null;
-            let medicalLicenseUrl = null;
-
-            if (profilePicture) {
-              const profileExt = profilePicture.name.split('.').pop();
-              const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
-              const { error: profileError } = await supabase.storage
-                .from('doctor-files')
-                .upload(profilePath, profilePicture, { upsert: true });
-              if (profileError) {
-                console.error('Doctor profile upload error:', profileError);
-              } else {
-                profilePictureUrl = supabase.storage.from('doctor-files').getPublicUrl(profilePath).data.publicUrl;
-              }
-            }
-
-            if (medicalLicense) {
-              const licenseExt = medicalLicense.name.split('.').pop();
-              const licensePath = `${data.user.id}/credentials/medical-license.${licenseExt}`;
-              const { error: licenseError } = await supabase.storage
-                .from('doctor-files')
-                .upload(licensePath, medicalLicense, { upsert: true });
-              if (licenseError) {
-                console.error('Medical license upload error:', licenseError);
-                throw new Error('Medical license upload failed. Please retry signup.');
-              }
-              medicalLicenseUrl = supabase.storage.from('doctor-files').getPublicUrl(licensePath).data.publicUrl;
-            }
-
             const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
             const parsedRate = parseConsultationRate(consultationRate);
             const { data: existingDoctorRegistration } = await supabase
@@ -805,8 +768,8 @@ export default function AuthPage() {
               rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '') || !parsedRate
                 ? null
                 : parsedRate,
-              profile_picture_url: profilePictureUrl || existingDoctorRegistration?.profile_picture_url || null,
-              medical_license_url: medicalLicenseUrl || existingDoctorRegistration?.medical_license_url || '',
+              profile_picture_url: existingDoctorRegistration?.profile_picture_url || null,
+              medical_license_url: existingDoctorRegistration?.medical_license_url || '',
               identification_type: doctorIdType,
               identification_number: doctorIdNumber,
               verification_status: 'pending'
@@ -824,20 +787,6 @@ export default function AuthPage() {
         // Immediately save patient registration only when a valid session exists.
         if (role === 'patient' && data.user?.id && canWriteRegistrationImmediately) {
           try {
-            let patientProfilePictureUrl: string | null = null;
-            if (patientProfilePicture) {
-              const profileExt = patientProfilePicture.name.split('.').pop();
-              const profilePath = `${data.user.id}/profile-pictures/profile.${profileExt}`;
-              const { error: profileError } = await supabase.storage
-                .from('patient-files')
-                .upload(profilePath, patientProfilePicture, { upsert: true });
-              if (profileError) {
-                console.error('Patient profile upload error:', profileError);
-              } else {
-                patientProfilePictureUrl = supabase.storage.from('patient-files').getPublicUrl(profilePath).data.publicUrl;
-              }
-            }
-
             const patientPayload = {
               user_id: data.user.id,
               full_name: normalizedFullName,
@@ -845,7 +794,7 @@ export default function AuthPage() {
               age: parseInt(age || '0') || 18,
               phone_number: normalizedPhone,
               email: normalizedEmail,
-              profile_picture_url: patientProfilePictureUrl,
+              profile_picture_url: null,
               identification_type: identificationType,
               identification_number: identificationNumber,
             };
@@ -888,9 +837,6 @@ export default function AuthPage() {
           doctorExperience,
           consultationRate,
           doctorConsentAgreed,
-          profilePicture,
-          medicalLicense,
-          patientProfilePicture,
           doctorIdType,
           doctorIdNumber,
           userId: data.user?.id
@@ -1230,32 +1176,6 @@ export default function AuthPage() {
                 {mode === 'register' && role === 'patient' && (
                   <div className="space-y-4 pt-4 border-t border-border">
                     <h3 className="text-lg font-semibold">{t('auth.sections.patientInfo', 'Patient Information')}</h3>
-
-                    <div>
-                      <Label htmlFor="patientProfilePicture">{t('auth.fields.profilePictureOptional', 'Profile Picture (Optional)')}</Label>
-                      <div className="mt-1.5 space-y-2">
-                        <input
-                          id="patientProfilePicture"
-                          ref={patientProfilePictureInputRef}
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => setPatientProfilePicture(e.target.files?.[0] || null)}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full justify-start gap-2 h-12"
-                          onClick={() => patientProfilePictureInputRef.current?.click()}
-                        >
-                          <Upload className="w-4 h-4" />
-                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
-                        </Button>
-                        <p className="text-xs text-muted-foreground">
-                          {patientProfilePicture?.name || t('auth.fields.noFileSelected', 'No file selected')}
-                        </p>
-                      </div>
-                    </div>
                     
                     {/* Gender & Age */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1423,33 +1343,6 @@ export default function AuthPage() {
                 {mode === 'register' && role === 'doctor' && (
                   <div className="space-y-4 pt-4 border-t border-border">
                     <h3 className="text-lg font-semibold">{t('auth.sections.doctorInfo', 'Doctor Information')}</h3>
-                    
-                    {/* Profile Picture */}
-                    <div>
-                      <Label htmlFor="profilePicture">{t('auth.fields.profilePictureOptional', 'Profile Picture (Optional)')}</Label>
-                      <div className="mt-1.5 space-y-2">
-                        <input
-                          id="profilePicture"
-                          ref={profilePictureInputRef}
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => setProfilePicture(e.target.files?.[0] || null)}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full justify-start gap-2 h-12"
-                          onClick={() => profilePictureInputRef.current?.click()}
-                        >
-                          <Upload className="w-4 h-4" />
-                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
-                        </Button>
-                        <p className="text-xs text-muted-foreground">
-                          {profilePicture?.name || t('auth.fields.noFileSelected', 'No file selected')}
-                        </p>
-                      </div>
-                    </div>
 
                     {/* Gender & Age */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1658,33 +1551,6 @@ export default function AuthPage() {
                         </p>
                       </div>
                     )}
-
-                    {/* Medical License */}
-                    <div>
-                      <Label htmlFor="medicalLicense">{t('auth.fields.medicalLicense', 'Medical License / Registration Certificate')} *</Label>
-                      <div className="mt-1.5 space-y-2">
-                        <input
-                          id="medicalLicense"
-                          ref={medicalLicenseInputRef}
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          className="hidden"
-                          onChange={(e) => setMedicalLicense(e.target.files?.[0] || null)}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full justify-start gap-2 h-12"
-                          onClick={() => medicalLicenseInputRef.current?.click()}
-                        >
-                          <Upload className="w-4 h-4" />
-                          {t('auth.fields.chooseFileToUpload', 'Choose file to upload')}
-                        </Button>
-                        <p className="text-xs text-muted-foreground">
-                          {medicalLicense?.name || t('auth.fields.noFileSelected', 'No file selected')}
-                        </p>
-                      </div>
-                    </div>
 
                     {/* Identification */}
                     <div className="space-y-4">
