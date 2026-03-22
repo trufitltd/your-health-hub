@@ -163,7 +163,7 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
           `,
           )
           .eq('patient_id', user.id)
-          .in('appointments.status', ['confirmed', 'completed']);
+          .in('appointments.status', ['confirmed', 'in_progress', 'completed']);
 
         if (error) {
           console.error('Failed to load consultations:', error);
@@ -594,7 +594,7 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
             ) : filteredThreads.length === 0 ? (
               <div className="p-6 text-sm text-muted-foreground flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5" />
-                <span>No confirmed or completed consultations yet.</span>
+                <span>No confirmed, ongoing, or completed consultations yet.</span>
               </div>
             ) : (
               filteredThreads.map((thread) => (
@@ -866,7 +866,7 @@ export function MessagesTab({ focusSessionId = null, jumpToUnreadSignal = 0 }: M
           </div>
           <h3 className="text-xl font-semibold mb-2">Consultation Messages</h3>
           <p className="text-muted-foreground max-w-sm">
-            Select a confirmed or completed consultation to view your chat history with the doctor.
+            Select a confirmed, ongoing, or completed consultation to view your chat history with the doctor.
           </p>
         </div>
       )}
