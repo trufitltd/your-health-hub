@@ -245,6 +245,15 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
       .select();
 
     if (error) {
+      // Existing rows can return conflict-like responses in some PostgREST paths; treat as idempotent success.
+      const isConflict =
+        error.code === '23505'
+        || (error as any).status === 409
+        || String(error.message || '').toLowerCase().includes('conflict')
+        || String(error.message || '').toLowerCase().includes('duplicate key');
+      if (isConflict) {
+        return [];
+      }
       console.error('Error creating default schedule:', error);
       // Don't throw error, just log it - schedule can be created later
       return [];
