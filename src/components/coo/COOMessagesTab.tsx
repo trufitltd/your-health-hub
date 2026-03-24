@@ -62,6 +62,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeIdRef = useRef<string | null>(null);
   const readKey = `coo-messages-read-${cooUserId}`;
 
   const getReadState = (): Record<string, string> => {
@@ -115,39 +116,56 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cooUserId]);
 
-  // Load messages + realtime for active thread
+  // Keep activeIdRef in sync so the background channel closure can read it without stale closure
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  // Load messages for active thread
   useEffect(() => {
     if (!activeId) { setMessages([]); return; }
-    markRead(activeId);
-
     supabase
       .from('coo_messages')
       .select('*')
       .eq('thread_id', activeId)
       .order('created_at', { ascending: true })
       .then(({ data }) => setMessages((data || []) as CooMessage[]));
+  }, [activeId]);
 
-    const capturedActiveId = activeId;
+  // Background realtime — covers ALL threads so inactive threads get unread increments
+  useEffect(() => {
     const channel = supabase
-      .channel(`coo-thread-${activeId}`)
+      .channel(`coo-all-threads-${cooUserId}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'coo_messages' },
         (payload) => {
           const msg = payload.new as CooMessage;
-          if (msg.thread_id !== capturedActiveId) return;
-          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-          setPreviews((prev) => ({
-            ...prev,
-            [capturedActiveId]: { lastMessage: msg.content, lastAt: msg.created_at, unread: 0 },
-          }));
-          markRead(capturedActiveId);
+          const isActive = msg.thread_id === activeIdRef.current;
+
+          if (isActive) {
+            setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          }
+
+          setPreviews((prev) => {
+            const existing = prev[msg.thread_id] ?? { unread: 0 };
+            const addUnread = !isActive && msg.sender_role !== 'coo' ? 1 : 0;
+            const next = {
+              ...prev,
+              [msg.thread_id]: {
+                lastMessage: msg.content,
+                lastAt: msg.created_at,
+                unread: existing.unread + addUnread,
+              },
+            };
+            const total = Object.values(next).reduce((sum, p) => sum + (p.unread ?? 0), 0);
+            onUnreadChange?.(total);
+            return next;
+          });
         },
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [activeId]);
+  }, [cooUserId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -159,6 +177,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
     setActiveLabel(label);
     setSendError(null);
     setNewMessage('');
+    markRead(id);
   };
 
   const handleSend = async (e?: React.FormEvent) => {
