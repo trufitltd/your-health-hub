@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Send, MessageSquare } from 'lucide-react';
+import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,6 +16,7 @@ interface ContactMyEDoctorFormProps {
   phone?: string | null;
   role: 'doctor' | 'patient';
   userId?: string | null;
+  onCooUnreadChange?: (count: number) => void;
 }
 
 interface ContactMessageRow {
@@ -23,6 +25,30 @@ interface ContactMessageRow {
   message: string;
   created_at: string;
 }
+
+const getAdminReplyMarkerTimes = (body: string) => {
+  const times: number[] = [];
+  for (const match of body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
+    const timestamp = `${match[1].replace(' ', 'T')}:00Z`;
+    const ms = new Date(timestamp).getTime();
+    if (!Number.isNaN(ms)) times.push(ms);
+  }
+  return times;
+};
+
+const getLatestAdminActivityMs = (row: ContactMessageRow) => {
+  const body = String(row.message || '');
+  let latest = 0;
+  if (/\[portal:admin\]/i.test(body)) {
+    const createdMs = new Date(String(row.created_at || '')).getTime();
+    if (!Number.isNaN(createdMs)) latest = Math.max(latest, createdMs);
+  }
+  const markerTimes = getAdminReplyMarkerTimes(body);
+  markerTimes.forEach((ms) => {
+    latest = Math.max(latest, ms);
+  });
+  return latest;
+};
 
 const splitName = (fullName: string) => {
   const normalized = fullName.trim().replace(/\s+/g, ' ');
@@ -41,10 +67,14 @@ export const ContactMyEDoctorForm = ({
   phone,
   role,
   userId,
+  onCooUnreadChange,
 }: ContactMyEDoctorFormProps) => {
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  const [replyMessage, setReplyMessage] = useState('');
+  const [isReplying, setIsReplying] = useState(false);
 
   const roleLabel = role === 'doctor' ? 'Doctor' : 'Patient';
   const safeFullName = (fullName || '').trim();
@@ -54,6 +84,7 @@ export const ContactMyEDoctorForm = ({
   const parsedName = useMemo(() => splitName(safeFullName), [safeFullName]);
 
   const canSubmit = !!parsedName.firstName && !!safeEmail;
+  const readStorageKey = userId ? `${role}-contact-thread-read-${userId}` : null;
   const { data: myMessages = [], isLoading: myMessagesLoading, isError: myMessagesError, refetch: refetchMyMessages } = useQuery({
     queryKey: ['my-contact-messages', normalizedEmail],
     queryFn: async () => {
@@ -117,6 +148,70 @@ export const ContactMyEDoctorForm = ({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleReply = async (messageId: string) => {
+    if (!messageId || !replyMessage.trim()) {
+      toast({
+        title: 'Reply required',
+        description: 'Please enter your reply.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsReplying(true);
+    try {
+      const { error } = await supabase.rpc('user_append_contact_reply', {
+        p_message_id: messageId,
+        p_reply: replyMessage.trim(),
+        p_sender_role: roleLabel,
+        p_sender_user_id: userId || null,
+        p_sender_name: safeFullName || null,
+        p_sender_phone: safePhone || null,
+      });
+      if (error) throw error;
+
+      setReplyMessage('');
+      setReplyTargetId(null);
+      refetchMyMessages();
+      toast({
+        title: 'Reply sent',
+        description: 'Your reply was added to the conversation thread.',
+      });
+    } catch (error) {
+      console.error('Failed to append reply in contact thread:', error);
+      toast({
+        title: 'Reply failed',
+        description: 'Please ensure migration db/50_add_user_append_contact_reply_rpc.sql is applied.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsReplying(false);
+    }
+  };
+
+  const getThreadReadState = () => {
+    if (!readStorageKey || typeof window === 'undefined') return {} as Record<string, number>;
+    try {
+      const raw = window.localStorage.getItem(readStorageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number')
+      );
+    } catch {
+      return {};
+    }
+  };
+
+  const markThreadRead = (threadId: string, readAtMs: number) => {
+    if (!readStorageKey || typeof window === 'undefined') return;
+    const current = getThreadReadState();
+    current[threadId] = readAtMs;
+    window.localStorage.setItem(readStorageKey, JSON.stringify(current));
+    window.dispatchEvent(new Event('contact-thread-read-updated'));
   };
 
   return (
@@ -183,6 +278,21 @@ export const ContactMyEDoctorForm = ({
           </Button>
         </form>
 
+        {userId && (
+          <div className="mt-8 border-t border-border pt-6">
+            <h3 className="text-sm font-semibold mb-3">Messages with COO</h3>
+            <CooThreadChat
+              threadId={userId}
+              threadType="patient"
+              userId={userId}
+              senderRole="patient"
+              senderName={safeFullName || safeEmail || 'Patient'}
+              label="COO — Chief Operations Officer"
+              onUnreadChange={onCooUnreadChange}
+            />
+          </div>
+        )}
+
         <div className="mt-8 border-t border-border pt-6">
           <h3 className="text-sm font-semibold mb-3">Conversation History</h3>
           {myMessagesLoading ? (
@@ -193,17 +303,85 @@ export const ContactMyEDoctorForm = ({
             <p className="text-sm text-muted-foreground">No messages yet.</p>
           ) : (
             <div className="space-y-3">
-              {myMessages.map((item) => (
-                <div key={item.id} className="rounded-lg border border-border p-3 bg-muted/20">
+              {myMessages.map((item) => {
+                const latestAdminActivityMs = getLatestAdminActivityMs(item);
+                const readState = getThreadReadState();
+                const threadReadAtMs = readState[item.id] || 0;
+                const unread = latestAdminActivityMs > threadReadAtMs;
+                return (
+                <div
+                  key={item.id}
+                  className={`rounded-lg border p-3 bg-muted/20 cursor-pointer transition-colors ${unread ? 'border-destructive/40' : 'border-border'}`}
+                  onClick={() => {
+                    if (latestAdminActivityMs > 0) {
+                      markThreadRead(item.id, latestAdminActivityMs);
+                    }
+                  }}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">{item.subject}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      {unread ? <span className="inline-block w-2 h-2 rounded-full bg-destructive" /> : null}
+                      <p className="text-xs text-muted-foreground">
+                        {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
+                      </p>
+                    </div>
                   </div>
                   <p className="mt-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{item.message}</p>
+                  <div className="mt-3 space-y-2">
+                    {replyTargetId === item.id ? (
+                      <>
+                        <Textarea
+                          value={replyMessage}
+                          onChange={(e) => setReplyMessage(e.target.value)}
+                          placeholder="Write your reply..."
+                          className="min-h-[96px]"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleReply(item.id);
+                            }}
+                            disabled={isReplying || !replyMessage.trim()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            {isReplying ? 'Sending...' : 'Send Reply'}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setReplyTargetId(null);
+                              setReplyMessage('');
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            disabled={isReplying}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReplyTargetId(item.id);
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        Reply in this thread
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>
