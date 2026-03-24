@@ -162,13 +162,22 @@ const isSupportedAppLanguage = (value: unknown): value is AppLanguage => (
   typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
 );
 
-const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
+const countUnreadAdminReplies = (
+  rows: Array<{ message?: string | null; created_at?: string | null }>,
+  getThreadReadAtMs: (row: { message?: string | null; created_at?: string | null }) => number,
+) => {
   return rows.reduce((total, row) => {
     const body = String(row.message || '');
     if (!body) return total;
     let count = 0;
+    const lastReadAtMs = getThreadReadAtMs(row);
+    const createdAtMs = new Date(String(row.created_at || '')).getTime();
+    const isAdminInitiatedMessage = /\[portal:admin\]/i.test(body);
+    if (isAdminInitiatedMessage && !Number.isNaN(createdAtMs) && createdAtMs > lastReadAtMs) {
+      count += 1;
+    }
     for (const match of body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
-      const timestamp = `${match[1].replace(' ', 'T')}:00`;
+      const timestamp = `${match[1].replace(' ', 'T')}:00Z`;
       const replyTimeMs = new Date(timestamp).getTime();
       if (!Number.isNaN(replyTimeMs) && replyTimeMs > lastReadAtMs) {
         count += 1;
@@ -301,6 +310,8 @@ const PatientPortal = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadContactCount, setUnreadContactCount] = useState(0);
+  const [unreadCooCount, setUnreadCooCount] = useState(0);
+  const [contactReadVersion, setContactReadVersion] = useState(0);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const [selectedConsultation, setSelectedConsultation] = useState<any>(null);
   const [consultationDetailsOpen, setConsultationDetailsOpen] = useState(false);
@@ -308,6 +319,7 @@ const PatientPortal = () => {
   const [uploadNotes, setUploadNotes] = useState('');
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
+  const followUpNoticeShownRef = useRef<string | null>(null);
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [selectedInvestigationRequest, setSelectedInvestigationRequest] = useState<PatientInvestigationRequest | null>(null);
@@ -589,7 +601,7 @@ const PatientPortal = () => {
     }
   }, [patientRegistration]);
   const navigate = useNavigate();
-  const contactReadStorageKey = user?.id ? `patient-contact-last-read-${user.id}` : null;
+  const contactThreadReadStorageKey = user?.id ? `patient-contact-thread-read-${user.id}` : null;
 
   const { data: contactMessagesForUnread = [] } = useQuery({
     queryKey: ['patient-contact-unread', user?.id],
@@ -600,24 +612,41 @@ const PatientPortal = () => {
         console.error('Error fetching patient contact messages:', error);
         return [];
       }
-      return (data || []) as Array<{ message?: string | null }>;
+      return (data || []) as Array<{ id?: string | null; message?: string | null; created_at?: string | null }>;
     },
     enabled: !!user?.id,
     refetchInterval: 15000,
   });
 
   useEffect(() => {
-    if (!contactReadStorageKey || typeof window === 'undefined') return;
-    if (activeTab === 'contact') {
-      window.localStorage.setItem(contactReadStorageKey, new Date().toISOString());
-      setUnreadContactCount(0);
-      return;
+    if (!contactThreadReadStorageKey || typeof window === 'undefined') return;
+    let threadReadMap: Record<string, number> = {};
+    try {
+      const raw = window.localStorage.getItem(contactThreadReadStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          threadReadMap = Object.fromEntries(
+            Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number')
+          );
+        }
+      }
+    } catch {
+      threadReadMap = {};
     }
-    const lastReadRaw = window.localStorage.getItem(contactReadStorageKey);
-    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
-    const unread = countUnreadAdminReplies(contactMessagesForUnread, Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs);
+    const unread = countUnreadAdminReplies(contactMessagesForUnread, (row) => {
+      const rowId = (row as { id?: string | null }).id || '';
+      return threadReadMap[rowId] || 0;
+    });
     setUnreadContactCount(unread);
-  }, [activeTab, contactMessagesForUnread, contactReadStorageKey]);
+  }, [contactMessagesForUnread, contactThreadReadStorageKey, contactReadVersion]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onReadUpdated = () => setContactReadVersion((prev) => prev + 1);
+    window.addEventListener('contact-thread-read-updated', onReadUpdated);
+    return () => window.removeEventListener('contact-thread-read-updated', onReadUpdated);
+  }, []);
 
   useEffect(() => {
     if (!user?.id || !user.email) return;
@@ -625,6 +654,24 @@ const PatientPortal = () => {
 
     const channel = supabase
       .channel(`patient-contact-replies-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
+          if (!newRow?.email) return;
+          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
+          if (!/\[portal:admin\]/i.test(String(newRow.message || ''))) return;
+
+          playNotificationSound();
+          toast({
+            title: 'New message from MyE-Doctor',
+            description: 'You received a new support message.',
+          });
+          queryClient.invalidateQueries({ queryKey: ['patient-contact-unread', user.id] });
+          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
+        }
+      )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
@@ -1091,6 +1138,55 @@ const PatientPortal = () => {
     },
     enabled: !!user?.id,
   });
+
+  const followUpAppointments = useMemo(() => {
+    const nowMs = Date.now();
+    return appointments
+      .filter((apt) => Boolean((apt as any).needs_follow_up))
+      .map((apt) => {
+        const deadlineRaw = (apt as any).follow_up_deadline_at as string | null | undefined;
+        const deadlineMs = deadlineRaw ? new Date(deadlineRaw).getTime() : NaN;
+        const hasDeadline = Number.isFinite(deadlineMs);
+        const remainingMs = hasDeadline ? Math.max(0, deadlineMs - nowMs) : 0;
+        const daysLeft = hasDeadline ? Math.ceil(remainingMs / (1000 * 60 * 60 * 24)) : null;
+        return {
+          appointment: apt,
+          deadlineRaw,
+          isOverdue: hasDeadline ? deadlineMs <= nowMs : false,
+          daysLeft,
+        };
+      })
+      .filter((row) => !row.isOverdue);
+  }, [appointments]);
+
+  const followUpAppointmentWithNearestDeadline = useMemo(() => {
+    if (followUpAppointments.length === 0) return null;
+    return [...followUpAppointments].sort((a, b) => {
+      const aMs = a.deadlineRaw ? new Date(a.deadlineRaw).getTime() : Number.MAX_SAFE_INTEGER;
+      const bMs = b.deadlineRaw ? new Date(b.deadlineRaw).getTime() : Number.MAX_SAFE_INTEGER;
+      return aMs - bMs;
+    })[0];
+  }, [followUpAppointments]);
+
+  const followUpInvestigationMessage = useMemo(() => {
+    const nearest = followUpAppointmentWithNearestDeadline;
+    if (!nearest) return null;
+    const hasInvestigationRequest = Boolean(requiredInvestigations && requiredInvestigations.trim().length > 0);
+    if (!hasInvestigationRequest) return null;
+    const dayText = nearest.daysLeft === 1 ? '1 day' : `${nearest.daysLeft ?? 0} days`;
+    return `Your doctor marked this consultation as needing follow-up. Please upload your investigation results within ${dayText}. After 7 days, this appointment will be marked completed automatically.`;
+  }, [followUpAppointmentWithNearestDeadline, requiredInvestigations]);
+
+  useEffect(() => {
+    const appointmentId = followUpAppointmentWithNearestDeadline?.appointment?.id || null;
+    if (!appointmentId || !followUpInvestigationMessage) return;
+    if (followUpNoticeShownRef.current === appointmentId) return;
+    followUpNoticeShownRef.current = appointmentId;
+    toast({
+      title: t('patientPortal.followUp.deadlineTitle', 'Follow-up deadline: 7 days'),
+      description: followUpInvestigationMessage,
+    });
+  }, [followUpAppointmentWithNearestDeadline, followUpInvestigationMessage, t]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -3357,7 +3453,7 @@ const PatientPortal = () => {
                     },
                     { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
                     { id: 'payments', label: t('common.payments', 'Payments'), icon: Wallet },
-                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: (unreadContactCount + unreadCooCount) > 0 ? ((unreadContactCount + unreadCooCount) > 99 ? '99+' : unreadContactCount + unreadCooCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -4819,6 +4915,17 @@ const PatientPortal = () => {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-6">
+                      {followUpInvestigationMessage && (
+                        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">
+                          <p className="text-sm font-semibold">
+                            {t('patientPortal.followUp.deadlineTitle', 'Follow-up deadline: 7 days')}
+                          </p>
+                          <p className="mt-1 text-sm">
+                            {followUpInvestigationMessage}
+                          </p>
+                        </div>
+                      )}
+
                       {/* Required Investigations From Doctor Clerking */}
                       <div className="rounded-lg border border-border p-4">
                         <h4 className="text-sm font-semibold mb-2">{t('patientPortal.records.requiredInvestigations', 'Required Investigations')}</h4>
@@ -4960,6 +5067,10 @@ const PatientPortal = () => {
                   fullName={patientRegistration?.full_name || user?.user_metadata?.full_name || ''}
                   email={patientRegistration?.email || user?.email || ''}
                   phone={patientRegistration?.phone_number || ''}
+                  onCooUnreadChange={(count) => {
+                    if (activeTab !== 'contact') setUnreadCooCount(count);
+                    else setUnreadCooCount(0);
+                  }}
                 />
               </TabsContent>
 

@@ -205,13 +205,22 @@ type WalletTransactionRow = {
   status: string | null;
 };
 
-const countUnreadAdminReplies = (rows: Array<{ message?: string | null }>, lastReadAtMs: number) => {
+const countUnreadAdminReplies = (
+  rows: Array<{ message?: string | null; created_at?: string | null }>,
+  getThreadReadAtMs: (row: { message?: string | null; created_at?: string | null }) => number,
+) => {
   return rows.reduce((total, row) => {
     const body = String(row.message || '');
     if (!body) return total;
     let count = 0;
+    const lastReadAtMs = getThreadReadAtMs(row);
+    const createdAtMs = new Date(String(row.created_at || '')).getTime();
+    const isAdminInitiatedMessage = /\[portal:admin\]/i.test(body);
+    if (isAdminInitiatedMessage && !Number.isNaN(createdAtMs) && createdAtMs > lastReadAtMs) {
+      count += 1;
+    }
     for (const match of body.matchAll(/--- Admin Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
-      const timestamp = `${match[1].replace(' ', 'T')}:00`;
+      const timestamp = `${match[1].replace(' ', 'T')}:00Z`;
       const replyTimeMs = new Date(timestamp).getTime();
       if (!Number.isNaN(replyTimeMs) && replyTimeMs > lastReadAtMs) {
         count += 1;
@@ -269,6 +278,7 @@ const DoctorPortal = () => {
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [unreadContactCount, setUnreadContactCount] = useState(0);
+  const [contactReadVersion, setContactReadVersion] = useState(0);
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
@@ -290,7 +300,7 @@ const DoctorPortal = () => {
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const contactReadStorageKey = user?.id ? `doctor-contact-last-read-${user.id}` : null;
+  const contactThreadReadStorageKey = user?.id ? `doctor-contact-thread-read-${user.id}` : null;
   const consultationLanguageOptions = useMemo(() => {
     const fallbackLabels: Record<string, string> = {
       pidgin_english: 'Pidgin English',
@@ -323,24 +333,41 @@ const DoctorPortal = () => {
         console.error('Error fetching doctor contact messages:', error);
         return [];
       }
-      return (data || []) as Array<{ message?: string | null }>;
+      return (data || []) as Array<{ id?: string | null; message?: string | null; created_at?: string | null }>;
     },
     enabled: !!user?.id,
     refetchInterval: 15000,
   });
 
   useEffect(() => {
-    if (!contactReadStorageKey || typeof window === 'undefined') return;
-    if (activeTab === 'contact') {
-      window.localStorage.setItem(contactReadStorageKey, new Date().toISOString());
-      setUnreadContactCount(0);
-      return;
+    if (!contactThreadReadStorageKey || typeof window === 'undefined') return;
+    let threadReadMap: Record<string, number> = {};
+    try {
+      const raw = window.localStorage.getItem(contactThreadReadStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          threadReadMap = Object.fromEntries(
+            Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number')
+          );
+        }
+      }
+    } catch {
+      threadReadMap = {};
     }
-    const lastReadRaw = window.localStorage.getItem(contactReadStorageKey);
-    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
-    const unread = countUnreadAdminReplies(contactMessagesForUnread, Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs);
+    const unread = countUnreadAdminReplies(contactMessagesForUnread, (row) => {
+      const rowId = (row as { id?: string | null }).id || '';
+      return threadReadMap[rowId] || 0;
+    });
     setUnreadContactCount(unread);
-  }, [activeTab, contactMessagesForUnread, contactReadStorageKey]);
+  }, [contactMessagesForUnread, contactThreadReadStorageKey, contactReadVersion]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onReadUpdated = () => setContactReadVersion((prev) => prev + 1);
+    window.addEventListener('contact-thread-read-updated', onReadUpdated);
+    return () => window.removeEventListener('contact-thread-read-updated', onReadUpdated);
+  }, []);
 
   useEffect(() => {
     if (!user?.id || !user.email) return;
@@ -348,6 +375,24 @@ const DoctorPortal = () => {
 
     const channel = supabase
       .channel(`doctor-contact-replies-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
+          if (!newRow?.email) return;
+          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
+          if (!/\[portal:admin\]/i.test(String(newRow.message || ''))) return;
+
+          playNotificationSound();
+          toast({
+            title: 'New message from MyE-Doctor',
+            description: 'You received a new support message.',
+          });
+          queryClient.invalidateQueries({ queryKey: ['doctor-contact-unread', user.id] });
+          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
+        }
+      )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
@@ -1184,6 +1229,9 @@ const DoctorPortal = () => {
     queryKey: ['doctor-appointments', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
+
+      // Auto-close overdue follow-up appointments before loading doctor lists.
+      await supabase.rpc('complete_overdue_follow_up_appointments');
       
       // First fetch appointments
       const { data: appointments, error: aptError } = await supabase

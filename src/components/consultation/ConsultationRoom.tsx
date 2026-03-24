@@ -2102,9 +2102,26 @@ export function ConsultationRoom({
               onClick={(e) => {
                 e.preventDefault();
                 setIsEndForEveryoneDialogOpen(false);
-                handleLeaveCall().catch((err) => {
-                  console.error('Failed to leave call from follow-up action:', err);
-                });
+                (async () => {
+                  try {
+                    await consultationService.markAppointmentNeedsFollowUp(appointmentId);
+                    toast({
+                      title: ui('Follow-up started'),
+                      description: ui('Patient follow-up window is set for 7 days.'),
+                    });
+                  } catch (err) {
+                    console.error('Failed to mark follow-up appointment:', err);
+                    toast({
+                      title: ui('Error'),
+                      description: ui('Failed to mark appointment as follow-up.'),
+                      variant: 'destructive',
+                    });
+                  }
+
+                  handleLeaveCall().catch((leaveErr) => {
+                    console.error('Failed to leave call from follow-up action:', leaveErr);
+                  });
+                })();
               }}
             >
               {ui('Needs Follow Up')}

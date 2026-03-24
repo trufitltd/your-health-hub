@@ -6,13 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
-import { useLanguage } from '@/contexts/LanguageContext';
-import { useLocaleFormatter } from '@/lib/locale';
 
 const VerifyPrescription = () => {
-  const { t } = useLanguage();
   const { code } = useParams<{ code: string }>();
-  const { formatDateTime } = useLocaleFormatter();
   const normalizedCode = useMemo(() => (code || '').trim().toUpperCase(), [code]);
 
   const { data, isLoading } = useQuery({
@@ -53,7 +49,7 @@ const VerifyPrescription = () => {
           <CardHeader>
             <CardTitle>Verification Result</CardTitle>
             <CardDescription>
-              Code: {normalizedCode || t('specialists.defaults.notAvailable', 'N/A')}
+              Code: {normalizedCode || 'N/A'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -77,7 +73,7 @@ const VerifyPrescription = () => {
                   </div>
                   <div>
                     <p className="text-muted-foreground">Date Issued</p>
-                    <p className="font-medium">{formatDateTime(data.date_issued)}</p>
+                    <p className="font-medium">{new Date(data.date_issued).toLocaleString()}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Prescribing Doctor</p>
