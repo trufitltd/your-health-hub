@@ -166,8 +166,6 @@ const CentralAdmin = () => {
   const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
   const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
   const inboxReadStorageKey = user?.id ? `admin-message-thread-read-${user.id}` : null;
-  const appointmentReadStorageKey = user?.id ? `admin-appointment-last-read-${user.id}` : null;
-
   const countUserReplyMarkersAfter = (body: string, lastReadAtMs: number) => {
     let count = 0;
     for (const match of body.matchAll(/--- User Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
@@ -644,23 +642,16 @@ const CentralAdmin = () => {
     refetchInterval: 15000,
   });
 
-  useEffect(() => {
-    if (!appointmentReadStorageKey || typeof window === 'undefined') return;
-    if (activeTab === 'appointments') {
-      window.localStorage.setItem(appointmentReadStorageKey, new Date().toISOString());
-      setUnreadAppointmentCount(0);
-      return;
-    }
+  const newAppointments = useMemo(() => {
+    return adminAppointments.filter((row) => {
+      const s = normalizeAppointmentStatus(row.status);
+      return s === 'confirmed' || s === 'pending' || s === 'pending_approval' || s === 'pending_payment' || s === 'payment_processing';
+    });
+  }, [adminAppointments]);
 
-    const lastReadRaw = window.localStorage.getItem(appointmentReadStorageKey);
-    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
-    const unread = adminAppointments.reduce((count, row) => {
-      const createdAtMs = new Date(String(row.created_at || '')).getTime();
-      if (Number.isNaN(createdAtMs) || createdAtMs <= lastReadAtMs) return count;
-      return count + 1;
-    }, 0);
-    setUnreadAppointmentCount(unread);
-  }, [activeTab, adminAppointments, appointmentReadStorageKey]);
+  useEffect(() => {
+    setUnreadAppointmentCount(activeTab === 'appointments' ? 0 : newAppointments.length);
+  }, [activeTab, newAppointments]);
 
   const { data: adminClerkingNotes = [], isLoading: adminClerkingLoading, isError: adminClerkingError } = useQuery({
     queryKey: ['admin-clerking-notes'],
@@ -736,16 +727,6 @@ const CentralAdmin = () => {
       ? (doctors.reduce((sum, d) => sum + (d.rating || 0), 0) / doctors.length).toFixed(2)
       : 0,
   };
-
-  const newAppointments = useMemo(() => {
-    if (typeof window === 'undefined' || !appointmentReadStorageKey) return [] as AdminAppointmentRow[];
-    const lastReadRaw = window.localStorage.getItem(appointmentReadStorageKey);
-    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
-    return adminAppointments.filter((row) => {
-      const createdAtMs = new Date(String(row.created_at || '')).getTime();
-      return !Number.isNaN(createdAtMs) && createdAtMs > lastReadAtMs;
-    });
-  }, [adminAppointments, appointmentReadStorageKey]);
 
   const clerkingRowsFiltered = useMemo(() => {
     const q = clerkingSearch.trim().toLowerCase();

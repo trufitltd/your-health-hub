@@ -209,16 +209,14 @@ export default function COOPortal() {
     refetchInterval: 30000,
   });
 
-  const sevenDaysAgo = useMemo(() => Date.now() - 7 * 24 * 60 * 60 * 1000, []);
-
   const newBookings = useMemo(() => {
     return appointments
       .filter((apt) => {
-        const created = apt.created_at ? new Date(apt.created_at).getTime() : 0;
-        return Number.isFinite(created) && created >= sevenDaysAgo;
+        const s = normalizeAppointmentStatus(apt.status);
+        return s === 'confirmed' || s === 'pending' || s === 'pending_approval' || s === 'pending_payment' || s === 'payment_processing';
       })
       .slice(0, 50);
-  }, [appointments, sevenDaysAgo]);
+  }, [appointments]);
 
   const doctorById = useMemo(() => {
     return new Map(doctors.map((doctor) => [doctor.user_id, doctor]));
@@ -245,10 +243,10 @@ export default function COOPortal() {
       ...apt,
       normalizedStatus: normalizeAppointmentStatus(apt.status),
     }));
-    const newAppointments = normalized.filter((apt) => {
-      const created = apt.created_at ? new Date(apt.created_at).getTime() : 0;
-      return Number.isFinite(created) && created >= sevenDaysAgo;
-    }).length;
+    const newAppointments = normalized.filter((apt) =>
+      apt.normalizedStatus === 'confirmed' ||
+      ['pending', 'pending_approval', 'pending_payment', 'payment_processing'].includes(String(apt.normalizedStatus || '')),
+    ).length;
     const successfulConsultations = normalized.filter((apt) => apt.normalizedStatus === 'completed').length;
     const confirmedAppointments = normalized.filter((apt) => apt.normalizedStatus === 'confirmed').length;
     const inProgressAppointments = normalized.filter((apt) => apt.normalizedStatus === 'in_progress').length;
@@ -266,7 +264,7 @@ export default function COOPortal() {
       failedConsultations,
       pendingAppointments,
     };
-  }, [appointments, sevenDaysAgo]);
+  }, [appointments]);
 
   const appointmentStatusRows = useMemo(() => appointments.map((apt) => ({
     ...apt,
@@ -454,7 +452,7 @@ export default function COOPortal() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-primary" />
-                  New Booking Notifications (Last 7 Days)
+                  New Booking Notifications
                 </CardTitle>
                 <CardDescription>{newBookings.length} new booking(s)</CardDescription>
               </CardHeader>
