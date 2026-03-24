@@ -46,6 +46,7 @@ import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { LanguageSelector } from '@/components/LanguageSelector';
 import { useLocaleFormatter } from '@/lib/locale';
+import { CooThreadChat } from '@/components/coo/CooThreadChat';
 
 interface Doctor {
   id: string;
@@ -71,6 +72,44 @@ interface VerificationNotes {
   [key: string]: string;
 }
 
+interface PlatformUserSearchRow {
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  role_label: string | null;
+}
+
+interface AdminAppointmentRow {
+  id: string;
+  patient_id: string | null;
+  doctor_id: string | null;
+  date: string | null;
+  time: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  patient_name: string;
+  patient_email: string;
+  patient_phone: string;
+  doctor_name: string;
+  doctor_email: string;
+  doctor_phone: string;
+}
+
+interface AdminClerkingRow {
+  id: string;
+  session_id: string | null;
+  doctor_id: string | null;
+  patient_id: string | null;
+  diagnosis: string | null;
+  treatment_plan: string | null;
+  prescriptions: string | null;
+  follow_up_notes: string | null;
+  created_at: string | null;
+  doctor_name: string;
+  patient_name: string;
+}
+
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
   const { t } = useLanguage();
@@ -93,12 +132,22 @@ const CentralAdmin = () => {
   const [inboxPageSize, setInboxPageSize] = useState(10);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [unreadInboxCount, setUnreadInboxCount] = useState(0);
+  const [unreadAppointmentCount, setUnreadAppointmentCount] = useState(0);
+  const [unreadCooMessages, setUnreadCooMessages] = useState(0);
   const [replySubject, setReplySubject] = useState('');
   const [replyBody, setReplyBody] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
+  const [messageReadVersion, setMessageReadVersion] = useState(0);
+  const [recipientSearch, setRecipientSearch] = useState('');
+  const [selectedRecipientEmail, setSelectedRecipientEmail] = useState('');
+  const [selectedRecipientLabel, setSelectedRecipientLabel] = useState('');
+  const [newMessageSubject, setNewMessageSubject] = useState('');
+  const [newMessageBody, setNewMessageBody] = useState('');
+  const [isSendingNewMessage, setIsSendingNewMessage] = useState(false);
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [clerkingSearch, setClerkingSearch] = useState('');
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
@@ -116,7 +165,64 @@ const CentralAdmin = () => {
 
   const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
   const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
-  const inboxReadStorageKey = user?.id ? `admin-inbox-last-read-${user.id}` : null;
+  const inboxReadStorageKey = user?.id ? `admin-message-thread-read-${user.id}` : null;
+  const appointmentReadStorageKey = user?.id ? `admin-appointment-last-read-${user.id}` : null;
+
+  const countUserReplyMarkersAfter = (body: string, lastReadAtMs: number) => {
+    let count = 0;
+    for (const match of body.matchAll(/--- User Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
+      const timestamp = `${match[1].replace(' ', 'T')}:00Z`;
+      const replyTimeMs = new Date(timestamp).getTime();
+      if (!Number.isNaN(replyTimeMs) && replyTimeMs > lastReadAtMs) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  const getLatestUserThreadActivityMs = (row: { created_at?: string | null; message?: string | null }) => {
+    const body = String(row.message || '');
+    const createdAtMs = new Date(String(row.created_at || '')).getTime();
+    const adminInitiated = /\[portal:admin\]/i.test(body);
+    let latest = 0;
+    if (!adminInitiated && !Number.isNaN(createdAtMs)) {
+      latest = Math.max(latest, createdAtMs);
+    }
+    for (const match of body.matchAll(/--- User Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g)) {
+      const timestamp = `${match[1].replace(' ', 'T')}:00Z`;
+      const replyTimeMs = new Date(timestamp).getTime();
+      if (!Number.isNaN(replyTimeMs)) {
+        latest = Math.max(latest, replyTimeMs);
+      }
+    }
+    return latest;
+  };
+
+  const getThreadReadState = () => {
+    if (!inboxReadStorageKey || typeof window === 'undefined') return {} as Record<string, number>;
+    try {
+      const raw = window.localStorage.getItem(inboxReadStorageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number')
+      );
+    } catch {
+      return {};
+    }
+  };
+
+  const markAdminThreadRead = (row: { id?: string | null; created_at?: string | null; message?: string | null }) => {
+    if (!inboxReadStorageKey || typeof window === 'undefined') return;
+    const threadId = String(row.id || '');
+    if (!threadId) return;
+    const current = getThreadReadState();
+    const latestActivityMs = getLatestUserThreadActivityMs(row);
+    current[threadId] = latestActivityMs > 0 ? latestActivityMs : Date.now();
+    window.localStorage.setItem(inboxReadStorageKey, JSON.stringify(current));
+    setMessageReadVersion((prev) => prev + 1);
+  };
 
   useEffect(() => {
     setProfileFormData({
@@ -201,17 +307,14 @@ const CentralAdmin = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patient_registrations')
-        .select('user_id');
+        .select('user_id, full_name, email, phone_number');
       
       if (error) {
         console.error('Error fetching patients:', error);
         return [];
       }
       
-      return (data || []).map((apt: any) => ({
-        ...apt,
-        status: normalizeAppointmentStatus(apt.status),
-      }));
+      return data || [];
     },
     enabled: !!user && isAdmin,
   });
@@ -258,7 +361,7 @@ const CentralAdmin = () => {
   const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
     queryKey: ['admin-contact-messages'],
     queryFn: async () => {
-      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 200 });
+      const { data, error } = await supabase.rpc('get_contact_messages', { limit_count: 1000 });
       if (error) {
         console.error('Error fetching contact messages:', error);
         throw error;
@@ -271,23 +374,19 @@ const CentralAdmin = () => {
 
   useEffect(() => {
     if (!inboxReadStorageKey || typeof window === 'undefined') return;
-    if (activeTab === 'inbox') {
-      window.localStorage.setItem(inboxReadStorageKey, new Date().toISOString());
-      setUnreadInboxCount(0);
-      return;
-    }
-    const lastReadRaw = window.localStorage.getItem(inboxReadStorageKey);
-    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
-    const unread = (contactMessages as Array<{ created_at?: string | null }>).reduce((count, message) => {
-      const createdAt = String(message.created_at || '');
-      if (!createdAt) return count;
-      const createdAtMs = new Date(createdAt).getTime();
-      if (Number.isNaN(createdAtMs)) return count;
-      if (createdAtMs > (Number.isNaN(lastReadAtMs) ? 0 : lastReadAtMs)) return count + 1;
-      return count;
+    const readState = getThreadReadState();
+    const unread = (contactMessages as Array<{ id?: string | null; created_at?: string | null; message?: string | null }>).reduce((count, message) => {
+      const rowId = String(message.id || '');
+      const threadReadAtMs = readState[rowId] || 0;
+      const body = String(message.message || '');
+      const createdAtMs = new Date(String(message.created_at || '')).getTime();
+      const adminInitiated = /\[portal:admin\]/i.test(body);
+      const rowUnread = !adminInitiated && !Number.isNaN(createdAtMs) && createdAtMs > threadReadAtMs ? 1 : 0;
+      const threadedUnread = body ? countUserReplyMarkersAfter(body, threadReadAtMs) : 0;
+      return count + rowUnread + threadedUnread;
     }, 0);
     setUnreadInboxCount(unread);
-  }, [activeTab, contactMessages, inboxReadStorageKey]);
+  }, [contactMessages, inboxReadStorageKey, messageReadVersion]);
 
   useEffect(() => {
     if (!user?.id || !isAdmin) return;
@@ -307,6 +406,69 @@ const CentralAdmin = () => {
             description: `${incoming?.first_name || 'User'} ${incoming?.last_name || ''} • ${incoming?.subject || 'No subject'}`.trim(),
           });
         }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
+        (payload) => {
+          const newRow = payload.new as { message?: string | null; email?: string | null } | null;
+          const oldRow = payload.old as { message?: string | null } | null;
+          const oldCount = countUserReplyMarkersAfter(String(oldRow?.message || ''), 0);
+          const newCount = countUserReplyMarkersAfter(String(newRow?.message || ''), 0);
+          if (newCount <= oldCount) return;
+
+          playNotificationSound();
+          queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
+          queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
+          toast({
+            title: 'New reply received',
+            description: `A user replied in thread ${newRow?.email ? `(${newRow.email})` : ''}`.trim(),
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isAdmin, playNotificationSound, queryClient, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !isAdmin) return;
+
+    const channel = supabase
+      .channel(`admin-clerking-feed-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'doctor_consultation_notes' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['admin-clerking-notes'] });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isAdmin, queryClient, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !isAdmin) return;
+
+    const channel = supabase
+      .channel(`admin-appointments-feed-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'appointments' },
+        (payload) => {
+          const incoming = payload.new as { patient_name?: string | null; specialist_name?: string | null; date?: string | null; time?: string | null } | null;
+          playNotificationSound();
+          queryClient.invalidateQueries({ queryKey: ['admin-appointments-feed'] });
+          toast({
+            title: 'New appointment booked',
+            description: `${incoming?.patient_name || 'Patient'} booked ${incoming?.specialist_name || 'Doctor'} at ${incoming?.time || 'N/A'} on ${incoming?.date || 'N/A'}`,
+          });
+        },
       )
       .subscribe();
 
@@ -343,6 +505,216 @@ const CentralAdmin = () => {
     refetchInterval: 30000,
   });
 
+  const { data: platformUserMatches = [], isLoading: platformUserSearchLoading } = useQuery({
+    queryKey: ['admin-platform-user-search', recipientSearch],
+    queryFn: async () => {
+      const term = recipientSearch.trim();
+      if (!term) return [];
+      const { data, error } = await supabase.rpc('admin_search_platform_users', {
+        search_term: term,
+        limit_count: 25,
+      });
+
+      if (!error) {
+        return (data || []) as PlatformUserSearchRow[];
+      }
+
+      const errorCode = String((error as { code?: string } | null)?.code || '');
+      const message = String((error as { message?: string } | null)?.message || '');
+      const rpcMissing = errorCode === 'PGRST202' || message.includes('admin_search_platform_users');
+      if (!rpcMissing) {
+        console.error('Error searching platform users:', error);
+        throw error;
+      }
+
+      const likeTerm = `%${term}%`;
+      const [doctorResult, patientResult] = await Promise.all([
+        supabase
+          .from('doctor_registrations')
+          .select('user_id, full_name, email')
+          .or(`email.ilike.${likeTerm},full_name.ilike.${likeTerm}`)
+          .limit(25),
+        supabase
+          .from('patient_registrations')
+          .select('user_id, full_name, email')
+          .or(`email.ilike.${likeTerm},full_name.ilike.${likeTerm}`)
+          .limit(25),
+      ]);
+
+      const merged = new Map<string, PlatformUserSearchRow>();
+      (doctorResult.data || []).forEach((row: any) => {
+        const email = String(row.email || '').trim().toLowerCase();
+        if (!email) return;
+        merged.set(email, {
+          user_id: String(row.user_id || ''),
+          email,
+          full_name: row.full_name || null,
+          role_label: 'doctor',
+        });
+      });
+      (patientResult.data || []).forEach((row: any) => {
+        const email = String(row.email || '').trim().toLowerCase();
+        if (!email) return;
+        if (merged.has(email)) return;
+        merged.set(email, {
+          user_id: String(row.user_id || ''),
+          email,
+          full_name: row.full_name || null,
+          role_label: 'patient',
+        });
+      });
+
+      return Array.from(merged.values()).slice(0, 25);
+    },
+    enabled: !!user && isAdmin && activeTab === 'messages' && recipientSearch.trim().length > 0,
+    refetchInterval: false,
+  });
+
+  const { data: adminAppointments = [], isLoading: adminAppointmentsLoading } = useQuery({
+    queryKey: ['admin-appointments-feed'],
+    queryFn: async () => {
+      const { data: appointmentRows, error: appointmentsError } = await supabase
+        .from('appointments')
+        .select('id, patient_id, doctor_id, date, time, status, created_at, updated_at')
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (appointmentsError) {
+        console.error('Error fetching admin appointments feed:', appointmentsError);
+        throw appointmentsError;
+      }
+
+      const rows = appointmentRows || [];
+      if (rows.length === 0) return [] as AdminAppointmentRow[];
+
+      const patientIds = Array.from(new Set(rows.map((row: any) => String(row.patient_id || '')).filter(Boolean)));
+      const doctorIds = Array.from(new Set(rows.map((row: any) => String(row.doctor_id || '')).filter(Boolean)));
+
+      const [patientResult, doctorResult] = await Promise.all([
+        patientIds.length > 0
+          ? supabase
+              .from('patient_registrations')
+              .select('user_id, full_name, email, phone_number')
+              .in('user_id', patientIds)
+          : Promise.resolve({ data: [], error: null } as any),
+        doctorIds.length > 0
+          ? supabase
+              .from('doctor_registrations')
+              .select('user_id, full_name, email, phone_number')
+              .in('user_id', doctorIds)
+          : Promise.resolve({ data: [], error: null } as any),
+      ]);
+
+      if (patientResult.error) {
+        console.warn('Error loading patient details for admin appointments:', patientResult.error);
+      }
+      if (doctorResult.error) {
+        console.warn('Error loading doctor details for admin appointments:', doctorResult.error);
+      }
+
+      const patientMap = new Map(
+        ((patientResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
+      );
+      const doctorMap = new Map(
+        ((doctorResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
+      );
+
+      return rows.map((row: any) => {
+        const patient = patientMap.get(String(row.patient_id || ''));
+        const doctor = doctorMap.get(String(row.doctor_id || ''));
+        return {
+          id: String(row.id),
+          patient_id: row.patient_id || null,
+          doctor_id: row.doctor_id || null,
+          date: row.date || null,
+          time: row.time || null,
+          status: normalizeAppointmentStatus(row.status),
+          created_at: row.created_at || null,
+          updated_at: row.updated_at || null,
+          patient_name: String(patient?.full_name || row.patient_name || 'Patient'),
+          patient_email: String(patient?.email || ''),
+          patient_phone: String(patient?.phone_number || ''),
+          doctor_name: String(doctor?.full_name || row.specialist_name || 'Doctor'),
+          doctor_email: String(doctor?.email || ''),
+          doctor_phone: String(doctor?.phone_number || ''),
+        } satisfies AdminAppointmentRow;
+      });
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 15000,
+  });
+
+  useEffect(() => {
+    if (!appointmentReadStorageKey || typeof window === 'undefined') return;
+    if (activeTab === 'appointments') {
+      window.localStorage.setItem(appointmentReadStorageKey, new Date().toISOString());
+      setUnreadAppointmentCount(0);
+      return;
+    }
+
+    const lastReadRaw = window.localStorage.getItem(appointmentReadStorageKey);
+    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
+    const unread = adminAppointments.reduce((count, row) => {
+      const createdAtMs = new Date(String(row.created_at || '')).getTime();
+      if (Number.isNaN(createdAtMs) || createdAtMs <= lastReadAtMs) return count;
+      return count + 1;
+    }, 0);
+    setUnreadAppointmentCount(unread);
+  }, [activeTab, adminAppointments, appointmentReadStorageKey]);
+
+  const { data: adminClerkingNotes = [], isLoading: adminClerkingLoading, isError: adminClerkingError } = useQuery({
+    queryKey: ['admin-clerking-notes'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_admin_clerking_notes', { limit_count: 500 });
+
+      if (error) {
+        console.error('Error fetching admin clerking notes via RPC:', error);
+        const rpcMissing =
+          String((error as any)?.code || '') === 'PGRST202' ||
+          String((error as any)?.message || '').includes('get_admin_clerking_notes');
+        if (!rpcMissing) throw error;
+
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('doctor_consultation_notes')
+          .select('id, session_id, doctor_id, patient_id, diagnosis, treatment_plan, prescriptions, follow_up_notes, created_at')
+          .order('created_at', { ascending: false })
+          .limit(500);
+
+        if (fallbackError) throw fallbackError;
+
+        return ((fallbackData || []) as Array<any>).map((row) => ({
+          id: String(row.id),
+          session_id: row.session_id || null,
+          doctor_id: row.doctor_id || null,
+          patient_id: row.patient_id || null,
+          diagnosis: row.diagnosis || null,
+          treatment_plan: row.treatment_plan || null,
+          prescriptions: row.prescriptions || null,
+          follow_up_notes: row.follow_up_notes || null,
+          created_at: row.created_at || null,
+          doctor_name: 'Doctor',
+          patient_name: 'Patient',
+        } satisfies AdminClerkingRow));
+      }
+
+      return ((data || []) as Array<any>).map((row) => ({
+        id: String(row.id),
+        session_id: row.session_id || null,
+        doctor_id: row.doctor_id || null,
+        patient_id: row.patient_id || null,
+        diagnosis: row.diagnosis || null,
+        treatment_plan: row.treatment_plan || null,
+        prescriptions: row.prescriptions || null,
+        follow_up_notes: row.follow_up_notes || null,
+        created_at: row.created_at || null,
+        doctor_name: String(row.doctor_name || 'Doctor'),
+        patient_name: String(row.patient_name || 'Patient'),
+      } satisfies AdminClerkingRow));
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
   // Check admin access - now after hooks
   if (!user) {
     return <Navigate to="/admin/login" replace />;
@@ -364,6 +736,34 @@ const CentralAdmin = () => {
       ? (doctors.reduce((sum, d) => sum + (d.rating || 0), 0) / doctors.length).toFixed(2)
       : 0,
   };
+
+  const newAppointments = useMemo(() => {
+    if (typeof window === 'undefined' || !appointmentReadStorageKey) return [] as AdminAppointmentRow[];
+    const lastReadRaw = window.localStorage.getItem(appointmentReadStorageKey);
+    const lastReadAtMs = lastReadRaw ? new Date(lastReadRaw).getTime() : 0;
+    return adminAppointments.filter((row) => {
+      const createdAtMs = new Date(String(row.created_at || '')).getTime();
+      return !Number.isNaN(createdAtMs) && createdAtMs > lastReadAtMs;
+    });
+  }, [adminAppointments, appointmentReadStorageKey]);
+
+  const clerkingRowsFiltered = useMemo(() => {
+    const q = clerkingSearch.trim().toLowerCase();
+    if (!q) return adminClerkingNotes;
+    return adminClerkingNotes.filter((row) => {
+      const haystack = [
+        row.doctor_name,
+        row.patient_name,
+        row.diagnosis,
+        row.treatment_plan,
+        row.prescriptions,
+        row.follow_up_notes,
+      ]
+        .map((value) => String(value || '').toLowerCase())
+        .join(' ');
+      return haystack.includes(q);
+    });
+  }, [adminClerkingNotes, clerkingSearch]);
 
   const qaMetrics = useMemo(() => {
     const total = qaAppointments.length;
@@ -585,6 +985,58 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleSendPlatformMessage = async () => {
+    const targetEmail = selectedRecipientEmail.trim().toLowerCase();
+    const subject = newMessageSubject.trim();
+    const messageBody = newMessageBody.trim();
+
+    if (!targetEmail) {
+      toast({ title: 'Recipient required', description: 'Select a recipient email.', variant: 'destructive' });
+      return;
+    }
+    if (!subject || !messageBody) {
+      toast({ title: 'Missing fields', description: 'Subject and message are required.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSendingNewMessage(true);
+    try {
+      const senderName = (profileFormData.fullName || user?.user_metadata?.full_name || 'Central Admin').toString().trim() || 'Central Admin';
+      const [firstName, ...rest] = senderName.split(/\s+/);
+      const lastName = rest.join(' ').trim() || 'Admin';
+
+      const { error } = await supabase
+        .from('contact_messages')
+        .insert({
+          first_name: firstName || 'Central',
+          last_name: lastName,
+          email: targetEmail,
+          phone: profileFormData.phone?.trim() || null,
+          subject: subject,
+          message: `[portal:admin]\nFrom: ${senderName}\n\n${messageBody}`,
+        });
+
+      if (error) throw error;
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] }),
+      ]);
+
+      toast({ title: 'Message sent', description: `Message sent to ${targetEmail}.` });
+      setNewMessageSubject('');
+      setNewMessageBody('');
+      setRecipientSearch('');
+      setSelectedRecipientLabel('');
+      setSelectedRecipientEmail('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send message';
+      toast({ title: 'Send failed', description: message, variant: 'destructive' });
+    } finally {
+      setIsSendingNewMessage(false);
+    }
+  };
+
   // Filter doctors
   const filteredDoctors = doctors.filter(doctor => {
     const matchesSearch = doctor.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -754,6 +1206,28 @@ const CentralAdmin = () => {
     }
   };
 
+  const getAppointmentStatusBadge = (status: string | null | undefined) => {
+    const normalized = normalizeAppointmentStatus(status);
+    switch (normalized) {
+      case 'pending_payment':
+        return <Badge className="bg-amber-100 text-amber-700 border-amber-300">Pending Payment</Badge>;
+      case 'pending_approval':
+        return <Badge className="bg-yellow-100 text-yellow-700 border-yellow-300">Pending Approval</Badge>;
+      case 'confirmed':
+        return <Badge className="bg-sky-100 text-sky-700 border-sky-300">Confirmed</Badge>;
+      case 'in_progress':
+        return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-300">In Progress</Badge>;
+      case 'completed':
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">Completed</Badge>;
+      case 'cancelled':
+        return <Badge className="bg-slate-200 text-slate-700 border-slate-300">Cancelled</Badge>;
+      case 'no_show':
+        return <Badge className="bg-rose-100 text-rose-700 border-rose-300">No Show</Badge>;
+      default:
+        return <Badge variant="outline">{status || 'Unknown'}</Badge>;
+    }
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.id) return;
 
@@ -895,10 +1369,12 @@ const CentralAdmin = () => {
                   </div>
                   {[
                     { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
+                    { id: 'appointments', label: 'Appointments', icon: Clock, badge: unreadAppointmentCount > 0 ? (unreadAppointmentCount > 99 ? '99+' : unreadAppointmentCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
-                    { id: 'inbox', label: 'Inbox', icon: Mail, badge: unreadInboxCount > 0 ? (unreadInboxCount > 99 ? '99+' : unreadInboxCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'messages', label: 'Messages', icon: Mail, badge: (unreadInboxCount + unreadCooMessages) > 0 ? ((unreadInboxCount + unreadCooMessages) > 99 ? '99+' : unreadInboxCount + unreadCooMessages) : undefined, badgeTone: 'danger' as const },
+                    { id: 'clerking', label: 'Clerking', icon: FileText },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                     { id: 'payments', label: 'Payments', icon: BadgeIcon },
@@ -1026,6 +1502,9 @@ const CentralAdmin = () => {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
               <TabsList className="hidden">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="appointments">Appointments</TabsTrigger>
+                <TabsTrigger value="messages">Messages</TabsTrigger>
+                <TabsTrigger value="clerking">Clerking</TabsTrigger>
                 <TabsTrigger value="payments">Payments</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -1151,14 +1630,196 @@ const CentralAdmin = () => {
                 </div>
               </TabsContent>
 
-              {/* Inbox Tab */}
-              <TabsContent value="inbox" className="space-y-6">
+              {/* Appointments Tab */}
+              <TabsContent value="appointments" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Contact Inbox</CardTitle>
-                    <CardDescription>Manage incoming messages from the public contact form</CardDescription>
+                    <CardTitle>Appointment Notifications</CardTitle>
+                    <CardDescription>
+                      View new and all appointments with patient/doctor names and booked timing.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      <div className="p-3 rounded-lg border border-border bg-muted/40">
+                        <p className="text-xs text-muted-foreground">New (Unread)</p>
+                        <p className="text-xl font-bold">{newAppointments.length}</p>
+                      </div>
+                      <div className="p-3 rounded-lg border border-border bg-muted/40">
+                        <p className="text-xs text-muted-foreground">All Tracked</p>
+                        <p className="text-xl font-bold">{adminAppointments.length}</p>
+                      </div>
+                      <div className="p-3 rounded-lg border border-border bg-muted/40">
+                        <p className="text-xs text-muted-foreground">Last Updated</p>
+                        <p className="text-sm font-semibold">{formatDateTime(new Date().toISOString())}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid xl:grid-cols-2 gap-4">
+                      <div className="rounded-xl border border-border bg-muted/20 p-4">
+                        <p className="text-sm font-semibold mb-3">New Appointments</p>
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {adminAppointmentsLoading ? (
+                            <p className="text-sm text-muted-foreground">Loading appointments...</p>
+                          ) : newAppointments.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No new appointments.</p>
+                          ) : (
+                            newAppointments.map((apt) => (
+                              <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  {getAppointmentStatusBadge(apt.status)}
+                                  <span className="text-xs text-muted-foreground">
+                                    {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}
+                                  </span>
+                                </div>
+                                <p className="text-sm"><span className="font-semibold">Patient:</span> {apt.patient_name}</p>
+                                <p className="text-sm"><span className="font-semibold">Doctor:</span> Dr. {apt.doctor_name}</p>
+                                <p className="text-sm">
+                                  <span className="font-semibold">Timing:</span> {apt.date || notAvailableLabel} {apt.time || ''}
+                                </p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-border bg-muted/20 p-4">
+                        <p className="text-sm font-semibold mb-3">All Appointments</p>
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                          {adminAppointmentsLoading ? (
+                            <p className="text-sm text-muted-foreground">Loading appointments...</p>
+                          ) : adminAppointments.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No appointments found.</p>
+                          ) : (
+                            adminAppointments.map((apt) => (
+                              <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  {getAppointmentStatusBadge(apt.status)}
+                                  <span className="text-xs text-muted-foreground">
+                                    {apt.created_at ? formatDate(apt.created_at) : notAvailableLabel}
+                                  </span>
+                                </div>
+                                <p className="text-sm"><span className="font-semibold">Patient:</span> {apt.patient_name}</p>
+                                <p className="text-xs text-muted-foreground">{apt.patient_email || notAvailableLabel} • {apt.patient_phone || notAvailableLabel}</p>
+                                <p className="text-sm"><span className="font-semibold">Doctor:</span> Dr. {apt.doctor_name}</p>
+                                <p className="text-xs text-muted-foreground">{apt.doctor_email || notAvailableLabel} • {apt.doctor_phone || notAvailableLabel}</p>
+                                <p className="text-sm">
+                                  <span className="font-semibold">Timing:</span> {apt.date || notAvailableLabel} {apt.time || ''}
+                                </p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Messages Tab */}
+              <TabsContent value="messages" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>COO Messages</CardTitle>
+                    <CardDescription>Send and receive messages with the COO</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {user?.id && (
+                      <CooThreadChat
+                        threadId="admin"
+                        threadType="admin"
+                        userId={user.id}
+                        senderRole="admin"
+                        senderName={user.user_metadata?.full_name || user.email || 'Admin'}
+                        label="COO — Chief Operations Officer"
+                        onUnreadChange={(count) => {
+                          if (activeTab !== 'messages') setUnreadCooMessages(count);
+                          else setUnreadCooMessages(0);
+                        }}
+                      />
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Messages</CardTitle>
+                    <CardDescription>Read incoming messages and send messages to any platform email</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+                      <div>
+                        <p className="text-sm font-semibold">Send New Message</p>
+                        <p className="text-xs text-muted-foreground">
+                          Search all platform users by email (including users who never messaged admin), then send.
+                        </p>
+                      </div>
+
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search platform users by email or name..."
+                          className="pl-10"
+                          value={recipientSearch}
+                          onChange={(event) => setRecipientSearch(event.target.value)}
+                        />
+                      </div>
+
+                      {platformUserSearchLoading ? (
+                        <p className="text-xs text-muted-foreground">Searching users...</p>
+                      ) : recipientSearch.trim().length > 0 ? (
+                        platformUserMatches.length > 0 ? (
+                          <div className="max-h-40 overflow-y-auto space-y-2 pr-1">
+                            {platformUserMatches.map((row) => (
+                              <button
+                                key={row.user_id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedRecipientEmail(String(row.email || '').toLowerCase());
+                                  setSelectedRecipientLabel(`${row.full_name || 'User'} (${row.email})`);
+                                }}
+                                className={`w-full text-left rounded-lg border p-2 text-xs transition ${
+                                  selectedRecipientEmail === String(row.email || '').toLowerCase()
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:border-primary/30 hover:bg-background'
+                                }`}
+                              >
+                                <p className="font-medium">{row.full_name || 'User'}</p>
+                                <p className="text-muted-foreground">{row.email}</p>
+                                <p className="uppercase tracking-wide text-[10px] text-muted-foreground">{row.role_label || 'user'}</p>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">No users found.</p>
+                        )
+                      ) : null}
+
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Selected recipient</p>
+                        <p className="text-sm font-medium">{selectedRecipientLabel || 'None selected'}</p>
+                      </div>
+
+                      <Input
+                        value={newMessageSubject}
+                        onChange={(e) => setNewMessageSubject(e.target.value)}
+                        placeholder="Message subject"
+                      />
+                      <Textarea
+                        value={newMessageBody}
+                        onChange={(e) => setNewMessageBody(e.target.value)}
+                        placeholder="Write message..."
+                        className="min-h-[120px]"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={handleSendPlatformMessage}
+                        disabled={isSendingNewMessage || !selectedRecipientEmail}
+                      >
+                        {isSendingNewMessage ? 'Sending message...' : 'Send Message'}
+                      </Button>
+                    </div>
+
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div className="relative w-full lg:max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -1220,15 +1881,27 @@ const CentralAdmin = () => {
                     <div className="grid lg:grid-cols-3 gap-4">
                       <div className="lg:col-span-2 space-y-3">
                         {inboxLoading ? (
-                          <p className="text-sm text-muted-foreground">Loading inbox...</p>
+                          <p className="text-sm text-muted-foreground">Loading messages...</p>
                         ) : inboxRows.length === 0 ? (
                           <p className="text-sm text-muted-foreground">No messages match your filters.</p>
                         ) : (
-                          inboxRows.map((message: any) => (
+                          inboxRows.map((message: any) => {
+                            const threadReadAtMs = getThreadReadState()[String(message.id || '')] || 0;
+                            const body = String(message.message || '');
+                            const createdAtMs = new Date(String(message.created_at || '')).getTime();
+                            const adminInitiated = /\[portal:admin\]/i.test(body);
+                            const rowUnread = !adminInitiated && !Number.isNaN(createdAtMs) && createdAtMs > threadReadAtMs ? 1 : 0;
+                            const replyUnread = countUserReplyMarkersAfter(body, threadReadAtMs);
+                            const threadUnreadCount = rowUnread + replyUnread;
+
+                            return (
                             <button
                               key={message.id}
                               type="button"
-                              onClick={() => setSelectedMessageId(message.id)}
+                              onClick={() => {
+                                setSelectedMessageId(message.id);
+                                markAdminThreadRead(message);
+                              }}
                               className={`w-full text-left p-4 rounded-xl border transition ${
                                 selectedMessageId === message.id
                                   ? 'border-primary bg-primary/5'
@@ -1242,16 +1915,23 @@ const CentralAdmin = () => {
                                   </p>
                                   <p className="text-xs text-muted-foreground">{message.email}</p>
                                 </div>
-                                <span className="text-xs text-muted-foreground">
-                                  {message.created_at ? formatDate(message.created_at) : ''}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  {threadUnreadCount > 0 ? (
+                                    <span className="w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-[10px] flex items-center justify-center">
+                                      {threadUnreadCount > 99 ? '99+' : threadUnreadCount}
+                                    </span>
+                                  ) : null}
+                                  <span className="text-xs text-muted-foreground">
+                                    {message.created_at ? formatDate(message.created_at) : ''}
+                                  </span>
+                                </div>
                               </div>
                               <p className="text-sm font-medium mt-2">{message.subject}</p>
                               <p className="text-xs text-muted-foreground mt-1 line-clamp-2 [overflow-wrap:anywhere]">
                                 {formatInboxMessage(message.message)}
                               </p>
                             </button>
-                          ))
+                          )})
                         )}
 
                         <div className="flex items-center justify-between pt-2">
@@ -1336,6 +2016,69 @@ const CentralAdmin = () => {
                           )}
                         </div>
                       </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Clerking Tab */}
+              <TabsContent value="clerking" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Doctor Documentation / Clerking</CardTitle>
+                    <CardDescription>
+                      Review consultation documentation entered by each doctor.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="relative max-w-md">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search doctor, patient, diagnosis, treatment..."
+                        className="pl-10"
+                        value={clerkingSearch}
+                        onChange={(e) => setClerkingSearch(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
+                      {adminClerkingLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading clerking notes...</p>
+                      ) : adminClerkingError ? (
+                        <p className="text-sm text-destructive">Failed to load clerking notes. Please refresh or re-run 53_admin_clerking_notes_rpc.sql in Supabase.</p>
+                      ) : clerkingRowsFiltered.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No clerking records found.</p>
+                      ) : (
+                        clerkingRowsFiltered.map((row) => (
+                          <div key={row.id} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-sm font-semibold">Dr. {row.doctor_name}</p>
+                              <span className="text-xs text-muted-foreground">
+                                {row.created_at ? formatDateTime(row.created_at) : notAvailableLabel}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">Patient: {row.patient_name}</p>
+                            <div className="grid md:grid-cols-2 gap-3 text-sm">
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Diagnosis</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.diagnosis || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Treatment Plan</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.treatment_plan || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Prescriptions</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.prescriptions || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Follow-up Notes</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.follow_up_notes || notAvailableLabel}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </CardContent>
                 </Card>

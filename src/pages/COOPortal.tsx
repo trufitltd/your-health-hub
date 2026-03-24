@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -7,9 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Users, CalendarClock, FolderOpen, Stethoscope, CreditCard, AlertTriangle } from 'lucide-react';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell } from 'lucide-react';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
+import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
 
 type AppointmentRow = {
   id: string;
@@ -22,26 +24,33 @@ type AppointmentRow = {
   review_comment: string | null;
 };
 
-type SessionRow = {
-  id: string;
-  status: string | null;
-  ended_at: string | null;
-  duration_seconds: number | null;
-};
-
 type DoctorRow = {
   user_id: string;
   full_name: string | null;
+  email: string | null;
+  phone_number: string | null;
   verification_status: string | null;
+};
+
+type PatientRow = {
+  user_id: string;
+  full_name: string | null;
+  email: string | null;
+  phone_number: string | null;
 };
 
 type PaymentRow = {
   id: string;
+  appointment_id?: string | null;
+  patient_id?: string | null;
   amount: number | null;
   status: string | null;
   created_at: string | null;
   payment_method: string | null;
   provider: string | null;
+  patient_name?: string | null;
+  patient_email?: string | null;
+  patient_phone?: string | null;
 };
 
 type ContactInboxRow = {
@@ -50,6 +59,13 @@ type ContactInboxRow = {
   subject: string | null;
   message: string | null;
   created_at: string | null;
+  name: string | null;
+};
+
+type OnlineDoctorPresence = {
+  user_id: string;
+  status: string;
+  online_at: string;
 };
 
 const isSuccessfulPayment = (status: string | null | undefined) => {
@@ -62,11 +78,14 @@ const isFailedPayment = (status: string | null | undefined) => {
   return ['failed', 'error', 'abandoned', 'cancelled'].includes(normalized);
 };
 
-const complaintKeywords = ['complaint', 'issue', 'bad', 'poor', 'refund', 'problem', 'failed', 'delay', 'angry', 'not happy'];
-
 export default function COOPortal() {
   const { user, signOut } = useAuth();
   const { formatDateTime, formatCurrency } = useLocaleFormatter();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('appointments');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [onlineDoctorIds, setOnlineDoctorIds] = useState<Record<string, OnlineDoctorPresence>>({});
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const allowedEmails = useMemo(() => {
     const cooRaw = (import.meta.env.VITE_COO_EMAILS as string | undefined) || '';
@@ -80,6 +99,22 @@ export default function COOPortal() {
 
   const userEmail = (user?.email || '').toLowerCase();
   const isAllowed = !!user && allowedEmails.includes(userEmail);
+
+  useEffect(() => {
+    if (!isAllowed) return;
+    const ch = supabase.channel('doctors-presence', { config: { presence: { key: 'coo-observer' } } });
+    ch.on('presence', { event: 'sync' }, () => {
+      const state = ch.presenceState();
+      const map: Record<string, OnlineDoctorPresence> = {};
+      Object.values(state).forEach((presences: any[]) => {
+        presences.forEach((p) => {
+          if (p.user_id) map[p.user_id] = { user_id: p.user_id, status: p.status || 'online', online_at: p.online_at || '' };
+        });
+      });
+      setOnlineDoctorIds(map);
+    }).subscribe();
+    return () => { ch.unsubscribe(); };
+  }, [isAllowed]);
 
   const { data: patientCount = 0 } = useQuery({
     queryKey: ['coo-patient-count'],
@@ -107,58 +142,31 @@ export default function COOPortal() {
     enabled: isAllowed,
   });
 
-  const { data: endedSessions = [] } = useQuery({
-    queryKey: ['coo-ended-sessions'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('consultation_sessions')
-        .select('id, status, ended_at, duration_seconds')
-        .eq('status', 'ended')
-        .order('ended_at', { ascending: false })
-        .limit(2000);
-      if (error) throw error;
-      return (data || []) as SessionRow[];
-    },
-    enabled: isAllowed,
-  });
-
   const { data: doctors = [] } = useQuery({
     queryKey: ['coo-doctors'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctor_registrations')
-        .select('user_id, full_name, verification_status');
+        .select('user_id, full_name, email, phone_number, verification_status');
       if (error) throw error;
       return (data || []) as DoctorRow[];
     },
     enabled: isAllowed,
   });
 
-  const { data: availableDoctorIds = [] } = useQuery({
-    queryKey: ['coo-available-doctors'],
+  const { data: patients = [] } = useQuery({
+    queryKey: ['coo-patients-directory'],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('doctor_schedules')
-        .select('doctor_id')
-        .eq('is_available', true);
+        .from('patient_registrations')
+        .select('user_id, full_name, email, phone_number')
+        .limit(5000);
       if (error) throw error;
-      const unique = Array.from(new Set((data || []).map((row: any) => String(row.doctor_id || '')).filter(Boolean)));
-      return unique;
+      return (data || []) as PatientRow[];
     },
     enabled: isAllowed,
   });
 
-  const { data: healthRecordsCount = 0 } = useQuery({
-    queryKey: ['coo-health-records-count'],
-    queryFn: async () => {
-      const { count, error } = await supabase
-        .from('health_records')
-        .select('id', { count: 'exact', head: true });
-      if (error) throw error;
-      return count || 0;
-    },
-    enabled: isAllowed,
-  });
 
   const { data: payments = [] } = useQuery({
     queryKey: ['coo-payments'],
@@ -176,7 +184,7 @@ export default function COOPortal() {
 
       const { data, error } = await supabase
         .from('payments')
-        .select('id, amount, status, created_at, payment_method, provider')
+        .select('id, appointment_id, patient_id, amount, status, created_at, payment_method, provider')
         .order('created_at', { ascending: false })
         .limit(2000);
       if (error) throw error;
@@ -191,20 +199,48 @@ export default function COOPortal() {
       const { data, error } = await supabase.rpc('get_contact_messages_inbox', {
         search_term: null,
         start_date: null,
-        limit_count: 200,
+        limit_count: 500,
         offset_count: 0,
       });
       if (error) throw error;
       return (data || []) as ContactInboxRow[];
     },
     enabled: isAllowed,
+    refetchInterval: 30000,
   });
 
-  if (!user) return <Navigate to="/coo/login" replace />;
-  if (!isAllowed) return <Navigate to="/coo/login" replace />;
+  const sevenDaysAgo = useMemo(() => Date.now() - 7 * 24 * 60 * 60 * 1000, []);
 
-  const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-  const appointmentOverview = (() => {
+  const newBookings = useMemo(() => {
+    return appointments
+      .filter((apt) => {
+        const created = apt.created_at ? new Date(apt.created_at).getTime() : 0;
+        return Number.isFinite(created) && created >= sevenDaysAgo;
+      })
+      .slice(0, 50);
+  }, [appointments, sevenDaysAgo]);
+
+  const doctorById = useMemo(() => {
+    return new Map(doctors.map((doctor) => [doctor.user_id, doctor]));
+  }, [doctors]);
+
+  const patientById = useMemo(() => {
+    return new Map(patients.map((patient) => [patient.user_id, patient]));
+  }, [patients]);
+
+  const activeDoctorsOverview = useMemo(() => {
+    const onlineIds = Object.keys(onlineDoctorIds);
+    const activeDoctors = doctors.filter((doc) =>
+      String(doc.verification_status || '').toLowerCase() === 'approved' && onlineIds.includes(doc.user_id)
+    );
+    return {
+      approvedDoctors: doctors.filter((d) => String(d.verification_status || '').toLowerCase() === 'approved').length,
+      activeOnlineCount: activeDoctors.length,
+      activeDoctorsList: activeDoctors,
+    };
+  }, [doctors, onlineDoctorIds]);
+
+  const appointmentOverview = useMemo(() => {
     const normalized = appointments.map((apt) => ({
       ...apt,
       normalizedStatus: normalizeAppointmentStatus(apt.status),
@@ -214,72 +250,51 @@ export default function COOPortal() {
       return Number.isFinite(created) && created >= sevenDaysAgo;
     }).length;
     const successfulConsultations = normalized.filter((apt) => apt.normalizedStatus === 'completed').length;
+    const confirmedAppointments = normalized.filter((apt) => apt.normalizedStatus === 'confirmed').length;
+    const inProgressAppointments = normalized.filter((apt) => apt.normalizedStatus === 'in_progress').length;
     const failedConsultations = normalized.filter((apt) => apt.normalizedStatus === 'cancelled' || apt.normalizedStatus === 'no_show').length;
+    const pendingAppointments = normalized.filter(
+      (apt) => ['pending', 'pending_approval', 'pending_payment', 'payment_processing'].includes(String(apt.normalizedStatus || '')),
+    ).length;
     return {
       totalAppointments: normalized.length,
       newAppointments,
       existingAppointments: Math.max(normalized.length - newAppointments, 0),
       successfulConsultations,
+      confirmedAppointments,
+      inProgressAppointments,
       failedConsultations,
+      pendingAppointments,
     };
-  })();
+  }, [appointments, sevenDaysAgo]);
 
-  const patientFolderOverview = (() => {
-    const ratings = appointments
-      .map((apt) => apt.rating)
-      .filter((rating): rating is number => typeof rating === 'number');
-    const avgRating = ratings.length > 0
-      ? Number((ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length).toFixed(2))
-      : 0;
+  const appointmentStatusRows = useMemo(() => appointments.map((apt) => ({
+    ...apt,
+    normalizedStatus: normalizeAppointmentStatus(apt.status),
+  })), [appointments]);
 
-    const reviewFeedback = appointments
-      .filter((apt) => typeof apt.review_comment === 'string' && apt.review_comment.trim().length > 0)
-      .slice(0, 10)
-      .map((apt) => ({
-        source: 'appointment' as const,
-        text: apt.review_comment || '',
-        rating: apt.rating,
-        created_at: apt.created_at,
-        id: apt.id,
-      }));
+  const successfulAppointments = useMemo(() => appointmentStatusRows.filter(
+    (apt) => apt.normalizedStatus === 'completed',
+  ), [appointmentStatusRows]);
 
-    const contactFeedback = contactInbox
-      .map((msg) => ({
-        source: 'contact' as const,
-        text: `${msg.subject || ''} ${msg.message || ''}`.trim(),
-        rating: null as number | null,
-        created_at: msg.created_at,
-        id: msg.id,
-      }))
-      .filter((msg) => msg.text.length > 0)
-      .slice(0, 20);
+  const failedAppointments = useMemo(() => appointmentStatusRows.filter(
+    (apt) => apt.normalizedStatus === 'cancelled' || apt.normalizedStatus === 'no_show',
+  ), [appointmentStatusRows]);
 
-    const combined = [...reviewFeedback, ...contactFeedback]
-      .sort((a, b) => new Date(String(b.created_at || '')).getTime() - new Date(String(a.created_at || '')).getTime());
+  const confirmedAppointments = useMemo(() => appointmentStatusRows.filter(
+    (apt) => apt.normalizedStatus === 'confirmed',
+  ), [appointmentStatusRows]);
 
-    const complaints = combined.filter((item) => {
-      const text = item.text.toLowerCase();
-      return complaintKeywords.some((keyword) => text.includes(keyword));
-    });
+  const inProgressAppointments = useMemo(() => appointmentStatusRows.filter(
+    (apt) => apt.normalizedStatus === 'in_progress',
+  ), [appointmentStatusRows]);
 
-    return {
-      recordsCount: healthRecordsCount,
-      avgRating,
-      complaintsCount: complaints.length,
-      latestFeedback: combined.slice(0, 8),
-      latestComplaints: complaints.slice(0, 8),
-    };
-  })();
+  const pendingAppointments = useMemo(() => appointmentStatusRows.filter(
+    (apt) => ['pending', 'pending_approval', 'pending_payment', 'payment_processing'].includes(String(apt.normalizedStatus || '')),
+  ), [appointmentStatusRows]);
 
-  const activeDoctorsOverview = (() => {
-    const approved = doctors.filter((doc) => String(doc.verification_status || '').toLowerCase() === 'approved');
-    const approvedIds = new Set(approved.map((doc) => doc.user_id));
-    const activeAvailableCount = availableDoctorIds.filter((doctorId) => approvedIds.has(doctorId)).length;
-    return {
-      approvedDoctors: approved.length,
-      activeAvailableCount,
-    };
-  })();
+  if (!user) return <Navigate to="/coo/login" replace />;
+  if (!isAllowed) return <Navigate to="/coo/login" replace />;
 
   const paymentOverview = (() => {
     const successful = payments.filter((payment) => isSuccessfulPayment(payment.status));
@@ -293,133 +308,435 @@ export default function COOPortal() {
       pendingCount: pending.length,
       successfulValue,
       failedValue,
-      latest: payments.slice(0, 12),
+      totalCount: payments.length,
+      rows: payments,
     };
   })();
 
+  const cooNavItems = [
+    { id: 'appointments', label: 'Appointments' },
+    { id: 'patients', label: 'Patients' },
+    { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
+    { id: 'doctors', label: 'Active Doctors' },
+    { id: 'payments', label: 'Payments' },
+  ] as const;
+
   return (
-    <div className="min-h-screen bg-muted/20 p-4 sm:p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">COO Monitoring Portal</h1>
-            <p className="text-sm text-muted-foreground">Operational intelligence dashboard for platform performance</p>
+    <div className="min-h-screen bg-muted/20">
+      <header className="bg-card border-b border-border sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6">
+          <div className="flex items-center justify-between h-16">
+            <div>
+              <h1 className="text-lg sm:text-xl font-bold">COO Monitoring Portal</h1>
+              <p className="text-xs sm:text-sm text-muted-foreground">Operational intelligence dashboard</p>
+            </div>
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+            >
+              <Avatar className="w-9 h-9 flex-shrink-0">
+                <AvatarFallback className="bg-primary text-primary-foreground text-sm">CO</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0 hidden sm:block text-left">
+                <p className="text-sm font-medium truncate">COO</p>
+                <p className="text-xs text-muted-foreground truncate">Operations</p>
+              </div>
+            </button>
           </div>
-          <Button variant="outline" onClick={() => signOut()}>
-            Sign Out
-          </Button>
         </div>
+      </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Registered Patients</CardDescription>
-              <CardTitle className="text-3xl">{patientCount}</CardTitle>
-            </CardHeader>
-            <CardContent><Users className="w-5 h-5 text-primary" /></CardContent>
-          </Card>
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+            <Card className="lg:sticky lg:top-24">
+              <CardContent className="p-3">
+                <nav className="space-y-1">
+                  {cooNavItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setSidebarOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium transition ${
+                        activeTab === item.id
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      }`}
+                    >
+                      <span>{item.label}</span>
+                      {item.badge && (
+                        <span className="w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-[10px] flex items-center justify-center">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </nav>
+                <div className="mt-4 border-t pt-4">
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={async () => {
+                      await signOut();
+                      navigate('/');
+                    }}
+                  >
+                    Sign Out
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </aside>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Appointments (New / Existing)</CardDescription>
-              <CardTitle className="text-3xl">{appointmentOverview.newAppointments} / {appointmentOverview.existingAppointments}</CardTitle>
-            </CardHeader>
-            <CardContent><CalendarClock className="w-5 h-5 text-primary" /></CardContent>
-          </Card>
+          <main className="lg:col-span-3 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Total Registered Patients</CardDescription>
+                  <CardTitle className="text-3xl">{patientCount}</CardTitle>
+                </CardHeader>
+                <CardContent><Users className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Patient e-Folder Records</CardDescription>
-              <CardTitle className="text-3xl">{patientFolderOverview.recordsCount}</CardTitle>
-            </CardHeader>
-            <CardContent><FolderOpen className="w-5 h-5 text-primary" /></CardContent>
-          </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Appointments (New / Existing)</CardDescription>
+                  <CardTitle className="text-3xl">{appointmentOverview.newAppointments} / {appointmentOverview.existingAppointments}</CardTitle>
+                </CardHeader>
+                <CardContent><CalendarClock className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Active Doctors</CardDescription>
-              <CardTitle className="text-3xl">{activeDoctorsOverview.activeAvailableCount}</CardTitle>
-            </CardHeader>
-            <CardContent><Stethoscope className="w-5 h-5 text-primary" /></CardContent>
-          </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Active Doctors Online Now</CardDescription>
+                  <CardTitle className="text-3xl">{activeDoctorsOverview.activeOnlineCount}</CardTitle>
+                </CardHeader>
+                <CardContent><Stethoscope className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Payment Success / Failed</CardDescription>
-              <CardTitle className="text-3xl">{paymentOverview.successfulCount} / {paymentOverview.failedCount}</CardTitle>
-            </CardHeader>
-            <CardContent><CreditCard className="w-5 h-5 text-primary" /></CardContent>
-          </Card>
-        </div>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Patient Messages</CardDescription>
+                  <CardTitle className="text-3xl">{contactInbox.length}</CardTitle>
+                </CardHeader>
+                <CardContent><MessageSquare className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
 
-        <Tabs defaultValue="appointments" className="space-y-4">
-          <TabsList className="grid grid-cols-2 md:grid-cols-5 w-full">
-            <TabsTrigger value="appointments">Appointments</TabsTrigger>
-            <TabsTrigger value="folders">Patient e-Folder</TabsTrigger>
-            <TabsTrigger value="doctors">Doctors</TabsTrigger>
-            <TabsTrigger value="payments">Payments</TabsTrigger>
-            <TabsTrigger value="sessions">Consultations</TabsTrigger>
-          </TabsList>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Payment Success / Failed</CardDescription>
+                  <CardTitle className="text-3xl">{paymentOverview.successfulCount} / {paymentOverview.failedCount}</CardTitle>
+                </CardHeader>
+                <CardContent><CreditCard className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
+            </div>
+
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList className="hidden">
+                {cooNavItems.map((item) => (
+                  <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>
+                ))}
+              </TabsList>
 
           <TabsContent value="appointments" className="space-y-4">
             <Card>
               <CardHeader>
                 <CardTitle>Appointment Overview</CardTitle>
-                <CardDescription>
-                  Total: {appointmentOverview.totalAppointments} | Successful: {appointmentOverview.successfulConsultations} | Failed: {appointmentOverview.failedConsultations}
+                <CardDescription className="break-words">
+                  Total: {appointmentOverview.totalAppointments} | Successful: {appointmentOverview.successfulConsultations} | Confirmed: {appointmentOverview.confirmedAppointments} | In Progress: {appointmentOverview.inProgressAppointments} | Pending: {appointmentOverview.pendingAppointments} | Failed: {appointmentOverview.failedConsultations}
                 </CardDescription>
               </CardHeader>
             </Card>
-          </TabsContent>
 
-          <TabsContent value="folders" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Patient e-Folder Monitoring</CardTitle>
-                <CardDescription>
-                  Average satisfaction rating: {patientFolderOverview.avgRating} | Complaints / feedback flagged: {patientFolderOverview.complaintsCount}
-                </CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-primary" />
+                  New Booking Notifications (Last 7 Days)
+                </CardTitle>
+                <CardDescription>{newBookings.length} new booking(s)</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {patientFolderOverview.latestFeedback.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No feedback records found.</p>
+              <CardContent className="space-y-2 max-h-[360px] overflow-y-auto">
+                {newBookings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No new bookings in the last 7 days.</p>
                 ) : (
-                  patientFolderOverview.latestFeedback.map((entry) => (
-                    <div key={`${entry.source}-${entry.id}`} className="rounded-lg border p-3">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <div className="flex items-center gap-2">
-                          <Badge variant={entry.source === 'contact' ? 'outline' : 'secondary'}>
-                            {entry.source === 'contact' ? 'Contact' : 'Appointment Review'}
-                          </Badge>
-                          {typeof entry.rating === 'number' ? <Badge>{entry.rating}/5</Badge> : null}
-                        </div>
-                        <span className="text-xs text-muted-foreground">{formatDateTime(entry.created_at || null)}</span>
+                  newBookings.map((apt) => (
+                    <div key={apt.id} className="rounded-lg border p-3 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">
+                          {patientById.get(apt.patient_id || '')?.full_name || 'Unknown Patient'}
+                        </p>
+                        <Badge className="bg-primary/10 text-primary border-primary/20 text-xs">
+                          {normalizeAppointmentStatus(apt.status)?.replace(/_/g, ' ')}
+                        </Badge>
                       </div>
-                      <p className="text-sm whitespace-pre-wrap">{entry.text || 'No message'}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Doctor: {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Appointment: {formatDateTime(apt.date)} · Booked: {formatDateTime(apt.created_at)}
+                      </p>
                     </div>
                   ))
                 )}
               </CardContent>
             </Card>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Successful Appointments</CardTitle>
+                  <CardDescription>All appointments completed successfully</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 max-h-[420px] sm:max-h-[520px] overflow-y-auto">
+                  {successfulAppointments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No successful appointments found.</p>
+                  ) : (
+                    successfulAppointments.map((apt) => (
+                      <div key={apt.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium break-all">Appointment {apt.id.slice(0, 8)}...</p>
+                          <Badge className="bg-success/10 text-success border-success/20">Successful</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Date: {formatDateTime(apt.date)}
+                        </p>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Doctor</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Patient</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Confirmed Appointments</CardTitle>
+                  <CardDescription>All confirmed appointments awaiting consultation</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 max-h-[420px] sm:max-h-[520px] overflow-y-auto">
+                  {confirmedAppointments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No confirmed appointments found.</p>
+                  ) : (
+                    confirmedAppointments.map((apt) => (
+                      <div key={apt.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium break-all">Appointment {apt.id.slice(0, 8)}...</p>
+                          <Badge className="bg-primary/10 text-primary border-primary/20">Confirmed</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Date: {formatDateTime(apt.date)}
+                        </p>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Doctor</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Patient</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>In Progress Appointments</CardTitle>
+                  <CardDescription>All appointments currently in consultation</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 max-h-[420px] sm:max-h-[520px] overflow-y-auto">
+                  {inProgressAppointments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No in progress appointments found.</p>
+                  ) : (
+                    inProgressAppointments.map((apt) => (
+                      <div key={apt.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium break-all">Appointment {apt.id.slice(0, 8)}...</p>
+                          <Badge className="bg-sky-500/10 text-sky-700 border-sky-500/20">In Progress</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Date: {formatDateTime(apt.date)}
+                        </p>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Doctor</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Patient</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Pending Appointments</CardTitle>
+                  <CardDescription>All appointments waiting for action or completion</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 max-h-[420px] sm:max-h-[520px] overflow-y-auto">
+                  {pendingAppointments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No pending appointments found.</p>
+                  ) : (
+                    pendingAppointments.map((apt) => (
+                      <div key={apt.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium break-all">Appointment {apt.id.slice(0, 8)}...</p>
+                          <Badge className="bg-warning/10 text-warning border-warning/20">
+                            {String(apt.normalizedStatus || 'pending').replace(/_/g, ' ')}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Date: {formatDateTime(apt.date)}
+                        </p>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Doctor</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Patient</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Failed Appointments</CardTitle>
+                  <CardDescription>All appointments marked cancelled or no-show</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 max-h-[420px] sm:max-h-[520px] overflow-y-auto">
+                  {failedAppointments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No failed appointments found.</p>
+                  ) : (
+                    failedAppointments.map((apt) => (
+                      <div key={apt.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-sm font-medium break-all">Appointment {apt.id.slice(0, 8)}...</p>
+                          <Badge className="bg-destructive/10 text-destructive border-destructive/20">
+                            {apt.normalizedStatus === 'no_show' ? 'No Show' : 'Failed'}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Date: {formatDateTime(apt.date)}
+                        </p>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Doctor</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                        <div className="rounded-md bg-muted/40 p-2">
+                          <p className="text-xs font-medium">Patient</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="messages" forceMount className={activeTab !== 'messages' ? 'hidden' : ''}>
+            <COOMessagesTab
+              patients={patients}
+              cooUserId={user.id}
+              cooName={user.user_metadata?.full_name || user.email || 'COO'}
+              onUnreadChange={(count) => {
+                if (activeTab !== 'messages') setUnreadMessages(count);
+              }}
+            />
           </TabsContent>
 
           <TabsContent value="doctors" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Doctor Availability</CardTitle>
+                <CardTitle>Active Doctors Online Now</CardTitle>
                 <CardDescription>
-                  Approved doctors: {activeDoctorsOverview.approvedDoctors} | Available by schedule: {activeDoctorsOverview.activeAvailableCount}
+                  {activeDoctorsOverview.activeOnlineCount} doctor(s) currently online · {activeDoctorsOverview.approvedDoctors} approved total
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {doctors.slice(0, 12).map((doctor) => (
-                  <div key={doctor.user_id} className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm font-medium">{doctor.full_name || 'Doctor'}</span>
-                    <Badge variant={String(doctor.verification_status || '') === 'approved' ? 'default' : 'outline'}>
-                      {doctor.verification_status || 'unknown'}
-                    </Badge>
-                  </div>
-                ))}
+                {activeDoctorsOverview.activeDoctorsList.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No doctors are currently online.</p>
+                ) : (
+                  activeDoctorsOverview.activeDoctorsList.map((doctor) => {
+                    const presence = onlineDoctorIds[doctor.user_id];
+                    return (
+                      <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          {presence?.online_at && (
+                            <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
+                          )}
+                        </div>
+                        <Badge className="bg-green-500/10 text-green-700 border-green-500/20 self-start sm:self-auto">
+                          🟢 Online
+                        </Badge>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="patients" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Patient Directory</CardTitle>
+                <CardDescription>
+                  Total registered patients: {patients.length}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {patients.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No patient records found.</p>
+                ) : (
+                  patients.map((patient) => (
+                    <div key={patient.user_id} className="rounded-lg border p-3">
+                      <p className="text-sm font-medium">{patient.full_name || 'Patient'}</p>
+                      <p className="text-xs text-muted-foreground">{patient.email || 'No email'}</p>
+                      <p className="text-xs text-muted-foreground">{patient.phone_number || 'No phone'}</p>
+                    </div>
+                  ))
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -429,20 +746,35 @@ export default function COOPortal() {
               <CardHeader>
                 <CardTitle>Payment Monitoring</CardTitle>
                 <CardDescription>
-                  Successful value: {formatCurrency(paymentOverview.successfulValue)} | Failed value: {formatCurrency(paymentOverview.failedValue)}
+                  Total payments: {paymentOverview.totalCount} | Successful value: {formatCurrency(paymentOverview.successfulValue)} | Failed value: {formatCurrency(paymentOverview.failedValue)}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2">
-                {paymentOverview.latest.length === 0 ? (
+              <CardContent className="space-y-2 max-h-[520px] overflow-y-auto">
+                {paymentOverview.rows.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No payment records found.</p>
                 ) : (
-                  paymentOverview.latest.map((payment) => (
-                    <div key={payment.id} className="flex items-center justify-between rounded-lg border p-3">
-                      <div className="min-w-0">
+                  paymentOverview.rows.map((payment) => {
+                    const patient = payment.patient_id ? patientById.get(payment.patient_id) : null;
+                    const patientName = patient?.full_name || payment.patient_name || 'Unknown Patient';
+                    const patientEmail = patient?.email || payment.patient_email || 'N/A';
+                    const patientPhone = patient?.phone_number || payment.patient_phone || 'N/A';
+
+                    return (
+                    <div key={payment.id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
+                      <div className="min-w-0 space-y-1">
                         <p className="text-sm font-medium">{formatCurrency(Number(payment.amount || 0))}</p>
                         <p className="text-xs text-muted-foreground">{formatDateTime(payment.created_at || null)}</p>
+                        <p className="text-xs">
+                          <span className="font-medium">Patient:</span> {patientName}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Email:</span> {patientEmail}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Phone:</span> {patientPhone}
+                        </p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
                         {isSuccessfulPayment(payment.status) ? (
                           <Badge className="bg-success/10 text-success border-success/20">Successful</Badge>
                         ) : isFailedPayment(payment.status) ? (
@@ -452,57 +784,18 @@ export default function COOPortal() {
                         )}
                       </div>
                     </div>
-                  ))
+                  )})
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="sessions" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Consultation Session Monitoring</CardTitle>
-                <CardDescription>
-                  Successful consultations are tracked as completed appointments. Failed consultations are tracked as cancelled/no-show appointments.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {endedSessions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No ended sessions found.</p>
-                ) : (
-                  endedSessions.slice(0, 12).map((session) => (
-                    <div key={session.id} className="flex items-center justify-between rounded-lg border p-3">
-                      <div>
-                        <p className="text-sm font-medium">Session {session.id.slice(0, 8)}...</p>
-                        <p className="text-xs text-muted-foreground">{formatDateTime(session.ended_at || null)}</p>
-                      </div>
-                      <Badge variant="outline">{Math.round((session.duration_seconds || 0) / 60)} min</Badge>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
+
         </Tabs>
+          </main>
+        </div>
 
-        {patientFolderOverview.complaintsCount > 0 && (
-          <Card className="border-warning/40 bg-warning/5">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-warning">
-                <AlertTriangle className="w-5 h-5" />
-                Complaints / Feedback Alerts
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {patientFolderOverview.latestComplaints.map((entry) => (
-                <div key={`complaint-${entry.source}-${entry.id}`} className="rounded-lg border border-warning/30 bg-background p-3">
-                  <p className="text-sm">{entry.text}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{formatDateTime(entry.created_at || null)}</p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
+
       </div>
     </div>
   );

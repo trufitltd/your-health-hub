@@ -189,6 +189,34 @@ class ConsultationService {
   }
 
   /**
+   * Mark an appointment as needing follow-up and start the 7-day follow-up window.
+   */
+  async markAppointmentNeedsFollowUp(appointmentId: string): Promise<void> {
+    const { error } = await supabase.rpc('mark_appointment_needs_follow_up', {
+      p_appointment_id: appointmentId,
+    });
+
+    if (error) {
+      console.error('[ConsultationService] Error marking appointment needs follow-up:', error);
+      throw new Error(`Failed to mark follow-up: ${error.message}`);
+    }
+  }
+
+  /**
+   * Auto-complete follow-up appointments that passed the 7-day deadline.
+   */
+  async completeOverdueFollowUps(): Promise<number> {
+    const { data, error } = await supabase.rpc('complete_overdue_follow_up_appointments');
+
+    if (error) {
+      console.warn('[ConsultationService] Error auto-completing overdue follow-up appointments:', error);
+      return 0;
+    }
+
+    return Number(data || 0);
+  }
+
+  /**
    * Send a message in a consultation
    */
   async sendMessage(
