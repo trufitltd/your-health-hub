@@ -30,6 +30,10 @@ export interface Appointment {
   reschedule_upgrade_amount?: number | null;
   reschedule_request_note?: string | null;
   reschedule_response_note?: string | null;
+  needs_follow_up?: boolean;
+  follow_up_marked_at?: string | null;
+  follow_up_deadline_at?: string | null;
+  follow_up_completed_at?: string | null;
 }
 
 /**
@@ -43,6 +47,9 @@ export const useAppointments = () => {
     queryKey: ['appointments', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
+
+      // Keep follow-up lifecycle consistent before loading appointments.
+      await supabase.rpc('complete_overdue_follow_up_appointments');
 
       const { data, error } = await supabase
         .from('appointments')
