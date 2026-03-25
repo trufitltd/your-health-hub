@@ -2,14 +2,28 @@ import { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
+import type { AppRole } from '@/contexts/authContextValue';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  requiredRole?: 'patient' | 'doctor';
+  requiredRole?: AppRole;
   requireCompletedRegistration?: boolean;
 }
 
 const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
+const parseAppRole = (value: unknown): AppRole => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo') {
+    return normalized;
+  }
+  return 'patient';
+};
+const roleDefaultPath = (role: AppRole) => {
+  if (role === 'doctor') return '/doctor-portal';
+  if (role === 'admin') return '/admin';
+  if (role === 'coo') return '/coo';
+  return '/patient-portal';
+};
 
 export function ProtectedRoute({
   children,
@@ -51,14 +65,18 @@ export function ProtectedRoute({
           console.warn('ProtectedRoute patient registration check warning:', patientError);
         }
 
-        const effectiveRole: 'patient' | 'doctor' =
-          doctorRow ? 'doctor' : ((role || (String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient')) as 'patient' | 'doctor');
+        const effectiveRole: AppRole =
+          doctorRow ? 'doctor' : (role || parseAppRole(user.user_metadata?.role));
 
         const doctorComplete = !!doctorRow && isFilled((doctorRow as any).medical_license_url);
         const patientComplete = !!patientRow && (
           isFilled((patientRow as any).profile_picture_url)
           || Boolean((patientRow as any).post_auth_prompt_completed)
         );
+        if (effectiveRole !== 'doctor' && effectiveRole !== 'patient') {
+          setRedirectPath(null);
+          return;
+        }
         const complete = effectiveRole === 'doctor' ? doctorComplete : patientComplete;
 
         if (!complete) {
@@ -94,10 +112,10 @@ export function ProtectedRoute({
   }
 
   if (requiredRole) {
-    const roleFromMetadata = String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient';
-    const effectiveRole = (role || roleFromMetadata) as 'patient' | 'doctor';
+    const roleFromMetadata = parseAppRole(user.user_metadata?.role);
+    const effectiveRole = (role || roleFromMetadata) as AppRole;
     if (effectiveRole !== requiredRole) {
-      return <Navigate to={effectiveRole === 'doctor' ? '/doctor-portal' : '/patient-portal'} replace />;
+      return <Navigate to={roleDefaultPath(effectiveRole)} replace />;
     }
   }
 

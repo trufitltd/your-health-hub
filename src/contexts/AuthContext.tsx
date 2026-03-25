@@ -3,10 +3,19 @@ import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { AuthContext } from './authContextValue';
 import type { AuthContextType } from './authContextValue';
+import type { AppRole } from './authContextValue';
+
+const parseAppRole = (rawRole: unknown): AppRole => {
+  const normalized = String(rawRole || '').trim().toLowerCase();
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo') {
+    return normalized;
+  }
+  return 'patient';
+};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<'patient' | 'doctor' | null>(null);
+  const [role, setRole] = useState<AppRole | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -18,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (currentUser) {
           setUser(currentUser);
-          const userRole = (currentUser.user_metadata?.role || 'patient') as 'patient' | 'doctor';
+          const userRole = parseAppRole(currentUser.user_metadata?.role);
           setRole(userRole);
           localStorage.setItem('userRole', userRole);
         }
@@ -38,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (currentUser) {
           setUser(currentUser);
-          const userRole = (currentUser.user_metadata?.role || 'patient') as 'patient' | 'doctor';
+          const userRole = parseAppRole(currentUser.user_metadata?.role);
           setRole(userRole);
           localStorage.setItem('userRole', userRole);
         } else {
