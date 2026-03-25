@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Mail, Phone, MapPin, Facebook, Twitter, Instagram, Linkedin } from 'lucide-react';
+import { Mail, Phone, Facebook, Twitter, Instagram, Linkedin } from 'lucide-react';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { useLanguage } from '@/contexts/LanguageContext';
 
@@ -53,18 +53,18 @@ export function Footer() {
               )}
             </p>
             <div className="space-y-3">
-              <a href="mailto:support@myedoctor.com" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
+              <a href="mailto:info@myedoctorhealth.com" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
                 <Mail className="w-4 h-4" />
-                support@myedoctor.com
+                info@myedoctorhealth.com
               </a>
-              <a href="tel:+1234567890" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
+              <a href="tel:+2348068006867" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
                 <Phone className="w-4 h-4" />
-                +1 (234) 567-890
+                +2348068006867
               </a>
-              <p className="flex items-center gap-2 text-sm text-primary-foreground/70">
-                <MapPin className="w-4 h-4" />
-                {t('footer.address', '123 Healthcare Street, Medical City')}
-              </p>
+              <a href="tel:+2347033734785" className="flex items-center gap-2 text-sm text-primary-foreground/70 hover:text-primary transition-colors">
+                <Phone className="w-4 h-4" />
+                +2347033734785
+              </a>
             </div>
           </div>
 
