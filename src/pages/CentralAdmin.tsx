@@ -165,7 +165,8 @@ const CentralAdmin = () => {
   }, []);
 
   const adminEmail = (user?.email || user?.user_metadata?.email || '').toLowerCase();
-  const isAdmin = !!adminEmail && adminEmails.includes(adminEmail);
+  const metadataRole = String(user?.user_metadata?.role || '').toLowerCase();
+  const isAdmin = metadataRole === 'admin' || (!!adminEmail && adminEmails.includes(adminEmail));
   const inboxReadStorageKey = user?.id ? `admin-message-thread-read-${user.id}` : null;
   const countUserReplyMarkersAfter = (body: string, lastReadAtMs: number) => {
     let count = 0;

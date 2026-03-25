@@ -111,7 +111,8 @@ export default function COOPortal() {
   }, []);
 
   const userEmail = (user?.email || '').toLowerCase();
-  const isAllowed = !!user && allowedEmails.includes(userEmail);
+  const metadataRole = String(user?.user_metadata?.role || '').toLowerCase();
+  const isAllowed = !!user && (metadataRole === 'coo' || allowedEmails.includes(userEmail));
 
   useEffect(() => {
     setCooProfilePicture((user?.user_metadata?.avatar as string) || '');

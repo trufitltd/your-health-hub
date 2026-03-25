@@ -55,7 +55,14 @@ export function Header() {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  const dashboardLink = role === 'doctor' ? '/doctor-portal' : '/patient-portal';
+  const dashboardLink =
+    role === 'doctor'
+      ? '/doctor-portal'
+      : role === 'admin'
+        ? '/admin'
+        : role === 'coo'
+          ? '/coo'
+          : '/patient-portal';
 
   return (
     <header
