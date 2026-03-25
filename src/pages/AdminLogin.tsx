@@ -46,6 +46,16 @@ export default function AdminLogin() {
         return;
       }
 
+      const existingRole = String(data.user?.user_metadata?.role || '').toLowerCase();
+      if (existingRole !== 'admin') {
+        const { error: roleError } = await supabase.auth.updateUser({
+          data: { role: 'admin' },
+        });
+        if (roleError) {
+          console.warn('Failed to persist admin role in metadata:', roleError);
+        }
+      }
+
       toast({ title: 'Success', description: 'Welcome, Admin!' });
       navigate('/admin');
     } catch (err: any) {
