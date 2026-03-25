@@ -7,11 +7,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
+import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings } from 'lucide-react';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
 import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
+import { toast } from '@/components/ui/use-toast';
 
 type AppointmentRow = {
   id: string;
@@ -68,6 +70,10 @@ type OnlineDoctorPresence = {
   online_at: string;
 };
 
+type ProfileRow = {
+  full_name: string | null;
+};
+
 const isSuccessfulPayment = (status: string | null | undefined) => {
   const normalized = String(status || '').trim().toLowerCase();
   return ['completed', 'success', 'paid', 'succeeded'].includes(normalized);
@@ -86,6 +92,13 @@ export default function COOPortal() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [onlineDoctorIds, setOnlineDoctorIds] = useState<Record<string, OnlineDoctorPresence>>({});
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [cooProfilePicture, setCooProfilePicture] = useState<string>('');
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: '',
+  });
 
   const allowedEmails = useMemo(() => {
     const cooRaw = (import.meta.env.VITE_COO_EMAILS as string | undefined) || '';
@@ -99,6 +112,34 @@ export default function COOPortal() {
 
   const userEmail = (user?.email || '').toLowerCase();
   const isAllowed = !!user && allowedEmails.includes(userEmail);
+
+  useEffect(() => {
+    setCooProfilePicture((user?.user_metadata?.avatar as string) || '');
+  }, [user?.user_metadata]);
+
+  const { data: cooProfile } = useQuery({
+    queryKey: ['coo-profile-name', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data || null) as ProfileRow | null;
+    },
+    enabled: isAllowed && !!user?.id,
+  });
+
+  const cooDisplayName = cooProfile?.full_name?.trim() || (user?.user_metadata?.full_name as string) || user?.email || 'COO';
+  const cooDisplayEmail = user?.email || '';
+  const cooInitials = cooDisplayName
+    .split(' ')
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
 
   useEffect(() => {
     if (!isAllowed) return;
@@ -317,7 +358,76 @@ export default function COOPortal() {
     { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
     { id: 'doctors', label: 'Active Doctors' },
     { id: 'payments', label: 'Payments' },
+    { id: 'settings', label: 'Settings' },
   ] as const;
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!user?.id) return;
+    setIsUploadingPhoto(true);
+
+    try {
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const filePath = `coo/${user.id}/profile.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('doctor-files')
+        .upload(filePath, file, { upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from('doctor-files').getPublicUrl(filePath);
+      const cacheBustUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+      const { error: updateError } = await supabase.auth.updateUser({
+        data: { avatar: cacheBustUrl },
+      });
+      if (updateError) throw updateError;
+
+      setCooProfilePicture(cacheBustUrl);
+      toast({ title: 'Success', description: 'Profile picture updated successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to update profile picture.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    const newPassword = passwordFormData.newPassword.trim();
+    const confirmPassword = passwordFormData.confirmPassword.trim();
+
+    if (!newPassword || !confirmPassword) {
+      toast({ title: 'Missing fields', description: 'Enter and confirm your new password.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: 'Weak password', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setPasswordFormData({ newPassword: '', confirmPassword: '' });
+      toast({ title: 'Success', description: 'Password changed successfully.' });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to change password.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-muted/20">
@@ -328,18 +438,29 @@ export default function COOPortal() {
               <h1 className="text-lg sm:text-xl font-bold">COO Monitoring Portal</h1>
               <p className="text-xs sm:text-sm text-muted-foreground">Operational intelligence dashboard</p>
             </div>
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-            >
-              <Avatar className="w-9 h-9 flex-shrink-0">
-                <AvatarFallback className="bg-primary text-primary-foreground text-sm">CO</AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0 hidden sm:block text-left">
-                <p className="text-sm font-medium truncate">COO</p>
-                <p className="text-xs text-muted-foreground truncate">Operations</p>
-              </div>
-            </button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant={activeTab === 'settings' ? 'default' : 'outline'}
+                onClick={() => setActiveTab('settings')}
+              >
+                <Settings className="w-4 h-4 mr-2" />
+                Settings
+              </Button>
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+              >
+                <Avatar className="w-9 h-9 flex-shrink-0">
+                  <AvatarImage src={cooProfilePicture} />
+                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">{cooInitials || 'CO'}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0 hidden sm:block text-left">
+                  <p className="text-sm font-medium truncate">{cooDisplayName}</p>
+                  <p className="text-xs text-muted-foreground truncate">{cooDisplayEmail || 'No email'}</p>
+                </div>
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -673,7 +794,7 @@ export default function COOPortal() {
             <COOMessagesTab
               patients={patients}
               cooUserId={user.id}
-              cooName={user.user_metadata?.full_name || user.email || 'COO'}
+              cooName={cooDisplayName}
               onUnreadChange={(count) => {
                 if (activeTab !== 'messages') setUnreadMessages(count);
               }}
@@ -784,6 +905,80 @@ export default function COOPortal() {
                     </div>
                   )})
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="settings" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Profile Settings</CardTitle>
+                <CardDescription>Change your COO profile picture and account password.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center gap-4">
+                  <Avatar className="w-20 h-20">
+                    <AvatarImage src={cooProfilePicture} />
+                    <AvatarFallback className="bg-primary text-primary-foreground text-2xl">{cooInitials || 'CO'}</AvatarFallback>
+                  </Avatar>
+                  <div className="space-y-2">
+                    <p className="font-semibold text-lg">{cooDisplayName}</p>
+                    <p className="text-sm text-muted-foreground">{user?.email}</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="coo-photo-upload"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) handlePhotoUpload(file);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isUploadingPhoto}
+                      onClick={() => document.getElementById('coo-photo-upload')?.click()}
+                    >
+                      {isUploadingPhoto ? 'Uploading...' : 'Change Photo'}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Change Password</CardTitle>
+                <CardDescription>Update your COO account password.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4 max-w-md">
+                  <div>
+                    <label className="text-sm font-medium">New Password</label>
+                    <Input
+                      type="password"
+                      value={passwordFormData.newPassword}
+                      onChange={(e) => setPasswordFormData({ ...passwordFormData, newPassword: e.target.value })}
+                      className="mt-1"
+                      placeholder="At least 8 characters"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Confirm New Password</label>
+                    <Input
+                      type="password"
+                      value={passwordFormData.confirmPassword}
+                      onChange={(e) => setPasswordFormData({ ...passwordFormData, confirmPassword: e.target.value })}
+                      className="mt-1"
+                      placeholder="Re-enter new password"
+                    />
+                  </div>
+                  <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+                    {isChangingPassword ? 'Updating...' : 'Update Password'}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
