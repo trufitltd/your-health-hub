@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Layout } from '@/components/layout';
-import { Mail, Phone, MapPin, Clock, Send, MessageSquare, HelpCircle } from 'lucide-react';
+import { Mail, Phone, Clock, Send, MessageSquare, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,20 +26,20 @@ export default function ContactPage() {
     {
       icon: Phone,
       title: t('contact.info.phone.title', 'Phone'),
-      value: '+1 (234) 567-890',
+      value: '+2348068006867',
+      desc: t('contact.info.phone.desc', 'Mon-Fri from 8am to 6pm'),
+    },
+    {
+      icon: Phone,
+      title: t('contact.info.phone.altTitle', 'Alternate Phone'),
+      value: '+2347033734785',
       desc: t('contact.info.phone.desc', 'Mon-Fri from 8am to 6pm'),
     },
     {
       icon: Mail,
       title: t('contact.info.email.title', 'Email'),
-      value: 'support@myedoctor.com',
+      value: 'info@myedoctorhealth.com',
       desc: t('contact.info.email.desc', 'We reply within 24 hours'),
-    },
-    {
-      icon: MapPin,
-      title: t('contact.info.address.title', 'Address'),
-      value: t('contact.info.address.value', '123 Healthcare Street'),
-      desc: t('contact.info.address.desc', 'Medical City, MC 12345'),
     },
     {
       icon: Clock,
