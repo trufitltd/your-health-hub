@@ -4,7 +4,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
-  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail,
+  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2,
   Badge as BadgeIcon, Settings
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -148,6 +148,7 @@ const CentralAdmin = () => {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [clerkingSearch, setClerkingSearch] = useState('');
+  const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'clerking'>(null);
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
@@ -1209,6 +1210,305 @@ const CentralAdmin = () => {
     }
   };
 
+  const buildCsv = (rows: Array<Record<string, unknown>>) => {
+    if (rows.length === 0) return '';
+    const headers = Array.from(
+      rows.reduce((set, row) => {
+        Object.keys(row).forEach((key) => set.add(key));
+        return set;
+      }, new Set<string>()),
+    );
+
+    const escapeCsvValue = (value: unknown) => {
+      if (value === null || value === undefined) return '';
+      const text =
+        typeof value === 'string'
+          ? value
+          : typeof value === 'number' || typeof value === 'boolean'
+            ? String(value)
+            : JSON.stringify(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    const lines = [
+      headers.join(','),
+      ...rows.map((row) => headers.map((header) => escapeCsvValue(row[header])).join(',')),
+    ];
+    return lines.join('\n');
+  };
+
+  const downloadCsvFile = (filename: string, rows: Array<Record<string, unknown>>) => {
+    const csv = buildCsv(rows);
+    if (!csv) {
+      toast({ title: 'No data', description: `No records found for ${filename}.` });
+      return;
+    }
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const fetchAllPages = async <T,>(fetchPage: (from: number, to: number) => Promise<T[]>) => {
+    const pageSize = 1000;
+    let from = 0;
+    const all: T[] = [];
+
+    while (true) {
+      const page = await fetchPage(from, from + pageSize - 1);
+      all.push(...page);
+      if (page.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return all;
+  };
+
+  const fetchAllDoctorsForExport = async () =>
+    fetchAllPages(async (from, to) => {
+      const { data, error } = await supabase
+        .from('doctor_registrations')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      return (data || []) as Array<Record<string, unknown>>;
+    });
+
+  const fetchAllPatientsForExport = async () =>
+    fetchAllPages(async (from, to) => {
+      const { data, error } = await supabase
+        .from('patient_registrations')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      return (data || []) as Array<Record<string, unknown>>;
+    });
+
+  const fetchAllAppointmentsForExport = async () =>
+    fetchAllPages(async (from, to) => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      return (data || []) as Array<Record<string, unknown>>;
+    });
+
+  const fetchAllClerkingForExport = async () =>
+    fetchAllPages(async (from, to) => {
+      const { data, error } = await supabase
+        .from('doctor_consultation_notes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      return (data || []) as Array<Record<string, unknown>>;
+    });
+
+  const getNameDirectory = (
+    doctorsRows: Array<Record<string, unknown>>,
+    patientsRows: Array<Record<string, unknown>>,
+  ) => {
+    const doctorMap = new Map<string, { full_name?: string; email?: string; phone_number?: string }>();
+    const patientMap = new Map<string, { full_name?: string; email?: string; phone_number?: string }>();
+
+    doctorsRows.forEach((row) => {
+      const userId = String(row.user_id || '');
+      if (!userId) return;
+      doctorMap.set(userId, {
+        full_name: String(row.full_name || ''),
+        email: String(row.email || ''),
+        phone_number: String(row.phone_number || ''),
+      });
+    });
+
+    patientsRows.forEach((row) => {
+      const userId = String(row.user_id || '');
+      if (!userId) return;
+      patientMap.set(userId, {
+        full_name: String(row.full_name || ''),
+        email: String(row.email || ''),
+        phone_number: String(row.phone_number || ''),
+      });
+    });
+
+    return { doctorMap, patientMap };
+  };
+
+  const getExportDateSuffix = () => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mi = String(now.getMinutes()).padStart(2, '0');
+    return `${yyyy}${mm}${dd}_${hh}${mi}`;
+  };
+
+  const exportDoctors = async () => {
+    setIsExporting('doctors');
+    try {
+      const doctorsRows = await fetchAllDoctorsForExport();
+      downloadCsvFile(`doctors_${getExportDateSuffix()}.csv`, doctorsRows);
+      toast({ title: 'Download started', description: `Exported ${doctorsRows.length} doctors.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export doctors.', variant: 'destructive' });
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const exportPatients = async () => {
+    setIsExporting('patients');
+    try {
+      const patientsRows = await fetchAllPatientsForExport();
+      downloadCsvFile(`patients_${getExportDateSuffix()}.csv`, patientsRows);
+      toast({ title: 'Download started', description: `Exported ${patientsRows.length} patients.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export patients.', variant: 'destructive' });
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const exportAppointments = async () => {
+    setIsExporting('appointments');
+    try {
+      const [appointmentsRows, doctorsRows, patientsRows] = await Promise.all([
+        fetchAllAppointmentsForExport(),
+        fetchAllDoctorsForExport(),
+        fetchAllPatientsForExport(),
+      ]);
+      const { doctorMap, patientMap } = getNameDirectory(doctorsRows, patientsRows);
+      const enrichedRows = appointmentsRows.map((row) => {
+        const patientId = String(row.patient_id || '');
+        const doctorId = String(row.doctor_id || '');
+        const patient = patientMap.get(patientId);
+        const doctor = doctorMap.get(doctorId);
+        return {
+          ...row,
+          status: normalizeAppointmentStatus(String(row.status || '')),
+          patient_name: row.patient_name || patient?.full_name || null,
+          patient_email: patient?.email || null,
+          patient_phone: patient?.phone_number || null,
+          doctor_name: row.specialist_name || doctor?.full_name || null,
+          doctor_email: doctor?.email || null,
+          doctor_phone: doctor?.phone_number || null,
+        };
+      });
+      downloadCsvFile(`appointments_${getExportDateSuffix()}.csv`, enrichedRows);
+      toast({ title: 'Download started', description: `Exported ${enrichedRows.length} appointments.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export appointments.', variant: 'destructive' });
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const exportClerking = async () => {
+    setIsExporting('clerking');
+    try {
+      const [clerkingRows, doctorsRows, patientsRows] = await Promise.all([
+        fetchAllClerkingForExport(),
+        fetchAllDoctorsForExport(),
+        fetchAllPatientsForExport(),
+      ]);
+      const { doctorMap, patientMap } = getNameDirectory(doctorsRows, patientsRows);
+      const enrichedRows = clerkingRows.map((row) => {
+        const patientId = String(row.patient_id || '');
+        const doctorId = String(row.doctor_id || '');
+        const patient = patientMap.get(patientId);
+        const doctor = doctorMap.get(doctorId);
+        return {
+          ...row,
+          doctor_name: doctor?.full_name || null,
+          doctor_email: doctor?.email || null,
+          patient_name: patient?.full_name || null,
+          patient_email: patient?.email || null,
+        };
+      });
+      downloadCsvFile(`clerking_${getExportDateSuffix()}.csv`, enrichedRows);
+      toast({ title: 'Download started', description: `Exported ${enrichedRows.length} clerking records.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export clerking notes.', variant: 'destructive' });
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
+  const exportAllDatasets = async () => {
+    setIsExporting('all');
+    try {
+      const [doctorsRows, patientsRows, appointmentsRows, clerkingRows] = await Promise.all([
+        fetchAllDoctorsForExport(),
+        fetchAllPatientsForExport(),
+        fetchAllAppointmentsForExport(),
+        fetchAllClerkingForExport(),
+      ]);
+
+      const { doctorMap, patientMap } = getNameDirectory(doctorsRows, patientsRows);
+
+      const enrichedAppointments = appointmentsRows.map((row) => {
+        const patientId = String(row.patient_id || '');
+        const doctorId = String(row.doctor_id || '');
+        const patient = patientMap.get(patientId);
+        const doctor = doctorMap.get(doctorId);
+        return {
+          ...row,
+          status: normalizeAppointmentStatus(String(row.status || '')),
+          patient_name: row.patient_name || patient?.full_name || null,
+          patient_email: patient?.email || null,
+          patient_phone: patient?.phone_number || null,
+          doctor_name: row.specialist_name || doctor?.full_name || null,
+          doctor_email: doctor?.email || null,
+          doctor_phone: doctor?.phone_number || null,
+        };
+      });
+
+      const enrichedClerking = clerkingRows.map((row) => {
+        const patientId = String(row.patient_id || '');
+        const doctorId = String(row.doctor_id || '');
+        const patient = patientMap.get(patientId);
+        const doctor = doctorMap.get(doctorId);
+        return {
+          ...row,
+          doctor_name: doctor?.full_name || null,
+          doctor_email: doctor?.email || null,
+          patient_name: patient?.full_name || null,
+          patient_email: patient?.email || null,
+        };
+      });
+
+      const suffix = getExportDateSuffix();
+      downloadCsvFile(`doctors_${suffix}.csv`, doctorsRows);
+      downloadCsvFile(`patients_${suffix}.csv`, patientsRows);
+      downloadCsvFile(`appointments_${suffix}.csv`, enrichedAppointments);
+      downloadCsvFile(`clerking_${suffix}.csv`, enrichedClerking);
+
+      toast({
+        title: 'Downloads started',
+        description: `Doctors (${doctorsRows.length}), Patients (${patientsRows.length}), Appointments (${enrichedAppointments.length}), Clerkings (${enrichedClerking.length}).`,
+      });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export all datasets.', variant: 'destructive' });
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.id) return;
 
@@ -1446,6 +1746,41 @@ const CentralAdmin = () => {
               </Card>
             )}
 
+            {activeTab === 'overview' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Data Exports</CardTitle>
+                  <CardDescription>
+                    Download all records for appointments, doctors, patients, and clerkings.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={exportAllDatasets} disabled={isExporting !== null}>
+                      {isExporting === 'all' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Download All
+                    </Button>
+                    <Button variant="outline" onClick={exportAppointments} disabled={isExporting !== null}>
+                      {isExporting === 'appointments' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Appointments
+                    </Button>
+                    <Button variant="outline" onClick={exportDoctors} disabled={isExporting !== null}>
+                      {isExporting === 'doctors' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Doctors
+                    </Button>
+                    <Button variant="outline" onClick={exportPatients} disabled={isExporting !== null}>
+                      {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Patients
+                    </Button>
+                    <Button variant="outline" onClick={exportClerking} disabled={isExporting !== null}>
+                      {isExporting === 'clerking' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Clerkings
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Quick Stats */}
             {activeTab === 'overview' && (
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
@@ -1615,10 +1950,18 @@ const CentralAdmin = () => {
               <TabsContent value="appointments" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Appointment Notifications</CardTitle>
-                    <CardDescription>
-                      View new and all appointments with patient/doctor names and booked timing.
-                    </CardDescription>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <CardTitle>Appointment Notifications</CardTitle>
+                        <CardDescription>
+                          View new and all appointments with patient/doctor names and booked timing.
+                        </CardDescription>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={exportAppointments} disabled={isExporting !== null}>
+                        {isExporting === 'appointments' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                        Download CSV
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="space-y-6">
                     <div className="grid sm:grid-cols-3 gap-3">
@@ -2012,14 +2355,20 @@ const CentralAdmin = () => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="relative max-w-md">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search doctor, patient, diagnosis, treatment..."
-                        className="pl-10"
-                        value={clerkingSearch}
-                        onChange={(e) => setClerkingSearch(e.target.value)}
-                      />
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="relative w-full max-w-md">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search doctor, patient, diagnosis, treatment..."
+                          className="pl-10"
+                          value={clerkingSearch}
+                          onChange={(e) => setClerkingSearch(e.target.value)}
+                        />
+                      </div>
+                      <Button variant="outline" size="sm" onClick={exportClerking} disabled={isExporting !== null}>
+                        {isExporting === 'clerking' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                        Download CSV
+                      </Button>
                     </div>
 
                     <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
@@ -2083,8 +2432,9 @@ const CentralAdmin = () => {
                           onChange={(e) => setSearchQuery(e.target.value)}
                         />
                       </div>
-                      <Button variant="outline" size="icon">
-                        <Download className="w-4 h-4" />
+                      <Button variant="outline" size="sm" onClick={exportDoctors} disabled={isExporting !== null}>
+                        {isExporting === 'doctors' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                        Download CSV
                       </Button>
                     </div>
                   </CardHeader>
@@ -2152,9 +2502,15 @@ const CentralAdmin = () => {
               <TabsContent value="patients" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <div>
-                      <CardTitle>Patient Directory</CardTitle>
-                      <CardDescription>All registered patients and their appointment history</CardDescription>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <CardTitle>Patient Directory</CardTitle>
+                        <CardDescription>All registered patients and their appointment history</CardDescription>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={exportPatients} disabled={isExporting !== null}>
+                        {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                        Download CSV
+                      </Button>
                     </div>
                   </CardHeader>
                   <CardContent>
