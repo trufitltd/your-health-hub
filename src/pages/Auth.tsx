@@ -291,7 +291,7 @@ export default function AuthPage() {
     return parsed;
   };
   const selectedDoctorSpecialty = specialty === 'others' ? otherSpecialty : specialty;
-  const specialistRequiresRate = !!selectedDoctorSpecialty && !isGeneralPracticeSpecialty(selectedDoctorSpecialty);
+  const specialistRequiresRate = !!specialty && !isGeneralPracticeSpecialty(specialty);
   const generalPractitionerSelected = !!selectedDoctorSpecialty && isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const parsedConsultationRate = parseConsultationRate(consultationRate);
   const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
@@ -1533,6 +1533,38 @@ export default function AuthPage() {
                       </div>
                     )}
 
+                    {/* Specialist Rate (shown directly under specialty selection for non-GP specialties) */}
+                    {specialistRequiresRate && (
+                      <div className="space-y-2">
+                        <Label htmlFor="consultationRate">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')} *</Label>
+                        <Input
+                          id="consultationRate"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
+                          className="h-12"
+                          required
+                          value={consultationRate}
+                          onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
+                          {parsedConsultationRate && (
+                            <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
+                          )}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* General Practitioner Fixed Rate (shown directly under specialty selection for GPs) */}
+                    {generalPractitionerSelected && (
+                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+                        <p className="text-xs text-foreground">
+                          General Practitioner consultations are fixed at NGN 5,000.00 per session. You receive 50% (NGN 2,500.00) and MyE-Doctor receives 50% (NGN 2,500.00).
+                        </p>
+                      </div>
+                    )}
+
                     {/* Experience */}
                     <div>
                       <Label htmlFor="doctorExperience">{t('auth.fields.yearsOfExperience', 'Years of Experience')} *</Label>
@@ -1568,38 +1600,6 @@ export default function AuthPage() {
                         ))}
                       </div>
                     </div>
-
-                    {/* Specialist Rate */}
-                    {specialistRequiresRate && (
-                      <div className="space-y-2">
-                        <Label htmlFor="consultationRate">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')} *</Label>
-                        <Input
-                          id="consultationRate"
-                          type="text"
-                          inputMode="decimal"
-                          placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
-                          className="h-12"
-                          required
-                          value={consultationRate}
-                          onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
-                          {parsedConsultationRate && (
-                            <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
-                          )}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* General Practitioner Fixed Rate */}
-                    {generalPractitionerSelected && (
-                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-                        <p className="text-xs text-foreground">
-                          General Practitioner consultations are fixed at <strong>{formatCurrency(5000)}</strong> per session. You receive <strong>60%</strong> ({formatCurrency(3000)}) and MyE-Doctor receives <strong>40%</strong> ({formatCurrency(2000)}).
-                        </p>
-                      </div>
-                    )}
 
                     {/* Identification */}
                     <div className="space-y-4">

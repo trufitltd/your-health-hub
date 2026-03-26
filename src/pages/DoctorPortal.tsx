@@ -123,6 +123,11 @@ const normalizeBioLanguageCode = (value: string | null | undefined) => {
   return value.trim().toLowerCase().replace(/[^a-z]/g, '');
 };
 
+const isGeneralPracticeSpecialty = (value: string | null | undefined) => {
+  const normalized = (value || '').toLowerCase().replace(/_/g, ' ').trim();
+  return normalized === 'general practitioner' || normalized === 'general practice';
+};
+
 const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
   en: { key: 'auth.values.languages.english', fallback: 'English' },
   ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
@@ -683,6 +688,10 @@ const DoctorPortal = () => {
 
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
+  const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
+  const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
+  const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
+  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
   const approvedBannerStorageKey = useMemo(() => {
     if (!user?.id || !doctorRegistration) return null;
     const approvalMarker = String(
@@ -852,6 +861,7 @@ const DoctorPortal = () => {
     email: '',
     phone: '',
     specialty: '',
+    consultationRate: '',
     experience: '',
     bio: '',
     preferredLanguage: language as AppLanguage,
@@ -1164,6 +1174,10 @@ const DoctorPortal = () => {
         email: doctorRegistration.email || '',
         phone: doctorRegistration.phone_number || '',
         specialty: doctorRegistration.specialty || '',
+        consultationRate:
+          Number((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation) > 0
+            ? String((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation)
+            : '',
         experience: doctorRegistration.experience || '',
         bio: doctorRegistration.bio || '',
         preferredLanguage: isSupportedAppLanguage((doctorRegistration as { preferred_language?: unknown })?.preferred_language)
@@ -2616,11 +2630,24 @@ const DoctorPortal = () => {
         return;
       }
 
+      if (specialistProfileSelected && !hasValidConsultationRate) {
+        toast({
+          title: t('auth.toast.consultationRateRequiredTitle', 'Consultation rate required'),
+          description: t(
+            'auth.toast.consultationRateRequiredDescription',
+            'Please enter a valid consultation rate for specialist registration.'
+          ),
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const baseProfilePayload = {
         full_name: profileFormData.fullName.trim(),
         email: profileFormData.email.trim(),
         phone_number: profileFormData.phone.trim(),
         specialty: profileFormData.specialty.trim(),
+        ...(specialistProfileSelected ? { rate_per_consultation: parsedConsultationRate } : {}),
         experience: profileFormData.experience.trim(),
         bio: profileFormData.bio.trim(),
         ...legacyBioColumnPayload,
@@ -4318,6 +4345,27 @@ const DoctorPortal = () => {
                                 className="mt-1" 
                               />
                             </div>
+                            {specialistProfileSelected && (
+                              <div>
+                                <label className="text-sm font-medium">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')}</label>
+                                <Input
+                                  value={profileFormData.consultationRate}
+                                  onChange={(e) => setProfileFormData({
+                                    ...profileFormData,
+                                    consultationRate: e.target.value.replace(/[^0-9.,]/g, ''),
+                                  })}
+                                  placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
+                                  className="mt-1"
+                                  inputMode="decimal"
+                                />
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
+                                  {hasValidConsultationRate && (
+                                    <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
+                                  )}
+                                </p>
+                              </div>
+                            )}
                             <div>
                               <label className="text-sm font-medium">{t('common.experience', 'Experience')}</label>
                               <Input 
