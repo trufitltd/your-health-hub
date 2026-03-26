@@ -13,6 +13,11 @@ export class PaymentService {
     return value;
   }
 
+  private getPaystackSplitCode() {
+    const value = Deno.env.get('PAYSTACK_SPLIT_CODE');
+    return String(value || '').trim();
+  }
+
   async createPaymentIntent(input: {
     appointmentId: string;
     patientId: string;
@@ -55,11 +60,51 @@ export class PaymentService {
       throw new Error(`Failed to persist payment reference on appointment: ${appointmentError.message}`);
     }
 
+    const secretKey = this.getPaystackSecretKey();
+    const splitCode = this.getPaystackSplitCode();
+    const initializePayload: Record<string, unknown> = {
+      email: input.email,
+      amount: amountInKobo,
+      reference,
+      currency: 'NGN',
+      metadata,
+    };
+    if (splitCode) {
+      initializePayload.split_code = splitCode;
+    }
+
+    const initializeResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(initializePayload),
+    });
+
+    const initializeRaw = await initializeResponse.text();
+    if (!initializeResponse.ok) {
+      throw new Error(`Paystack initialize failed: ${initializeResponse.status} ${initializeRaw}`);
+    }
+
+    let initializeData: any = null;
+    try {
+      initializeData = JSON.parse(initializeRaw);
+    } catch {
+      throw new Error('Paystack initialize returned a non-JSON response');
+    }
+
+    const accessCode = String(initializeData?.data?.access_code || '').trim();
+    if (!accessCode) {
+      throw new Error('Paystack initialize did not return an access code');
+    }
+
     return {
       reference,
       amountInKobo,
       email: input.email,
       metadata,
+      accessCode,
     };
   }
 
