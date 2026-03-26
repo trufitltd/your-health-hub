@@ -65,6 +65,7 @@ export interface PaymentIntentResult {
   amountInKobo: number;
   email: string;
   metadata: Record<string, unknown>;
+  accessCode?: string;
 }
 
 export interface BookingInitiateResult {

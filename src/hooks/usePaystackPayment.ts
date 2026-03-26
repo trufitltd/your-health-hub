@@ -5,6 +5,7 @@ interface PaystackConfig {
   amount: number; // in kobo (multiply naira by 100)
   reference: string;
   publicKey: string;
+  accessCode?: string;
   metadata?: Record<string, unknown>;
   onSuccess: (response: unknown) => void;
   onClose: () => void;
@@ -72,6 +73,7 @@ export const usePaystackPayment = () => {
     const email = String(config.email || '').trim();
     const reference = String(config.reference || '').trim();
     const amountInKobo = Math.round(Number(config.amount || 0));
+    const accessCode = String(config.accessCode || '').trim();
 
     if (!key) throw new Error('Paystack public key is missing');
     if (!email) throw new Error('Payer email is missing for payment');
@@ -87,10 +89,6 @@ export const usePaystackPayment = () => {
 
     const payload: Record<string, unknown> = {
       key,
-      email,
-      amount: amountInKobo,
-      ref: reference,
-      reference,
       currency: 'NGN',
       callback: (response: unknown) => {
         config.onSuccess(response);
@@ -99,6 +97,15 @@ export const usePaystackPayment = () => {
         config.onClose();
       },
     };
+
+    if (accessCode) {
+      payload.access_code = accessCode;
+    } else {
+      payload.email = email;
+      payload.amount = amountInKobo;
+      payload.ref = reference;
+      payload.reference = reference;
+    }
 
     const metadata = sanitizeMetadata(config.metadata);
     if (metadata) {
