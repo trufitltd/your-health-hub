@@ -139,6 +139,7 @@ export interface BookingInitiateResponse {
     amountInKobo: number;
     email: string;
     metadata: Record<string, unknown>;
+    accessCode?: string;
   } | null;
   paymentMethod: 'paystack' | 'wallet' | 'hybrid';
   paidWithWallet: boolean;

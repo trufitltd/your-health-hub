@@ -2103,6 +2103,7 @@ const PatientPortal = () => {
             email: paymentInit.email || user?.email || '',
             amount: paymentInit.amountInKobo,
             reference: paymentInit.reference,
+            accessCode: paymentInit.accessCode,
             publicKey: paystackPublicKey,
             metadata: paymentInit.metadata,
             onSuccess: async (response: any) => {
@@ -3269,6 +3270,7 @@ const PatientPortal = () => {
         email: paymentInit?.email || user.email || '',
         amount: paymentInit?.amountInKobo,
         reference: paymentInit?.reference,
+        accessCode: paymentInit?.accessCode,
         publicKey: paystackPublicKey,
         metadata: paymentInit?.metadata,
         onSuccess: async (response: any) => {
