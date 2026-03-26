@@ -99,6 +99,20 @@ export class PaymentService {
       throw new Error('Paystack initialize did not return an access code');
     }
 
+    const { error: accessCodePersistError } = await this.supabase
+      .from('payments')
+      .update({
+        metadata: {
+          ...metadata,
+          paystack_access_code: accessCode,
+        },
+      })
+      .or(`provider_reference.eq.${reference},payment_reference.eq.${reference}`);
+
+    if (accessCodePersistError) {
+      console.warn('Failed to persist Paystack access code on payment metadata:', accessCodePersistError.message);
+    }
+
     return {
       reference,
       amountInKobo,

@@ -97,12 +97,14 @@ serve(async (req) => {
 
     if (existingPendingPaystack && existingReference) {
       const existingAmountInKobo = Math.round(Number(existingPendingPaystack.amount || 0) * 100);
+      const existingAccessCode = String((existingPendingPaystack.metadata as Record<string, unknown> | null)?.paystack_access_code || '').trim();
       return new Response(
         JSON.stringify({
           email: profile?.email || user.email || '',
           amountInKobo: existingAmountInKobo,
           reference: existingReference,
           metadata: existingPendingPaystack.metadata || {},
+          accessCode: existingAccessCode || undefined,
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -154,6 +156,7 @@ serve(async (req) => {
         amountInKobo: paymentIntent.amountInKobo,
         reference: paymentIntent.reference,
         metadata: paymentIntent.metadata,
+        accessCode: paymentIntent.accessCode,
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
