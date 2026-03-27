@@ -849,6 +849,7 @@ const DoctorPortal = () => {
     refetchInterval: 30000,
   });
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isUploadingLicense, setIsUploadingLicense] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
@@ -2525,6 +2526,57 @@ const DoctorPortal = () => {
     }
   };
 
+  const handleMedicalLicenseUpload = async (file: File) => {
+    if (!user) return;
+    setIsUploadingLicense(true);
+
+    try {
+      const filePath = `${user.id}/licenses/medical-license`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('doctor-files')
+        .upload(filePath, file, { upsert: true, contentType: file.type || 'application/octet-stream' });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('doctor-files')
+        .getPublicUrl(filePath);
+
+      const cacheBustedUrl = `${urlData.publicUrl}?v=${Date.now()}`;
+
+      const { error: updateError } = await supabase
+        .from('doctor_registrations')
+        .update({
+          medical_license_url: cacheBustedUrl,
+          medical_license_reupload_required: false,
+          medical_license_reuploaded_at: new Date().toISOString(),
+          medical_license_reupload_seen_by_admin: false,
+          verification_status: 'pending',
+          verified_at: null,
+        })
+        .eq('user_id', user.id);
+
+      if (updateError) throw updateError;
+
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration', user.id] });
+      toast({
+        title: 'Medical license uploaded',
+        description: 'Your updated medical license has been submitted for admin review.',
+      });
+    } catch (error) {
+      console.error('Error uploading medical license:', error);
+      toast({
+        title: 'Upload failed',
+        description: 'Failed to upload medical license. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUploadingLicense(false);
+    }
+  };
+
   const handleAddBioTranslation = () => {
     const normalizedCode = normalizeBioLanguageCode(newBioLanguageCode);
     if (
@@ -3149,6 +3201,30 @@ const DoctorPortal = () => {
                     <p className="text-sm text-muted-foreground">
                       {t('doctorPortal.verification.pendingBody', "Thank you for joining our platform! Your doctor account is currently under review by our medical director. We're excited to have you on board and will notify you once your credentials have been verified and your account is activated. This process typically takes 24-48 hours.")}
                     </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {!!(doctorRegistration as any)?.medical_license_reupload_required && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border-2 border-warning/50 bg-warning/10 p-4 md:p-6"
+              >
+                <div className="flex items-start gap-3">
+                  <FileText className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-warning mb-1">Medical License Re-upload Required</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Admin requested a clearer copy of your medical license. Please upload a replacement document in Settings.
+                    </p>
+                    {!!(doctorRegistration as any)?.medical_license_reupload_reason && (
+                      <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
+                        <span className="font-medium text-foreground">Admin note:</span>{' '}
+                        {(doctorRegistration as any).medical_license_reupload_reason}
+                      </p>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -4307,6 +4383,40 @@ const DoctorPortal = () => {
                                   {isUploadingPhoto
                                     ? t('doctorPortal.actions.uploading', 'Uploading...')
                                     : t('doctorPortal.actions.changePhoto', 'Change Photo')}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-border p-4">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                              <div>
+                                <p className="font-medium">Medical License Document</p>
+                                <p className="text-sm text-muted-foreground">
+                                  Upload a clear copy of your license. New upload replaces the previous file and sends it for review.
+                                </p>
+                                {!!(doctorRegistration as any)?.medical_license_reupload_required && (
+                                  <p className="text-xs text-warning mt-1">Admin has requested a re-upload.</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="file"
+                                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) handleMedicalLicenseUpload(file);
+                                  }}
+                                  className="hidden"
+                                  id="doctor-license-upload"
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={isUploadingLicense}
+                                  onClick={() => document.getElementById('doctor-license-upload')?.click()}
+                                >
+                                  {isUploadingLicense ? 'Uploading...' : 'Upload New License'}
                                 </Button>
                               </div>
                             </div>
