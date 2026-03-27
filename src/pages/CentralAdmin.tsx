@@ -61,6 +61,11 @@ interface Doctor {
   license_number: string;
   license_file_url: string;
   medical_license_url?: string | null;
+  medical_license_reupload_required?: boolean | null;
+  medical_license_reupload_reason?: string | null;
+  medical_license_reupload_requested_at?: string | null;
+  medical_license_reuploaded_at?: string | null;
+  medical_license_reupload_seen_by_admin?: boolean | null;
   verification_date: string;
   created_at: string;
   total_consultations: number;
@@ -301,6 +306,18 @@ const CentralAdmin = () => {
     enabled: !!user && isAdmin,
     refetchInterval: 10000, // Refetch every 10 seconds
   });
+
+  const hasUnreadLicenseReupload = (doctor: Doctor) =>
+    !!doctor.medical_license_reuploaded_at && !doctor.medical_license_reupload_seen_by_admin;
+
+  useEffect(() => {
+    if (!showVerificationDialog || !selectedDoctor) return;
+    const latest = doctors.find((doctor) => doctor.user_id === selectedDoctor.user_id);
+    if (!latest) return;
+    if (latest !== selectedDoctor) {
+      setSelectedDoctor(latest);
+    }
+  }, [showVerificationDialog, selectedDoctor, doctors]);
 
   // Fetch all patients
   const { data: patients = [] } = useQuery({
@@ -1027,6 +1044,20 @@ const CentralAdmin = () => {
     return directUrl.length > 0 || fallbackUrl.length > 0;
   };
 
+  const getMedicalLicenseUrl = (doctor: Doctor | null | undefined) => {
+    if (!doctor) return '';
+    const directUrl = String(doctor.medical_license_url || '').trim();
+    const fallbackUrl = String(doctor.license_file_url || '').trim();
+    return directUrl || fallbackUrl;
+  };
+
+  const withCacheBust = (url: string, seed?: string | null) => {
+    if (!url) return '';
+    const separator = url.includes('?') ? '&' : '?';
+    const token = seed ? encodeURIComponent(seed) : Date.now().toString();
+    return `${url}${separator}cb=${token}`;
+  };
+
   const getDoctorReviewStatus = (doctor: Doctor): 'pending' | 'approved' | 'rejected' | 'incomplete' => {
     if (!hasMedicalLicense(doctor)) return 'incomplete';
     return (doctor.verification_status || 'pending') as 'pending' | 'approved' | 'rejected' | 'incomplete';
@@ -1194,6 +1225,59 @@ const CentralAdmin = () => {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleRequestLicenseReupload = async (doctor: Doctor) => {
+    setIsProcessing(true);
+    try {
+      const notes = verificationNotes[doctor.id] || '';
+      const { error } = await supabase.rpc('admin_request_doctor_license_reupload', {
+        p_user_id: doctor.user_id,
+        p_reupload_reason: notes || null,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: 'Re-upload requested',
+        description: `Dr. ${doctor.full_name} has been asked to upload a clearer medical license.`,
+      });
+
+      setShowVerificationDialog(false);
+      setSelectedDoctor(null);
+      setVerificationNotes({});
+      queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration', doctor.user_id] });
+      setTimeout(() => {
+        refetch();
+      }, 400);
+    } catch (error) {
+      console.error('Error requesting medical license re-upload:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to request re-upload. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const markLicenseReuploadAsSeen = async (doctor: Doctor) => {
+    if (!hasUnreadLicenseReupload(doctor)) return;
+    const { error } = await supabase.rpc('admin_mark_license_reupload_seen', {
+      p_user_id: doctor.user_id,
+    });
+
+    if (error) {
+      console.error('Error marking re-upload notification as seen:', error);
+      return;
+    }
+
+    setSelectedDoctor((prev) => (prev && prev.user_id === doctor.user_id
+      ? { ...prev, medical_license_reupload_seen_by_admin: true }
+      : prev));
+    queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
   };
 
   const getStatusBadge = (status: string) => {
@@ -2486,6 +2570,11 @@ const CentralAdmin = () => {
                                 <p className="font-semibold">Dr. {doctor.full_name}</p>
                                 <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 <p className="text-xs text-muted-foreground">{doctor.email}</p>
+                                {hasUnreadLicenseReupload(doctor) && (
+                                  <Badge className="mt-1 bg-destructive text-destructive-foreground">
+                                    New License Re-upload
+                                  </Badge>
+                                )}
                               </div>
                             </div>
                             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
@@ -2499,6 +2588,7 @@ const CentralAdmin = () => {
                                 onClick={() => {
                                   setSelectedDoctor(doctor);
                                   setShowVerificationDialog(true);
+                                  void markLicenseReuploadAsSeen(doctor);
                                 }}
                               >
                                 <Eye className="w-4 h-4 mr-2" />
@@ -2594,6 +2684,11 @@ const CentralAdmin = () => {
                                   <div>
                                     <p className="font-semibold">Dr. {doctor.full_name}</p>
                                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
+                                    {hasUnreadLicenseReupload(doctor) && (
+                                      <Badge className="mt-1 bg-destructive text-destructive-foreground">
+                                        New License Re-upload
+                                      </Badge>
+                                    )}
                                   </div>
                                 </div>
                                 {getStatusBadge(getDoctorReviewStatus(doctor))}
@@ -2638,6 +2733,7 @@ const CentralAdmin = () => {
                                   onClick={() => {
                                     setSelectedDoctor(doctor);
                                     setShowVerificationDialog(true);
+                                    void markLicenseReuploadAsSeen(doctor);
                                   }}
                                 >
                                   <FileText className="w-4 h-4 mr-2" />
@@ -2930,6 +3026,9 @@ const CentralAdmin = () => {
                     <p className="font-semibold text-xl">Dr. {selectedDoctor.full_name}</p>
                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
                     {getStatusBadge(getDoctorReviewStatus(selectedDoctor))}
+                    {hasUnreadLicenseReupload(selectedDoctor) && (
+                      <Badge className="mt-2 bg-destructive text-destructive-foreground">New License Re-upload</Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3023,7 +3122,7 @@ const CentralAdmin = () => {
               </div>
 
               {/* Medical License Document */}
-              {(selectedDoctor as any).medical_license_url ? (
+              {getMedicalLicenseUrl(selectedDoctor) ? (
                 <div>
                   <h3 className="font-semibold mb-3">Medical License / Registration Certificate</h3>
                   <div className="p-4 rounded-lg border border-border bg-muted/30">
@@ -3035,24 +3134,28 @@ const CentralAdmin = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => window.open((selectedDoctor as any).medical_license_url, '_blank')}
+                        onClick={() => window.open(getMedicalLicenseUrl(selectedDoctor), '_blank')}
                       >
                         <Eye className="w-4 h-4 mr-2" />
                         View Document
                       </Button>
                     </div>
-                    {(selectedDoctor as any).medical_license_url.match(/\.(jpg|jpeg|png|gif)$/i) ? (
-                      <img 
-                        src={(selectedDoctor as any).medical_license_url} 
-                        alt="Medical License"
-                        className="w-full max-h-96 object-contain rounded-lg border border-border"
-                      />
-                    ) : (
-                      <div className="text-center py-8 text-muted-foreground">
-                        <FileText className="w-12 h-12 mx-auto mb-2" />
-                        <p className="text-sm">Click "View Document" to open the license file</p>
-                      </div>
-                    )}
+                    <iframe
+                      title="Medical License Preview"
+                      src={withCacheBust(
+                        getMedicalLicenseUrl(selectedDoctor),
+                        String(
+                          (selectedDoctor as any).medical_license_reuploaded_at
+                          || (selectedDoctor as any).updated_at
+                          || selectedDoctor.created_at
+                          || ''
+                        ),
+                      )}
+                      className="w-full h-96 rounded-lg border border-border bg-background"
+                    />
+                    <p className="text-xs text-muted-foreground mt-2">
+                      If preview does not load in-browser, use "View Document".
+                    </p>
                   </div>
                 </div>
               ) : (
@@ -3061,6 +3164,21 @@ const CentralAdmin = () => {
                   <p className="text-xs text-muted-foreground mt-1">
                     Medical license / registration certificate has not been uploaded.
                   </p>
+                </div>
+              )}
+
+              {(selectedDoctor as any).medical_license_reupload_required && (
+                <div className="p-4 rounded-lg border border-warning/40 bg-warning/10">
+                  <p className="text-sm font-medium text-warning">Re-upload Requested</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    The doctor has been asked to upload a clearer medical license document.
+                  </p>
+                  {(selectedDoctor as any).medical_license_reupload_reason && (
+                    <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap">
+                      <span className="font-medium text-foreground">Reason:</span>{' '}
+                      {(selectedDoctor as any).medical_license_reupload_reason}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -3087,6 +3205,15 @@ const CentralAdmin = () => {
                     >
                       <CheckCircle className="w-4 h-4 mr-2" />
                       Approve & Activate
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={() => handleRequestLicenseReupload(selectedDoctor)}
+                      disabled={isProcessing}
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      Request Re-upload
                     </Button>
                     <Button
                       variant="outline"
@@ -3121,6 +3248,14 @@ const CentralAdmin = () => {
                       </p>
                     </div>
                   )}
+                  <Button
+                    variant="outline"
+                    onClick={() => handleRequestLicenseReupload(selectedDoctor)}
+                    disabled={isProcessing}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Request New License Upload
+                  </Button>
                 </div>
               )}
             </div>
