@@ -50,16 +50,6 @@ export default function CooLogin() {
         return;
       }
 
-      const existingRole = String(data.user?.user_metadata?.role || '').toLowerCase();
-      if (existingRole !== 'coo') {
-        const { error: roleError } = await supabase.auth.updateUser({
-          data: { role: 'coo' },
-        });
-        if (roleError) {
-          console.warn('Failed to persist COO role in metadata:', roleError);
-        }
-      }
-
       toast({ title: 'Success', description: 'Welcome to COO Portal.' });
       navigate('/coo');
     } catch (err: any) {
