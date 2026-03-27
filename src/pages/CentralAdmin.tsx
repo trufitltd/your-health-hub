@@ -60,6 +60,7 @@ interface Doctor {
   profile_picture_url: string;
   license_number: string;
   license_file_url: string;
+  medical_license_url?: string | null;
   verification_date: string;
   created_at: string;
   total_consultations: number;
@@ -121,7 +122,7 @@ const CentralAdmin = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'incomplete'>('all');
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
@@ -1020,19 +1021,38 @@ const CentralAdmin = () => {
     }
   };
 
+  const hasMedicalLicense = (doctor: Doctor) => {
+    const directUrl = String(doctor.medical_license_url || '').trim();
+    const fallbackUrl = String(doctor.license_file_url || '').trim();
+    return directUrl.length > 0 || fallbackUrl.length > 0;
+  };
+
+  const getDoctorReviewStatus = (doctor: Doctor): 'pending' | 'approved' | 'rejected' | 'incomplete' => {
+    if (!hasMedicalLicense(doctor)) return 'incomplete';
+    return (doctor.verification_status || 'pending') as 'pending' | 'approved' | 'rejected' | 'incomplete';
+  };
+
   // Filter doctors
   const filteredDoctors = doctors.filter(doctor => {
     const matchesSearch = doctor.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           doctor.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           doctor.specialty?.toLowerCase().includes(searchQuery.toLowerCase());
     
-    const matchesStatus = statusFilter === 'all' || doctor.verification_status === statusFilter;
+    const matchesStatus = statusFilter === 'all' || getDoctorReviewStatus(doctor) === statusFilter;
     
     return matchesSearch && matchesStatus;
   });
 
   const handleApproveDoctor = async (doctor: Doctor) => {
     if (!selectedDoctor) return;
+    if (!hasMedicalLicense(doctor)) {
+      toast({
+        title: 'Incomplete registration',
+        description: 'Medical license is missing. Ask the doctor to upload it before approval.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setIsProcessing(true);
     try {
       console.log('Starting doctor approval for:', doctor.user_id);
@@ -1182,6 +1202,8 @@ const CentralAdmin = () => {
         return <Badge className="bg-success/10 text-success border-success/20 gap-1"><CheckCircle className="w-3 h-3" /> Approved</Badge>;
       case 'pending':
         return <Badge className="bg-warning/10 text-warning border-warning/20 gap-1"><Clock className="w-3 h-3" /> Pending</Badge>;
+      case 'incomplete':
+        return <Badge className="bg-destructive/10 text-destructive border-destructive/20 gap-1"><AlertCircle className="w-3 h-3" /> Incomplete Registration</Badge>;
       case 'rejected':
         return <Badge className="bg-destructive/10 text-destructive border-destructive/20 gap-1"><XCircle className="w-3 h-3" /> Rejected</Badge>;
       default:
@@ -2469,7 +2491,7 @@ const CentralAdmin = () => {
                             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
                               <div className="text-left sm:text-right mb-2 sm:mb-0">
                                 <p className="text-xs text-muted-foreground">Status</p>
-                                {getStatusBadge(doctor.verification_status || 'pending')}
+                                {getStatusBadge(getDoctorReviewStatus(doctor))}
                               </div>
                               <Button 
                                 size="sm" 
@@ -2545,14 +2567,20 @@ const CentralAdmin = () => {
                         <div className="text-center py-8">
                           <p className="text-muted-foreground">Loading...</p>
                         </div>
-                      ) : filteredDoctors.filter(d => d.verification_status === 'pending').length === 0 ? (
+                      ) : filteredDoctors.filter((doctor) => {
+                        const status = getDoctorReviewStatus(doctor);
+                        return status === 'pending' || status === 'incomplete';
+                      }).length === 0 ? (
                         <div className="text-center py-8">
                           <CheckCircle className="w-12 h-12 text-success mx-auto mb-4" />
                           <p className="text-muted-foreground">All pending verifications have been processed</p>
                         </div>
                       ) : (
                         filteredDoctors
-                          .filter(d => d.verification_status === 'pending')
+                          .filter((doctor) => {
+                            const status = getDoctorReviewStatus(doctor);
+                            return status === 'pending' || status === 'incomplete';
+                          })
                           .map((doctor) => (
                             <div key={doctor.id} className="p-4 rounded-xl border border-warning/30 bg-warning/5">
                               <div className="flex items-start justify-between mb-3">
@@ -2568,7 +2596,7 @@ const CentralAdmin = () => {
                                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
                                   </div>
                                 </div>
-                                <Badge className="bg-warning/10 text-warning border-warning/20">Pending Review</Badge>
+                                {getStatusBadge(getDoctorReviewStatus(doctor))}
                               </div>
                               <div className="space-y-2 my-3">
                                 <p className="text-sm">
@@ -2586,7 +2614,7 @@ const CentralAdmin = () => {
                                     setSelectedDoctor(doctor);
                                     await handleApproveDoctor(doctor);
                                   }}
-                                  disabled={isProcessing}
+                                  disabled={isProcessing || !hasMedicalLicense(doctor)}
                                 >
                                   <CheckCircle className="w-4 h-4 mr-2" />
                                   Approve
@@ -2653,7 +2681,7 @@ const CentralAdmin = () => {
                                   <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 </div>
                               </div>
-                              {getStatusBadge(doctor.verification_status || 'pending')}
+                              {getStatusBadge(getDoctorReviewStatus(doctor))}
                             </div>
                             <div className="grid grid-cols-3 gap-3 text-sm">
                               <div className="p-2 rounded-lg bg-muted/50">
@@ -2901,7 +2929,7 @@ const CentralAdmin = () => {
                   <div>
                     <p className="font-semibold text-xl">Dr. {selectedDoctor.full_name}</p>
                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
-                    {getStatusBadge(selectedDoctor.verification_status || 'pending')}
+                    {getStatusBadge(getDoctorReviewStatus(selectedDoctor))}
                   </div>
                 </div>
               </div>
@@ -2995,7 +3023,7 @@ const CentralAdmin = () => {
               </div>
 
               {/* Medical License Document */}
-              {(selectedDoctor as any).medical_license_url && (
+              {(selectedDoctor as any).medical_license_url ? (
                 <div>
                   <h3 className="font-semibold mb-3">Medical License / Registration Certificate</h3>
                   <div className="p-4 rounded-lg border border-border bg-muted/30">
@@ -3027,6 +3055,13 @@ const CentralAdmin = () => {
                     )}
                   </div>
                 </div>
+              ) : (
+                <div className="p-4 rounded-lg border border-destructive/30 bg-destructive/5">
+                  <p className="text-sm font-medium text-destructive">Incomplete Registration</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Medical license / registration certificate has not been uploaded.
+                  </p>
+                </div>
               )}
 
               {selectedDoctor.verification_status === 'pending' && (
@@ -3048,7 +3083,7 @@ const CentralAdmin = () => {
                     <Button
                       className="flex-1 bg-success hover:bg-success/90"
                       onClick={() => handleApproveDoctor(selectedDoctor)}
-                      disabled={isProcessing}
+                      disabled={isProcessing || !hasMedicalLicense(selectedDoctor)}
                     >
                       <CheckCircle className="w-4 h-4 mr-2" />
                       Approve & Activate
