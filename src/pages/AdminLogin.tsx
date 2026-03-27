@@ -47,12 +47,23 @@ export default function AdminLogin() {
       }
 
       const existingRole = String(data.user?.user_metadata?.role || '').toLowerCase();
-      if (existingRole !== 'admin') {
+      const existingRoles = Array.isArray(data.user?.user_metadata?.roles)
+        ? (data.user?.user_metadata?.roles as unknown[]).map((value) => String(value).toLowerCase())
+        : [];
+      const requiredRoles = ['admin', 'doctor', 'patient'];
+      const needsRoleSync =
+        existingRole !== 'admin'
+        || requiredRoles.some((value) => !existingRoles.includes(value));
+
+      if (needsRoleSync) {
         const { error: roleError } = await supabase.auth.updateUser({
-          data: { role: 'admin' },
+          data: {
+            role: 'admin',
+            roles: requiredRoles,
+          },
         });
         if (roleError) {
-          console.warn('Failed to persist admin role in metadata:', roleError);
+          console.warn('Failed to persist admin role bundle in metadata:', roleError);
         }
       }
 

@@ -688,10 +688,6 @@ const DoctorPortal = () => {
 
   // Fetch doctor registration data
   const { data: doctorRegistration } = useDoctorRegistration();
-  const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
-  const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
-  const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
-  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
   const approvedBannerStorageKey = useMemo(() => {
     if (!user?.id || !doctorRegistration) return null;
     const approvalMarker = String(
@@ -866,6 +862,10 @@ const DoctorPortal = () => {
     bio: '',
     preferredLanguage: language as AppLanguage,
   });
+  const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
+  const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
+  const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
+  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
