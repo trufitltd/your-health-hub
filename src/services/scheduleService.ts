@@ -219,29 +219,39 @@ export const getFormattedSchedule = async (doctorId: string) => {
  */
 export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSchedule[]> => {
   try {
-    const defaultSchedules = DEFAULT_SCHEDULE_DAYS.map((dayOfWeek) => ({
+    const { data: existingRows, error: existingError } = await supabase
+      .from('doctor_schedules')
+      .select('day_of_week,start_time,end_time')
+      .eq('doctor_id', doctorId);
+
+    if (existingError) {
+      console.warn('Failed to check existing schedules before default seed:', existingError);
+    }
+
+    const existingKeySet = new Set(
+      (existingRows || []).map((row) => `${row.day_of_week}:${row.start_time}:${row.end_time}`)
+    );
+
+    const scheduleData = DEFAULT_SCHEDULE_DAYS
+      .filter((dayOfWeek) => !existingKeySet.has(`${dayOfWeek}:${DEFAULT_SCHEDULE_START}:00:${DEFAULT_SCHEDULE_END}:00`)
+        && !existingKeySet.has(`${dayOfWeek}:${DEFAULT_SCHEDULE_START}:${DEFAULT_SCHEDULE_END}`))
+      .map((dayOfWeek) => ({
+      doctor_id: doctorId,
       day_of_week: dayOfWeek,
       start_time: DEFAULT_SCHEDULE_START,
       end_time: DEFAULT_SCHEDULE_END,
-    }));
-
-    // Direct insert without checking for existing schedules
-    const scheduleData = defaultSchedules.map(schedule => ({
-      doctor_id: doctorId,
-      day_of_week: schedule.day_of_week,
-      start_time: schedule.start_time,
-      end_time: schedule.end_time,
       slot_duration_minutes: 15,
       max_patients_per_slot: 1,
       is_available: true,
-    }));
+      }));
+
+    if (scheduleData.length === 0) {
+      return [];
+    }
 
     const { data, error } = await supabase
       .from('doctor_schedules')
-      .upsert(scheduleData, {
-        onConflict: 'doctor_id,day_of_week,start_time,end_time',
-        ignoreDuplicates: true,
-      })
+      .insert(scheduleData)
       .select();
 
     if (error) {
