@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, User, LogOut, LayoutDashboard } from 'lucide-react';
+import { Menu, X, User, LogOut, LayoutDashboard, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -12,6 +12,8 @@ import { LanguageSelector } from '@/components/LanguageSelector';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 export function Header() {
+  const complianceNotice =
+    'MyE-Doctor is fully In Compliant with Medical and Dental Council of Nigeria (MDCN) professional standards and Nigeria Data Protection Commission (NDPC) data protection regulations';
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
@@ -156,6 +158,12 @@ export function Header() {
             )}
           </button>
         </nav>
+        <div className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/95 px-3 py-2">
+          <p className="flex items-start justify-center gap-2 text-center text-[11px] leading-relaxed text-emerald-900 md:text-xs">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{complianceNotice}</span>
+          </p>
+        </div>
       </div>
 
       {/* Mobile Menu */}
