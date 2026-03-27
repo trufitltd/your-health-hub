@@ -1,13 +1,15 @@
 import { Link } from 'react-router-dom';
-import { Mail, Phone, Facebook, Twitter, Instagram, Linkedin } from 'lucide-react';
+import { Mail, Phone, Facebook, Twitter, Instagram, Linkedin, Youtube, Music2 } from 'lucide-react';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { useLanguage } from '@/contexts/LanguageContext';
 
 const socialLinks = [
-  { icon: Facebook, href: '#', label: 'Facebook' },
-  { icon: Twitter, href: '#', label: 'Twitter' },
-  { icon: Instagram, href: '#', label: 'Instagram' },
-  { icon: Linkedin, href: '#', label: 'LinkedIn' },
+  { icon: Linkedin, href: 'https://www.linkedin.com/company/my-e-doctor/', label: 'LinkedIn' },
+  { icon: Instagram, href: 'https://www.instagram.com/myedoctorhealth/', label: 'Instagram' },
+  { icon: Twitter, href: 'https://x.com/myedoctorhealth', label: 'X (Twitter)' },
+  { icon: Facebook, href: 'https://web.facebook.com/MyEDoctorHealth', label: 'Facebook' },
+  { icon: Youtube, href: 'https://youtu.be/o5Hc-WCacUk?feature=shared', label: 'YouTube' },
+  { icon: Music2, href: 'https://www.tiktok.com/@myedoctor', label: 'TikTok' },
 ];
 
 export function Footer() {
@@ -125,6 +127,8 @@ export function Footer() {
               <a
                 key={social.label}
                 href={social.href}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="w-10 h-10 rounded-full bg-primary-foreground/10 flex items-center justify-center hover:bg-primary hover:text-primary-foreground transition-all"
                 aria-label={social.label}
               >
