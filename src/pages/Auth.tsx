@@ -949,20 +949,35 @@ export default function AuthPage() {
 
         console.log('Login successful, user:', data.user?.id);
 
-        // Determine user role by checking if they have a doctor registration
-        let userRole: UserRole = getMetadataRole(data.user) || 'patient';
+        // Determine user role from auth metadata only (strict single-role login).
+        const metadataRole = getMetadataRole(data.user);
+        if (!metadataRole) {
+          await supabase.auth.signOut();
+          toast({
+            title: 'Sign in blocked',
+            description: 'Your account role is missing. Please contact support.',
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        if (metadataRole !== role) {
+          await supabase.auth.signOut();
+          toast({
+            title: 'Wrong portal selected',
+            description: metadataRole === 'doctor'
+              ? 'This account is a doctor account. Select Doctor and sign in again.'
+              : 'This account is a patient account. Select Patient and sign in again.',
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const userRole: UserRole = metadataRole;
         if (data.user?.id) {
-          const { data: doctorReg } = await supabase
-            .from('doctor_registrations')
-            .select('id')
-            .eq('user_id', data.user.id)
-            .maybeSingle();
-          
-          if (doctorReg) {
-            userRole = 'doctor';
+          if (userRole === 'doctor') {
             // Backfill default availability for existing doctors who have no schedules yet.
             await createDefaultSchedule(data.user.id);
-          } else if (userRole === 'doctor') {
             // Metadata says doctor but row is missing: recreate fallback so admin sees verification request.
             await ensureDoctorRegistrationFallback(data.user);
           } else {
