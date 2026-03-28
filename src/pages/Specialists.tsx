@@ -20,6 +20,9 @@ interface DoctorCard {
   registration?: Record<string, unknown> | null;
 }
 
+const isExcludedDoctorName = (value: string | null | undefined) =>
+  String(value || '').trim().toLowerCase() === 'test doctor';
+
 interface DoctorScheduleRow {
   doctor_id: string;
   day_of_week: number;
@@ -443,10 +446,12 @@ export default function SpecialistsPage() {
       const registrationMap = new Map(
         (registrations || [])
           .filter((registration: Record<string, unknown>) => String(registration.medical_license_url || '').trim().length > 0)
+          .filter((registration: Record<string, unknown>) => !isExcludedDoctorName(String(registration.full_name || '')))
           .map((registration: Record<string, unknown>) => [registration.user_id as string, registration])
       );
 
       return (data || [])
+        .filter((doctor) => !isExcludedDoctorName(String(doctor.name || '')))
         .filter((doctor) => registrationMap.has(doctor.id))
         .map(d => ({
           ...d,
