@@ -869,6 +869,7 @@ const DoctorPortal = () => {
   const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
   const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
   const currentRegisteredRate = Number((doctorRegistration as { rate_per_consultation?: number | null } | null)?.rate_per_consultation || 0);
+  const showMissingSpecialistRateBanner = specialistProfileSelected && currentRegisteredRate <= 0;
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
@@ -3243,20 +3244,31 @@ const DoctorPortal = () => {
                 animate={{ opacity: 1, y: 0 }}
                 className="rounded-lg border-2 border-warning/50 bg-warning/10 p-4 md:p-6"
               >
-                <div className="flex items-start gap-3">
-                  <FileText className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-warning mb-1">Medical License Re-upload Required</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Admin requested a clearer copy of your medical license. Please upload a replacement document in Settings.
-                    </p>
-                    {!!(doctorRegistration as any)?.medical_license_reupload_reason && (
-                      <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
-                        <span className="font-medium text-foreground">Admin note:</span>{' '}
-                        {(doctorRegistration as any).medical_license_reupload_reason}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <FileText className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-warning mb-1">Medical License Re-upload Required</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Admin requested a clearer copy of your medical license. Please upload a replacement document in Settings.
                       </p>
-                    )}
+                      {!!(doctorRegistration as any)?.medical_license_reupload_reason && (
+                        <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
+                          <span className="font-medium text-foreground">Admin note:</span>{' '}
+                          {(doctorRegistration as any).medical_license_reupload_reason}
+                        </p>
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-warning/40 text-warning hover:bg-warning/20"
+                    onClick={() => setActiveTab('settings')}
+                  >
+                    Go to Settings
+                  </Button>
                 </div>
               </motion.div>
             )}
@@ -3304,6 +3316,35 @@ const DoctorPortal = () => {
                       {t('doctorPortal.verification.rejectedBody', 'Unfortunately, your doctor account application was not approved. Please contact our support team for more information or to resubmit your credentials.')}
                     </p>
                   </div>
+                </div>
+              </motion.div>
+            )}
+
+            {showMissingSpecialistRateBanner && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border-2 border-destructive/40 bg-destructive/5 p-4 md:p-6"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-6 h-6 text-destructive flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h3 className="font-semibold text-destructive mb-1">Specialist Rate Not Set</h3>
+                      <p className="text-sm text-muted-foreground">
+                        You have not set your specialist consultation rate. Go to Settings and set your rate to avoid booking issues.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10"
+                    onClick={() => setActiveTab('settings')}
+                  >
+                    Go to Settings
+                  </Button>
                 </div>
               </motion.div>
             )}
