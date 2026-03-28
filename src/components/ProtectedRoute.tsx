@@ -107,7 +107,7 @@ export function ProtectedRoute({
   }
 
   if (!user) {
-    return <Navigate to="/auth" state={{ from: location }} replace />;
+    return <Navigate to="/auth?mode=register" state={{ from: location }} replace />;
   }
 
   if (requiredRole) {
@@ -119,7 +119,7 @@ export function ProtectedRoute({
   }
 
   if (redirectPath && location.pathname !== '/complete-registration') {
-    return <Navigate to={redirectPath} state={{ from: location }} replace />;
+    return <Navigate to="/auth?mode=login" state={{ from: location }} replace />;
   }
 
   return <>{children}</>;
