@@ -32,6 +32,8 @@ type DoctorRow = {
   email: string | null;
   phone_number: string | null;
   verification_status: string | null;
+  medical_license_url?: string | null;
+  rate_per_consultation?: number | null;
 };
 
 type PatientRow = {
@@ -189,7 +191,8 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctor_registrations')
-        .select('user_id, full_name, email, phone_number, verification_status');
+        .select('user_id, full_name, email, phone_number, verification_status, medical_license_url, rate_per_consultation')
+        .order('created_at', { ascending: false });
       if (error) throw error;
       return (data || []) as DoctorRow[];
     },
@@ -280,6 +283,11 @@ export default function COOPortal() {
     };
   }, [doctors, onlineDoctorIds]);
 
+  const getDoctorListingStatus = (doctor: DoctorRow) => {
+    if (!String(doctor.medical_license_url || '').trim()) return 'incomplete';
+    return String(doctor.verification_status || 'pending').toLowerCase();
+  };
+
   const appointmentOverview = useMemo(() => {
     const normalized = appointments.map((apt) => ({
       ...apt,
@@ -357,7 +365,7 @@ export default function COOPortal() {
     { id: 'appointments', label: 'Appointments' },
     { id: 'patients', label: 'Patients' },
     { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
-    { id: 'doctors', label: 'Active Doctors' },
+    { id: 'doctors', label: 'Doctors' },
     { id: 'payments', label: 'Payments' },
     { id: 'settings', label: 'Settings' },
   ] as const;
@@ -805,30 +813,51 @@ export default function COOPortal() {
           <TabsContent value="doctors" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Active Doctors Online Now</CardTitle>
+                <CardTitle>Doctor Directory</CardTitle>
                 <CardDescription>
-                  {activeDoctorsOverview.activeOnlineCount} doctor(s) currently online · {activeDoctorsOverview.approvedDoctors} approved total
+                  All doctors including approved, pending verification, and incomplete registration.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {activeDoctorsOverview.activeDoctorsList.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No doctors are currently online.</p>
+                {doctors.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No doctors found.</p>
                 ) : (
-                  activeDoctorsOverview.activeDoctorsList.map((doctor) => {
+                  doctors.map((doctor) => {
                     const presence = onlineDoctorIds[doctor.user_id];
+                    const listingStatus = getDoctorListingStatus(doctor);
                     return (
                       <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
                         <div className="min-w-0">
                           <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                          </p>
                           {presence?.online_at && (
                             <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
                           )}
                         </div>
-                        <Badge className="bg-green-500/10 text-green-700 border-green-500/20 self-start sm:self-auto">
-                          🟢 Online
-                        </Badge>
+                        <div className="flex flex-col gap-1 self-start sm:self-auto">
+                          <Badge
+                            className={
+                              listingStatus === 'approved'
+                                ? 'bg-success/10 text-success border-success/20'
+                                : listingStatus === 'incomplete'
+                                  ? 'bg-destructive/10 text-destructive border-destructive/20'
+                                  : 'bg-warning/10 text-warning border-warning/20'
+                            }
+                          >
+                            {listingStatus === 'approved'
+                              ? 'Approved'
+                              : listingStatus === 'incomplete'
+                                ? 'Incomplete Registration'
+                                : 'Pending Verification'}
+                          </Badge>
+                          <Badge className={presence ? 'bg-green-500/10 text-green-700 border-green-500/20' : 'bg-muted text-muted-foreground border-border'}>
+                            {presence ? 'Online' : 'Offline'}
+                          </Badge>
+                        </div>
                       </div>
                     );
                   })
