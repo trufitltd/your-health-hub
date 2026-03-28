@@ -291,7 +291,7 @@ export default function AuthPage() {
     return parsed;
   };
   const selectedDoctorSpecialty = specialty === 'others' ? otherSpecialty : specialty;
-  const specialistRequiresRate = !!specialty && !isGeneralPracticeSpecialty(specialty);
+  const specialistRequiresRate = !!selectedDoctorSpecialty && !isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const generalPractitionerSelected = !!selectedDoctorSpecialty && isGeneralPracticeSpecialty(selectedDoctorSpecialty);
   const parsedConsultationRate = parseConsultationRate(consultationRate);
   const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
@@ -464,6 +464,8 @@ export default function AuthPage() {
     const experience = getMetadataString(user, 'doctor_experience', 'Pending update');
     const doctorIdType = getMetadataString(user, 'doctor_id_type', 'nin');
     const doctorIdNumber = getMetadataString(user, 'doctor_id_number', String(user.id).slice(0, 16));
+    const metadataRateRaw = getMetadataString(user, 'rate_per_consultation', '');
+    const metadataParsedRate = parseConsultationRate(metadataRateRaw);
     const profilePictureUrl = getMetadataString(user, 'profile_picture_url', '') || null;
     const medicalLicenseUrl = getMetadataString(user, 'medical_license_url', '') || '';
     const fallbackDoctorPayload = {
@@ -480,6 +482,7 @@ export default function AuthPage() {
       hospital_affiliation: hospitalAffiliation,
       specialty,
       experience,
+      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '') || !metadataParsedRate ? null : metadataParsedRate,
       profile_picture_url: profilePictureUrl,
       medical_license_url: medicalLicenseUrl || '',
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
@@ -685,9 +688,10 @@ export default function AuthPage() {
           }
 
           const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
+          const requiresSpecialistRate = !isGeneralPracticeSpecialty(resolvedSpecialty || '');
           const parsedRate = parseConsultationRate(consultationRate);
 
-          if (specialistRequiresRate && !parsedRate) {
+          if (requiresSpecialistRate && !parsedRate) {
             toast({ title: 'Consultation rate required', description: 'Please enter a valid consultation rate for specialist registration.' });
             setIsLoading(false);
             return;
@@ -699,6 +703,9 @@ export default function AuthPage() {
             return;
           }
         }
+
+        const signupResolvedSpecialty = role === 'doctor' ? (specialty === 'others' ? otherSpecialty : specialty) : '';
+        const signupParsedRate = role === 'doctor' ? parseConsultationRate(consultationRate) : null;
 
         // Sign up with Supabase using email - keep metadata minimal to debug 500 error
         const { data, error } = await supabase.auth.signUp({
@@ -732,6 +739,10 @@ export default function AuthPage() {
               doctor_id_type: role === 'doctor' ? (doctorIdType || 'nin') : undefined,
               doctor_id_number: role === 'doctor' ? (doctorIdNumber || String(Date.now())) : undefined,
               doctor_experience: role === 'doctor' ? (doctorExperience || 'Pending update') : undefined,
+              rate_per_consultation:
+                role === 'doctor'
+                  ? (isGeneralPracticeSpecialty(signupResolvedSpecialty || '') || !signupParsedRate ? undefined : signupParsedRate)
+                  : undefined,
               preferred_consultation_languages:
                 role === 'doctor'
                   ? (consultationLanguages.length ? consultationLanguages : ['english'])
