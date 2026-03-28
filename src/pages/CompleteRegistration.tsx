@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Upload, User, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -56,7 +56,6 @@ const isFilled = (value: string | null | undefined) => !!String(value || '').tri
 export default function CompleteRegistration() {
   const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -66,8 +65,6 @@ export default function CompleteRegistration() {
 
   const [profileFile, setProfileFile] = useState<File | null>(null);
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
-
-  const roleFromQuery = searchParams.get('role');
 
   useEffect(() => {
     if (authLoading) return;
@@ -102,11 +99,7 @@ export default function CompleteRegistration() {
       setPatientRow((patientData as PatientRow | null) ?? null);
 
       const metadataRole = (String(user.user_metadata?.role || '').toLowerCase() === 'doctor' ? 'doctor' : 'patient') as AppRole;
-      const effectiveRole: AppRole = roleFromQuery === 'doctor' || roleFromQuery === 'patient'
-        ? roleFromQuery
-        : doctorData
-          ? 'doctor'
-          : metadataRole;
+      const effectiveRole: AppRole = metadataRole;
 
       setRole(effectiveRole);
 
@@ -130,7 +123,7 @@ export default function CompleteRegistration() {
     };
 
     fetchRows();
-  }, [authLoading, navigate, roleFromQuery, user]);
+  }, [authLoading, navigate, user]);
 
   const needsDoctorLicense = role === 'doctor' && !isFilled(doctorRow?.medical_license_url);
 
