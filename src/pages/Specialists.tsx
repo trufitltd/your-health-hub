@@ -436,16 +436,24 @@ export default function SpecialistsPage() {
       const { data: registrations } = await supabase
         .from('doctor_registrations')
         .select('*')
-        .in('user_id', doctorIds);
+        .in('user_id', doctorIds)
+        .eq('verification_status', 'approved')
+        .not('medical_license_url', 'is', null);
 
-      const registrationMap = new Map((registrations || []).map((r: Record<string, unknown>) => [r.user_id as string, r]));
+      const registrationMap = new Map(
+        (registrations || [])
+          .filter((registration: Record<string, unknown>) => String(registration.medical_license_url || '').trim().length > 0)
+          .map((registration: Record<string, unknown>) => [registration.user_id as string, registration])
+      );
 
-      return (data || []).map(d => ({
-        ...d,
-        bio: (registrationMap.get(d.id)?.bio as string | null | undefined) || null,
-        experience: (registrationMap.get(d.id)?.experience as string | null | undefined) || null,
-        registration: registrationMap.get(d.id) || null,
-      })) as DoctorCard[];
+      return (data || [])
+        .filter((doctor) => registrationMap.has(doctor.id))
+        .map(d => ({
+          ...d,
+          bio: (registrationMap.get(d.id)?.bio as string | null | undefined) || null,
+          experience: (registrationMap.get(d.id)?.experience as string | null | undefined) || null,
+          registration: registrationMap.get(d.id) || null,
+        })) as DoctorCard[];
     },
   });
 
