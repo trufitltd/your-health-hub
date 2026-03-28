@@ -36,6 +36,7 @@ interface Doctor {
   rate_per_consultation?: number | null;
   hospital_affiliation: string;
   profile_picture_url?: string;
+  medical_license_url?: string | null;
   age: number;
   verification_status: string;
   city: string;
@@ -106,6 +107,9 @@ const formatConsultationLanguageLabel = (value: string) => {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
 };
+
+const isExcludedDoctorName = (value: string | null | undefined) =>
+  String(value || '').trim().toLowerCase() === 'test doctor';
 
 const URL_PARAM_DOCTOR_TYPE_VALUES = new Set(['all', 'general', 'specialist']);
 const URL_PARAM_AVAILABILITY_MODE_VALUES = new Set(['none', 'now', 'exact', 'range']);
@@ -365,13 +369,18 @@ export default function DoctorDiscovery() {
       // Use approved doctors (booking eligibility), not stale doctors.is_active.
       const { data: approvedDoctors, error: approvedError } = await supabase
         .from('doctor_registrations')
-        .select('user_id')
-        .eq('verification_status', 'approved');
+        .select('user_id, full_name, medical_license_url')
+        .eq('verification_status', 'approved')
+        .not('medical_license_url', 'is', null);
 
       if (approvedError) throw approvedError;
       if (!approvedDoctors || approvedDoctors.length === 0) return [];
 
       const activeDoctorIds = approvedDoctors
+        .filter((doctor) =>
+          !isExcludedDoctorName((doctor as any).full_name)
+          && String((doctor as any).medical_license_url || '').trim().length > 0
+        )
         .map((doctor) => doctor.user_id)
         .filter(Boolean) as string[];
       const doctorSet = new Set<string>();
@@ -457,6 +466,7 @@ export default function DoctorDiscovery() {
           rate_per_consultation,
           hospital_affiliation,
           profile_picture_url,
+          medical_license_url,
           age,
           verification_status,
           city,
@@ -477,6 +487,7 @@ export default function DoctorDiscovery() {
         rate_per_consultation?: number | null;
         hospital_affiliation: string;
         profile_picture_url?: string;
+        medical_license_url?: string | null;
         age: number;
         verification_status: string;
         city: string;
@@ -502,6 +513,7 @@ export default function DoctorDiscovery() {
             rate_per_consultation,
             hospital_affiliation,
             profile_picture_url,
+            medical_license_url,
             age,
             verification_status,
             city,
@@ -517,6 +529,11 @@ export default function DoctorDiscovery() {
       } else {
         registrationRows = (doctorsWithLanguagesQuery.data || []) as typeof registrationRows;
       }
+
+      registrationRows = registrationRows.filter((doctor) =>
+        !isExcludedDoctorName(doctor.full_name)
+        && String(doctor.medical_license_url || '').trim().length > 0
+      );
 
       // Fetch ratings for each doctor
       const doctorsWithRatings = await Promise.all(
