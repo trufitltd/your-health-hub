@@ -39,6 +39,7 @@ import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
@@ -127,6 +128,7 @@ const CentralAdmin = () => {
   const { user, signOut } = useAuth();
   const { t } = useLanguage();
   const { formatDate, formatDateTime } = useLocaleFormatter();
+  const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -1763,6 +1765,28 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleInstallApp = async () => {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/i.test(ua);
+    const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
+    if (isIOS || isInAppBrowser) {
+      navigate('/install');
+      return;
+    }
+
+    const result = await promptInstall();
+    if (result === 'accepted') {
+      toast({ title: 'Installed', description: 'MyEdoctor has been installed successfully.' });
+      return;
+    }
+    if (result === 'dismissed') {
+      toast({ title: 'Install cancelled', description: 'You can install the app any time from this button.' });
+      return;
+    }
+    if (result === 'already_installed') return;
+    navigate('/install');
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       {/* Header */}
@@ -1898,18 +1922,16 @@ const CentralAdmin = () => {
               </div>
             </motion.div>
 
-            {activeTab === 'overview' && (
+            {activeTab === 'overview' && !isPwaInstalled && (
               <Card className="border-primary/20 bg-primary/5">
                 <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <p className="text-sm">
                     Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
                   </p>
-                  <Link to="/install">
-                    <Button size="sm" className="gap-2">
-                      <Download className="w-4 h-4" />
-                      Open Install Page
-                    </Button>
-                  </Link>
+                  <Button size="sm" className="gap-2" onClick={handleInstallApp}>
+                    <Download className="w-4 h-4" />
+                    Install App
+                  </Button>
                 </CardContent>
               </Card>
             )}

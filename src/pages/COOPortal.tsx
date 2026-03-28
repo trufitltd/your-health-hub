@@ -3,13 +3,14 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings } from 'lucide-react';
+import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings, Download } from 'lucide-react';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
 import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
@@ -88,6 +89,7 @@ const isFailedPayment = (status: string | null | undefined) => {
 
 export default function COOPortal() {
   const { user, signOut } = useAuth();
+  const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { formatDateTime, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('appointments');
@@ -438,6 +440,28 @@ export default function COOPortal() {
     }
   };
 
+  const handleInstallApp = async () => {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/i.test(ua);
+    const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|wv)/i.test(ua);
+    if (isIOS || isInAppBrowser) {
+      navigate('/install');
+      return;
+    }
+
+    const result = await promptInstall();
+    if (result === 'accepted') {
+      toast({ title: 'Installed', description: 'MyEdoctor has been installed successfully.' });
+      return;
+    }
+    if (result === 'dismissed') {
+      toast({ title: 'Install cancelled', description: 'You can install the app any time from this button.' });
+      return;
+    }
+    if (result === 'already_installed') return;
+    navigate('/install');
+  };
+
   return (
     <div className="min-h-screen bg-muted/20">
       <header className="bg-card border-b border-border sticky top-0 z-50">
@@ -519,6 +543,20 @@ export default function COOPortal() {
           </aside>
 
           <main className="lg:col-span-3 space-y-4">
+            {!isPwaInstalled ? (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <p className="text-sm">
+                    Install our mobile app for faster access. Click <span className="font-semibold">Download App</span> to install on your phone.
+                  </p>
+                  <Button size="sm" className="gap-2" onClick={handleInstallApp}>
+                    <Download className="w-4 h-4" />
+                    Install App
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : null}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
               <Card>
                 <CardHeader className="pb-2">

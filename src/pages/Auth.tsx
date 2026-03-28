@@ -1711,6 +1711,24 @@ export default function AuthPage() {
             </Button>
           </form>
 
+          {mode === 'login' && (
+            <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground mb-2">Central team login</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Link to="/admin/login">
+                  <Button type="button" variant="outline" className="w-full">
+                    Central Admin Login
+                  </Button>
+                </Link>
+                <Link to="/coo/login">
+                  <Button type="button" variant="outline" className="w-full">
+                    COO Login
+                  </Button>
+                </Link>
+              </div>
+            </div>
+          )}
+
           {/* Toggle Mode */}
           {mode !== 'verify' && mode !== 'reset' && (
             <p className="text-center text-sm text-muted-foreground mt-6">
