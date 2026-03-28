@@ -65,8 +65,7 @@ export function ProtectedRoute({
           console.warn('ProtectedRoute patient registration check warning:', patientError);
         }
 
-        const effectiveRole: AppRole =
-          doctorRow ? 'doctor' : (role || parseAppRole(user.user_metadata?.role));
+        const effectiveRole: AppRole = role || parseAppRole(user.user_metadata?.role);
 
         const doctorComplete = !!doctorRow && isFilled((doctorRow as any).medical_license_url);
         const patientComplete = !!patientRow && (
