@@ -72,6 +72,13 @@ interface Doctor {
   rating: number;
   total_reviews: number;
   rate_per_consultation?: number | null;
+  proposed_rate_per_consultation?: number | null;
+  rate_change_reason?: string | null;
+  rate_change_requested_at?: string | null;
+  rate_change_seen_by_admin?: boolean | null;
+  rate_change_reviewed_at?: string | null;
+  rate_change_admin_note?: string | null;
+  updated_at?: string | null;
 }
 
 interface VerificationNotes {
@@ -309,6 +316,9 @@ const CentralAdmin = () => {
 
   const hasUnreadLicenseReupload = (doctor: Doctor) =>
     !!doctor.medical_license_reuploaded_at && !doctor.medical_license_reupload_seen_by_admin;
+
+  const hasUnreadRateChangeRequest = (doctor: Doctor) =>
+    Number(doctor.proposed_rate_per_consultation || 0) > 0 && !doctor.rate_change_seen_by_admin;
 
   useEffect(() => {
     if (!showVerificationDialog || !selectedDoctor) return;
@@ -1278,6 +1288,57 @@ const CentralAdmin = () => {
       ? { ...prev, medical_license_reupload_seen_by_admin: true }
       : prev));
     queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+  };
+
+  const markRateChangeAsSeen = async (doctor: Doctor) => {
+    if (!hasUnreadRateChangeRequest(doctor)) return;
+    const { error } = await supabase.rpc('admin_mark_rate_change_seen', {
+      p_user_id: doctor.user_id,
+    });
+
+    if (error) {
+      console.error('Error marking rate-change notification as seen:', error);
+      return;
+    }
+
+    setSelectedDoctor((prev) => (prev && prev.user_id === doctor.user_id
+      ? { ...prev, rate_change_seen_by_admin: true }
+      : prev));
+    queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+  };
+
+  const handleReviewRateChange = async (doctor: Doctor, action: 'approve' | 'reject') => {
+    setIsProcessing(true);
+    try {
+      const note = (verificationNotes[doctor.id] || '').trim();
+      const { error } = await supabase.rpc('admin_review_doctor_rate_change', {
+        p_user_id: doctor.user_id,
+        p_action: action,
+        p_admin_note: note || null,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: action === 'approve' ? 'Rate update approved' : 'Rate update rejected',
+        description: `Dr. ${doctor.full_name}'s specialist rate request has been ${action}d.`,
+      });
+
+      queryClient.invalidateQueries({ queryKey: ['admin-doctors'] });
+      queryClient.invalidateQueries({ queryKey: ['doctor-registration', doctor.user_id] });
+      setTimeout(() => {
+        refetch();
+      }, 300);
+    } catch (error) {
+      console.error('Error reviewing rate change:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to review specialist rate change request.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -2570,9 +2631,17 @@ const CentralAdmin = () => {
                                 <p className="font-semibold">Dr. {doctor.full_name}</p>
                                 <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 <p className="text-xs text-muted-foreground">{doctor.email}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                                </p>
                                 {hasUnreadLicenseReupload(doctor) && (
                                   <Badge className="mt-1 bg-destructive text-destructive-foreground">
                                     New License Re-upload
+                                  </Badge>
+                                )}
+                                {hasUnreadRateChangeRequest(doctor) && (
+                                  <Badge className="mt-1 bg-destructive text-destructive-foreground">
+                                    New Rate Change Request
                                   </Badge>
                                 )}
                               </div>
@@ -2589,6 +2658,7 @@ const CentralAdmin = () => {
                                   setSelectedDoctor(doctor);
                                   setShowVerificationDialog(true);
                                   void markLicenseReuploadAsSeen(doctor);
+                                  void markRateChangeAsSeen(doctor);
                                 }}
                               >
                                 <Eye className="w-4 h-4 mr-2" />
@@ -2684,9 +2754,17 @@ const CentralAdmin = () => {
                                   <div>
                                     <p className="font-semibold">Dr. {doctor.full_name}</p>
                                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                                    </p>
                                     {hasUnreadLicenseReupload(doctor) && (
                                       <Badge className="mt-1 bg-destructive text-destructive-foreground">
                                         New License Re-upload
+                                      </Badge>
+                                    )}
+                                    {hasUnreadRateChangeRequest(doctor) && (
+                                      <Badge className="mt-1 bg-destructive text-destructive-foreground">
+                                        New Rate Change Request
                                       </Badge>
                                     )}
                                   </div>
@@ -2734,6 +2812,7 @@ const CentralAdmin = () => {
                                     setSelectedDoctor(doctor);
                                     setShowVerificationDialog(true);
                                     void markLicenseReuploadAsSeen(doctor);
+                                    void markRateChangeAsSeen(doctor);
                                   }}
                                 >
                                   <FileText className="w-4 h-4 mr-2" />
@@ -3029,6 +3108,9 @@ const CentralAdmin = () => {
                     {hasUnreadLicenseReupload(selectedDoctor) && (
                       <Badge className="mt-2 bg-destructive text-destructive-foreground">New License Re-upload</Badge>
                     )}
+                    {hasUnreadRateChangeRequest(selectedDoctor) && (
+                      <Badge className="mt-2 bg-destructive text-destructive-foreground">New Rate Change Request</Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3102,6 +3184,14 @@ const CentralAdmin = () => {
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">License Number</p>
                     <p className="font-medium">{selectedDoctor.license_number || notAvailableLabel}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-muted-foreground text-xs mb-1">Current Specialist Rate</p>
+                    <p className="font-medium">
+                      {Number(selectedDoctor.rate_per_consultation || 0) > 0
+                        ? formatCurrency(Number(selectedDoctor.rate_per_consultation))
+                        : 'Not set'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -3179,6 +3269,55 @@ const CentralAdmin = () => {
                       {(selectedDoctor as any).medical_license_reupload_reason}
                     </p>
                   )}
+                </div>
+              )}
+
+              {Number((selectedDoctor as any).proposed_rate_per_consultation || 0) > 0 && (
+                <div className="p-4 rounded-lg border border-destructive/30 bg-destructive/5 space-y-3">
+                  <p className="text-sm font-medium text-destructive">Specialist Rate Change Request</p>
+                  <p className="text-sm">
+                    <span className="font-medium">Current Rate:</span>{' '}
+                    {Number(selectedDoctor.rate_per_consultation || 0) > 0
+                      ? formatCurrency(Number(selectedDoctor.rate_per_consultation))
+                      : 'Not set'}
+                  </p>
+                  <p className="text-sm">
+                    <span className="font-medium">Requested Rate:</span>{' '}
+                    {formatCurrency(Number((selectedDoctor as any).proposed_rate_per_consultation))}
+                  </p>
+                  {(selectedDoctor as any).rate_change_requested_at && (
+                    <p className="text-sm">
+                      <span className="font-medium">Requested At:</span>{' '}
+                      {formatDateTime((selectedDoctor as any).rate_change_requested_at)}
+                    </p>
+                  )}
+                  {(selectedDoctor as any).rate_change_reason && (
+                    <p className="text-sm whitespace-pre-wrap">
+                      <span className="font-medium">Doctor Reason:</span>{' '}
+                      {(selectedDoctor as any).rate_change_reason}
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-success hover:bg-success/90"
+                      onClick={() => handleReviewRateChange(selectedDoctor, 'approve')}
+                      disabled={isProcessing}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-2" />
+                      Approve Rate
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                      onClick={() => handleReviewRateChange(selectedDoctor, 'reject')}
+                      disabled={isProcessing}
+                    >
+                      <XCircle className="w-4 h-4 mr-2" />
+                      Reject Rate
+                    </Button>
+                  </div>
                 </div>
               )}
 

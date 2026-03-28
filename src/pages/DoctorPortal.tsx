@@ -852,6 +852,7 @@ const DoctorPortal = () => {
   const [isUploadingLicense, setIsUploadingLicense] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [rateChangeReason, setRateChangeReason] = useState('');
 
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
@@ -867,6 +868,7 @@ const DoctorPortal = () => {
   const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
   const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
   const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
+  const currentRegisteredRate = Number((doctorRegistration as { rate_per_consultation?: number | null } | null)?.rate_per_consultation || 0);
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
@@ -1201,6 +1203,11 @@ const DoctorPortal = () => {
         : [];
       setSelectedConsultationLanguages(existingConsultationLanguages);
     }
+  }, [doctorRegistration]);
+
+  useEffect(() => {
+    if (!doctorRegistration) return;
+    setRateChangeReason('');
   }, [doctorRegistration]);
 
   useEffect(() => {
@@ -2694,12 +2701,25 @@ const DoctorPortal = () => {
         return;
       }
 
+      const normalizedRateChangeReason = rateChangeReason.trim();
+      const specialistRateChanged = specialistProfileSelected
+        && hasValidConsultationRate
+        && Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009;
+
+      if (specialistRateChanged && normalizedRateChangeReason.length < 5) {
+        toast({
+          title: 'Reason required',
+          description: 'Please provide a short reason for your specialist rate change request.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const baseProfilePayload = {
         full_name: profileFormData.fullName.trim(),
         email: profileFormData.email.trim(),
         phone_number: profileFormData.phone.trim(),
         specialty: profileFormData.specialty.trim(),
-        ...(specialistProfileSelected ? { rate_per_consultation: parsedConsultationRate } : {}),
         experience: profileFormData.experience.trim(),
         bio: profileFormData.bio.trim(),
         ...legacyBioColumnPayload,
@@ -2725,12 +2745,23 @@ const DoctorPortal = () => {
         throw error;
       }
 
+      if (specialistRateChanged) {
+        const { error: rateRequestError } = await supabase.rpc('doctor_request_rate_change', {
+          p_new_rate: parsedConsultationRate,
+          p_reason: normalizedRateChangeReason,
+        });
+
+        if (rateRequestError) throw rateRequestError;
+      }
+
       queryClient.invalidateQueries({ queryKey: ['doctor-registration'] });
       queryClient.invalidateQueries({ queryKey: ['doctors-discovery'] });
       setLanguage(preferredLanguageToSave);
       toast({
         title: t('common.success', 'Success'),
-        description: t('common.profileUpdated', 'Profile updated successfully!'),
+        description: specialistRateChanged
+          ? 'Profile updated and specialist rate change request sent to admin.'
+          : t('common.profileUpdated', 'Profile updated successfully!'),
       });
     } catch (error) {
       toast({
@@ -4474,6 +4505,21 @@ const DoctorPortal = () => {
                                     <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
                                   )}
                                 </p>
+                                <div className="mt-3 space-y-2">
+                                  <label className="text-xs font-medium text-muted-foreground">Reason for rate change request</label>
+                                  <Textarea
+                                    value={rateChangeReason}
+                                    onChange={(e) => setRateChangeReason(e.target.value)}
+                                    placeholder="Explain why you are requesting a specialist rate update."
+                                    rows={3}
+                                  />
+                                  {Number((doctorRegistration as any)?.proposed_rate_per_consultation || 0) > 0 && (
+                                    <p className="text-xs text-warning">
+                                      Pending request: {formatCurrency(Number((doctorRegistration as any).proposed_rate_per_consultation))}.
+                                      Admin review is pending.
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             )}
                             <div>
