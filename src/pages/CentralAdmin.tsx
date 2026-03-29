@@ -127,7 +127,7 @@ interface AdminClerkingRow {
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
   const { t } = useLanguage();
-  const { formatDate, formatDateTime } = useLocaleFormatter();
+  const { formatDate, formatDateTime, formatCurrency } = useLocaleFormatter();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
   const navigate = useNavigate();
