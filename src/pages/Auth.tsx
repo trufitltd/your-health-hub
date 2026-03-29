@@ -957,6 +957,24 @@ export default function AuthPage() {
 
         if (error) {
           console.error('Login error:', error);
+          const normalizedError = String(error.message || '').toLowerCase();
+          const looksLikeUnregisteredOrInvalidCredentials =
+            normalizedError.includes('invalid login credentials')
+            || normalizedError.includes('invalid credentials')
+            || normalizedError.includes('email not confirmed')
+            || normalizedError.includes('user not found');
+
+          if (looksLikeUnregisteredOrInvalidCredentials) {
+            toast({
+              title: 'Account not found',
+              description: 'You have not signed up yet. Please click Get Started to create your account.',
+            });
+            setMode('register');
+            navigate('/auth?mode=register');
+            setIsLoading(false);
+            return;
+          }
+
           toast({ title: 'Sign in failed', description: error.message });
           setIsLoading(false);
           return;
