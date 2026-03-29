@@ -264,6 +264,15 @@ export const createDefaultSchedule = async (doctorId: string): Promise<DoctorSch
       if (isConflict) {
         return [];
       }
+      // If doctor directory row is missing (FK), do not break login flow.
+      const isMissingDoctorFk =
+        error.code === '23503'
+        || String(error.message || '').toLowerCase().includes('foreign key')
+        || String(error.details || '').toLowerCase().includes('key is not present in table "doctors"');
+      if (isMissingDoctorFk) {
+        console.warn('Skipping default schedule seed because doctors row is missing:', error);
+        return [];
+      }
       console.error('Error creating default schedule:', error);
       // Don't throw error, just log it - schedule can be created later
       return [];
