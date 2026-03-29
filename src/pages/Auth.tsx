@@ -282,6 +282,7 @@ export default function AuthPage() {
     const normalized = value.trim().toLowerCase();
     return normalized === 'general_practitioner' || normalized === 'general practitioner' || normalized === 'general practice';
   };
+  const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
   const parseConsultationRate = (value: string): number | null => {
     const normalized = value.replace(/,/g, '').trim();
     if (!normalized) return null;
@@ -1005,21 +1006,41 @@ export default function AuthPage() {
         }
 
         const userRole: UserRole = metadataRole;
+        let shouldCompleteRegistration = false;
         if (data.user?.id) {
           if (userRole === 'doctor') {
             // Backfill default availability for existing doctors who have no schedules yet.
             await createDefaultSchedule(data.user.id);
             // Metadata says doctor but row is missing: recreate fallback so admin sees verification request.
             await ensureDoctorRegistrationFallback(data.user);
+            const { data: doctorRow } = await supabase
+              .from('doctor_registrations')
+              .select('medical_license_url')
+              .eq('user_id', data.user.id)
+              .maybeSingle();
+            shouldCompleteRegistration = !isFilled((doctorRow as { medical_license_url?: string | null } | null)?.medical_license_url);
           } else {
             // Ensure patient users always have a patient registration row.
             await ensurePatientRegistrationFallback(data.user);
+            const { data: patientRow } = await supabase
+              .from('patient_registrations')
+              .select('profile_picture_url, post_auth_prompt_completed')
+              .eq('user_id', data.user.id)
+              .maybeSingle();
+            const profileFilled = isFilled((patientRow as { profile_picture_url?: string | null } | null)?.profile_picture_url);
+            const promptCompleted = Boolean((patientRow as { post_auth_prompt_completed?: boolean | null } | null)?.post_auth_prompt_completed);
+            shouldCompleteRegistration = !(profileFilled || promptCompleted);
           }
         }
         localStorage.setItem('userRole', userRole);
 
         toast({ title: 'Signed in', description: 'Welcome back!' });
         setIsLoading(false);
+
+        if (shouldCompleteRegistration) {
+          navigate(`/complete-registration?role=${userRole}`);
+          return;
+        }
 
         // Redirect based on role
         navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
