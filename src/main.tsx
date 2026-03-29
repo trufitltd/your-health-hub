@@ -10,6 +10,12 @@ if (typeof window !== "undefined") {
   });
 }
 
-registerSW({ immediate: true });
+const updateSW = registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    // Apply updated service worker immediately so users don't stay on stale auth logic.
+    updateSW(true);
+  },
+});
 
 createRoot(document.getElementById("root")!).render(<App />);
