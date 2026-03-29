@@ -482,7 +482,7 @@ export default function AuthPage() {
       hospital_affiliation: hospitalAffiliation,
       specialty,
       experience,
-      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '') || !metadataParsedRate ? null : metadataParsedRate,
+      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '') ? 5000 : (metadataParsedRate || null),
       profile_picture_url: profilePictureUrl,
       medical_license_url: medicalLicenseUrl || '',
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
@@ -706,6 +706,10 @@ export default function AuthPage() {
 
         const signupResolvedSpecialty = role === 'doctor' ? (specialty === 'others' ? otherSpecialty : specialty) : '';
         const signupParsedRate = role === 'doctor' ? parseConsultationRate(consultationRate) : null;
+        const signupIsGp = role === 'doctor' && isGeneralPracticeSpecialty(signupResolvedSpecialty || '');
+        const signupRatePerConsultation = role === 'doctor'
+          ? (signupIsGp ? 5000 : signupParsedRate)
+          : null;
 
         // Sign up with Supabase using email - keep metadata minimal to debug 500 error
         const { data, error } = await supabase.auth.signUp({
@@ -741,7 +745,7 @@ export default function AuthPage() {
               doctor_experience: role === 'doctor' ? (doctorExperience || 'Pending update') : undefined,
               rate_per_consultation:
                 role === 'doctor'
-                  ? (isGeneralPracticeSpecialty(signupResolvedSpecialty || '') || !signupParsedRate ? undefined : signupParsedRate)
+                  ? (signupRatePerConsultation || undefined)
                   : undefined,
               preferred_consultation_languages:
                 role === 'doctor'
@@ -825,9 +829,9 @@ export default function AuthPage() {
               specialty: resolvedSpecialty,
               preferred_consultation_languages: consultationLanguages,
               experience: doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
-              rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '') || !parsedRate
-                ? null
-                : parsedRate,
+              rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
+                ? 5000
+                : (parsedRate || null),
               profile_picture_url: existingDoctorRegistration?.profile_picture_url || null,
               medical_license_url: existingDoctorRegistration?.medical_license_url || '',
               identification_type: doctorIdType,
@@ -973,15 +977,13 @@ export default function AuthPage() {
         }
 
         if (metadataRole !== role) {
-          await supabase.auth.signOut();
+          setRole(metadataRole);
           toast({
-            title: 'Wrong portal selected',
+            title: 'Portal updated',
             description: metadataRole === 'doctor'
-              ? 'This account is a doctor account. Select Doctor and sign in again.'
-              : 'This account is a patient account. Select Patient and sign in again.',
+              ? 'Doctor account detected. Redirecting to Doctor Portal.'
+              : 'Patient account detected. Redirecting to Patient Portal.',
           });
-          setIsLoading(false);
-          return;
         }
 
         const userRole: UserRole = metadataRole;
