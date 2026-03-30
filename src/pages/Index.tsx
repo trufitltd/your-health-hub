@@ -7,7 +7,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
-import heroDoctor3 from '@/assets/myedoctor_hero2.png';
+import heroDoctor3 from '@/assets/myedoctor_hero3.jpeg';
 
 const Index = () => {
   const { t } = useLanguage();
