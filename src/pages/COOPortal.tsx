@@ -343,6 +343,11 @@ export default function COOPortal() {
     (apt) => ['pending', 'pending_approval', 'pending_payment', 'payment_processing'].includes(String(apt.normalizedStatus || '')),
   ), [appointmentStatusRows]);
 
+  const incompleteDoctors = useMemo(
+    () => doctors.filter((doctor) => getDoctorListingStatus(doctor) === 'incomplete'),
+    [doctors],
+  );
+
   if (!user) return <Navigate to="/coo/login" replace />;
   if (!isAllowed) return <Navigate to="/coo/login" replace />;
 
@@ -368,6 +373,7 @@ export default function COOPortal() {
     { id: 'patients', label: 'Patients' },
     { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
     { id: 'doctors', label: 'Doctors' },
+    { id: 'incomplete-doctors', label: 'Incomplete Doctors', badge: incompleteDoctors.length > 0 ? (incompleteDoctors.length > 99 ? '99+' : incompleteDoctors.length) : undefined },
     { id: 'payments', label: 'Payments' },
     { id: 'settings', label: 'Settings' },
   ] as const;
@@ -557,7 +563,7 @@ export default function COOPortal() {
               </Card>
             ) : null}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Total Registered Patients</CardDescription>
@@ -596,6 +602,14 @@ export default function COOPortal() {
                   <CardTitle className="text-3xl">{paymentOverview.successfulCount} / {paymentOverview.failedCount}</CardTitle>
                 </CardHeader>
                 <CardContent><CreditCard className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Incomplete Doctor Registrations</CardDescription>
+                  <CardTitle className="text-3xl">{incompleteDoctors.length}</CardTitle>
+                </CardHeader>
+                <CardContent><Stethoscope className="w-5 h-5 text-destructive" /></CardContent>
               </Card>
             </div>
 
@@ -891,6 +905,49 @@ export default function COOPortal() {
                               : listingStatus === 'incomplete'
                                 ? 'Incomplete Registration'
                                 : 'Pending Verification'}
+                          </Badge>
+                          <Badge className={presence ? 'bg-green-500/10 text-green-700 border-green-500/20' : 'bg-muted text-muted-foreground border-border'}>
+                            {presence ? 'Online' : 'Offline'}
+                          </Badge>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="incomplete-doctors" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Doctors With Incomplete Registration</CardTitle>
+                <CardDescription>
+                  Doctors missing required registration details (for example, medical license upload).
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {incompleteDoctors.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No incomplete doctor registrations found.</p>
+                ) : (
+                  incompleteDoctors.map((doctor) => {
+                    const presence = onlineDoctorIds[doctor.user_id];
+                    return (
+                      <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                          </p>
+                          {presence?.online_at && (
+                            <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1 self-start sm:self-auto">
+                          <Badge className="bg-destructive/10 text-destructive border-destructive/20">
+                            Incomplete Registration
                           </Badge>
                           <Badge className={presence ? 'bg-green-500/10 text-green-700 border-green-500/20' : 'bg-muted text-muted-foreground border-border'}>
                             {presence ? 'Online' : 'Offline'}

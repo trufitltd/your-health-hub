@@ -17,6 +17,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 type AuthMode = 'login' | 'register' | 'verify' | 'reset';
 type UserRole = 'patient' | 'doctor';
 type CountryPhoneCode = { iso: string; name: string; dialCode: string };
+import { MIN_SPECIALIST_RATE_NGN } from '@/services/marketplaceTypes';
 
 const COUNTRY_PHONE_CODES: CountryPhoneCode[] = [
   { iso: 'AF', name: 'Afghanistan', dialCode: '+93' },
@@ -483,7 +484,9 @@ export default function AuthPage() {
       hospital_affiliation: hospitalAffiliation,
       specialty,
       experience,
-      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '') ? 5000 : (metadataParsedRate || null),
+      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '')
+        ? 5000
+        : (metadataParsedRate && metadataParsedRate >= MIN_SPECIALIST_RATE_NGN ? metadataParsedRate : MIN_SPECIALIST_RATE_NGN),
       profile_picture_url: profilePictureUrl,
       medical_license_url: medicalLicenseUrl || '',
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
@@ -692,8 +695,11 @@ export default function AuthPage() {
           const requiresSpecialistRate = !isGeneralPracticeSpecialty(resolvedSpecialty || '');
           const parsedRate = parseConsultationRate(consultationRate);
 
-          if (requiresSpecialistRate && !parsedRate) {
-            toast({ title: 'Consultation rate required', description: 'Please enter a valid consultation rate for specialist registration.' });
+          if (requiresSpecialistRate && (!parsedRate || parsedRate < MIN_SPECIALIST_RATE_NGN)) {
+            toast({
+              title: 'Consultation rate required',
+              description: `Specialist consultation rate must be at least NGN ${MIN_SPECIALIST_RATE_NGN.toLocaleString()}.`,
+            });
             setIsLoading(false);
             return;
           }
@@ -1615,6 +1621,7 @@ export default function AuthPage() {
                           onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
                         />
                         <p className="text-xs text-muted-foreground">
+                          Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
                           Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
                           {parsedConsultationRate && (
                             <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>

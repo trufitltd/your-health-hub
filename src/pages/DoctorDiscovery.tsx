@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { MIN_SPECIALIST_RATE_NGN, GP_RATE_NGN } from '@/services/marketplaceTypes';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '@/components/layout';
@@ -745,7 +746,7 @@ export default function DoctorDiscovery() {
     if (isSpecialist && Number.isFinite(parsedRate) && parsedRate > 0) {
       return parsedRate;
     }
-    return isSpecialist ? 10000 : 5000;
+    return isSpecialist ? MIN_SPECIALIST_RATE_NGN : GP_RATE_NGN;
   };
 
   const getStartingPriceForDoctor = (doctor: Doctor) => {
