@@ -58,6 +58,7 @@ import {
   normalizeAppointmentStatus,
   normalizeRescheduleRequestStatus,
   type AppointmentStatus,
+  MIN_SPECIALIST_RATE_NGN,
 } from '@/services/marketplaceTypes';
 import { WalletService } from '@/services/WalletService';
 import { PatientWalletService } from '@/services/PatientWalletService';
@@ -867,9 +868,9 @@ const DoctorPortal = () => {
   const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
   const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
   const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
-  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
+  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate >= MIN_SPECIALIST_RATE_NGN;
   const currentRegisteredRate = Number((doctorRegistration as { rate_per_consultation?: number | null } | null)?.rate_per_consultation || 0);
-  const showMissingSpecialistRateBanner = specialistProfileSelected && currentRegisteredRate <= 0;
+  const showMissingSpecialistRateBanner = specialistProfileSelected && currentRegisteredRate < MIN_SPECIALIST_RATE_NGN;
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
@@ -2693,10 +2694,7 @@ const DoctorPortal = () => {
       if (specialistProfileSelected && !hasValidConsultationRate) {
         toast({
           title: t('auth.toast.consultationRateRequiredTitle', 'Consultation rate required'),
-          description: t(
-            'auth.toast.consultationRateRequiredDescription',
-            'Please enter a valid consultation rate for specialist registration.'
-          ),
+          description: `Please enter a valid specialist consultation rate of at least NGN ${MIN_SPECIALIST_RATE_NGN.toLocaleString()}.`,
           variant: 'destructive',
         });
         return;
@@ -3332,7 +3330,7 @@ const DoctorPortal = () => {
                     <div>
                       <h3 className="font-semibold text-destructive mb-1">Specialist Rate Not Set</h3>
                       <p className="text-sm text-muted-foreground">
-                        You have not set your specialist consultation rate. Go to Settings and set your rate to avoid booking issues.
+                        Your specialist consultation rate must be at least NGN 10,000. Go to Settings and set your rate to avoid booking issues.
                       </p>
                     </div>
                   </div>
@@ -4541,6 +4539,7 @@ const DoctorPortal = () => {
                                   inputMode="decimal"
                                 />
                                 <p className="mt-1 text-xs text-muted-foreground">
+                                  Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
                                   Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
                                   {hasValidConsultationRate && (
                                     <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>

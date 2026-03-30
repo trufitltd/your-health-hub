@@ -297,3 +297,6 @@ export const getDoctorTypeFromSpecialty = (specialty?: string | null): DoctorTyp
   }
   return 'Specialist';
 };
+
+export const GP_RATE_NGN = 5000;
+export const MIN_SPECIALIST_RATE_NGN = 10000;
