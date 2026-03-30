@@ -54,6 +54,7 @@ interface Doctor {
   user_id: string;
   full_name: string;
   email: string;
+  phone_number?: string | null;
   specialty: string;
   experience: string;
   verification_status: 'pending' | 'approved' | 'rejected';
@@ -753,6 +754,7 @@ const CentralAdmin = () => {
     totalPatients: patients.length,
     approvedDoctors: doctors.filter(d => d.verification_status === 'approved').length,
     pendingVerification: doctors.filter(d => d.verification_status === 'pending').length,
+    incompleteDoctors: doctors.filter((d) => !String(d.medical_license_url || '').trim()).length,
     rejectedDoctors: doctors.filter(d => d.verification_status === 'rejected').length,
     totalConsultations: doctors.reduce((sum, d) => sum + (d.total_consultations || 0), 0),
     averageRating: doctors.length > 0 
@@ -1846,6 +1848,7 @@ const CentralAdmin = () => {
                     { id: 'doctors', label: 'Doctors', icon: Users },
                     { id: 'patients', label: 'Patients', icon: Users },
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
+                    { id: 'incomplete-doctors', label: 'Incomplete Doctors', icon: AlertCircle, badge: stats.incompleteDoctors },
                     { id: 'messages', label: 'Messages', icon: Mail, badge: (unreadInboxCount + unreadCooMessages) > 0 ? ((unreadInboxCount + unreadCooMessages) > 99 ? '99+' : unreadInboxCount + unreadCooMessages) : undefined, badgeTone: 'danger' as const },
                     { id: 'clerking', label: 'Clerking', icon: FileText },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
@@ -1973,12 +1976,13 @@ const CentralAdmin = () => {
 
             {/* Quick Stats */}
             {activeTab === 'overview' && (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-4">
                 {[
                   { label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
                   { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
                   { label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
                   { label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
+                  { label: 'Incomplete Doctors', value: stats.incompleteDoctors, icon: AlertCircle, color: 'bg-destructive/10 text-destructive' },
                 ].map((stat, index) => (
                   <motion.div
                     key={stat.label}
@@ -2037,6 +2041,10 @@ const CentralAdmin = () => {
                       <div className="flex justify-between items-center p-3 rounded-lg bg-muted/50">
                         <span className="text-sm font-medium">Pending Verification</span>
                         <span className="text-xl font-bold text-warning">{stats.pendingVerification}</span>
+                      </div>
+                      <div className="flex justify-between items-center p-3 rounded-lg bg-muted/50">
+                        <span className="text-sm font-medium">Incomplete Doctors</span>
+                        <span className="text-xl font-bold text-destructive">{stats.incompleteDoctors}</span>
                       </div>
                       <div className="flex justify-between items-center p-3 rounded-lg bg-muted/50">
                         <span className="text-sm font-medium">Platform Average Rating</span>
@@ -2697,6 +2705,68 @@ const CentralAdmin = () => {
                             </div>
                           </div>
                         ))
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="incomplete-doctors" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Doctors With Incomplete Registration</CardTitle>
+                    <CardDescription>
+                      Doctors missing required registration details (for example, medical license upload).
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {doctorsLoading ? (
+                        <div className="text-center py-8">
+                          <p className="text-muted-foreground">Loading doctors...</p>
+                        </div>
+                      ) : doctors.filter((doctor) => getDoctorReviewStatus(doctor) === 'incomplete').length === 0 ? (
+                        <div className="text-center py-8">
+                          <CheckCircle className="w-12 h-12 text-success mx-auto mb-4" />
+                          <p className="text-muted-foreground">No incomplete doctor registrations.</p>
+                        </div>
+                      ) : (
+                        doctors
+                          .filter((doctor) => getDoctorReviewStatus(doctor) === 'incomplete')
+                          .map((doctor) => (
+                            <div key={doctor.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-destructive/30 bg-destructive/5">
+                              <div className="flex items-center gap-4 mb-3 sm:mb-0">
+                                <Avatar className="w-12 h-12">
+                                  <AvatarImage src={doctor.profile_picture_url} />
+                                  <AvatarFallback className="bg-primary/10 text-primary">
+                                    {doctor.full_name?.split(' ').map((n) => n[0]).join('') || 'DR'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div>
+                                  <p className="font-semibold">Dr. {doctor.full_name}</p>
+                                  <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
+                                  <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
+                                  <p className="text-xs text-muted-foreground">Phone: {doctor.phone_number || 'No phone'}</p>
+                                </div>
+                              </div>
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+                                <Badge className="bg-destructive/10 text-destructive border-destructive/20">
+                                  Incomplete Registration
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setSelectedDoctor(doctor);
+                                    setShowVerificationDialog(true);
+                                  }}
+                                >
+                                  <Eye className="w-4 h-4 mr-2" />
+                                  View Details
+                                </Button>
+                              </div>
+                            </div>
+                          ))
                       )}
                     </div>
                   </CardContent>
