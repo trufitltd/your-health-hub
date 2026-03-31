@@ -1,13 +1,16 @@
-import { motion } from 'framer-motion';
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Calendar, Video, Shield, Clock, Star, Users, Heart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout';
+import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
 import heroDoctor3 from '@/assets/myedoctor_hero3.jpeg';
+import heroDoctor4 from '@/assets/myedoctor_hero4.jpeg';
 
 const Index = () => {
   const { t } = useLanguage();
@@ -48,6 +51,27 @@ const Index = () => {
     { key: 'Dermatology', name: t('landing.specialties.dermatology', 'Dermatology'), icon: Users, color: 'bg-success' },
     { key: 'Pediatrics', name: t('landing.specialties.pediatrics', 'Pediatrics'), icon: Users, color: 'bg-warning' },
   ];
+
+  const heroSlides = [
+    {
+      image: heroDoctor3,
+      text: t('landing.hero.slide1.attractingText', 'Expert medical care from the comfort of your home'),
+    },
+    {
+      image: heroDoctor4,
+      text: t('landing.hero.slide2.attractingText', 'Connect with certified specialists instantly'),
+    }
+  ];
+
+  const [currentSlide, setCurrentSlide] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [heroSlides.length]);
+
   const trustedBadgeText = (() => {
     const template = t('landing.badgeTrusted', 'Trusted by 1000+ patients');
     if (template.includes('{count}')) {
@@ -59,7 +83,7 @@ const Index = () => {
   return (
     <Layout>
       {/* Hero Section */}
-      <section className="relative min-h-screen flex items-center pt-20 overflow-hidden">
+      <section className="relative min-h-screen flex items-center pt-32 sm:pt-40 lg:pt-20 overflow-hidden">
         {/* Background */}
         <div className="absolute inset-0 gradient-subtle" />
         <div className="absolute top-20 right-0 w-[600px] h-[600px] bg-primary/5 rounded-full blur-3xl" />
@@ -103,20 +127,54 @@ const Index = () => {
               </div>
             </motion.div>
 
-            {/* Hero Image */}
+            {/* Hero Image Carousel */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.6, delay: 0.2 }}
               className="relative"
             >
-              <div className="relative rounded-3xl overflow-hidden shadow-2xl">
-                <img
-                  src={heroDoctor3}
-                  alt={t('landing.heroImageAlt', 'Doctor using tablet for telemedicine consultation')}
-                  className="w-full h-auto object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-foreground/20 to-transparent" />
+              <div className="relative rounded-3xl overflow-hidden shadow-2xl h-[400px] md:h-[500px]">
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={currentSlide}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.8 }}
+                    className="absolute inset-0"
+                  >
+                    <img
+                      src={heroSlides[currentSlide].image}
+                      alt={t('landing.heroImageAlt', 'Telemedicine consultation')}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-foreground/60 via-foreground/20 to-transparent flex items-end p-8">
+                      <motion.p 
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.3 }}
+                        className="text-white text-xl md:text-2xl font-semibold max-w-sm"
+                      >
+                        {heroSlides[currentSlide].text}
+                      </motion.p>
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+
+              {/* Slide Indicators */}
+              <div className="absolute bottom-4 right-8 flex gap-2 z-20">
+                {heroSlides.map((_, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setCurrentSlide(index)}
+                    className={cn(
+                      "w-2 h-2 rounded-full transition-all duration-300",
+                      currentSlide === index ? "w-6 bg-white" : "bg-white/50"
+                    )}
+                  />
+                ))}
               </div>
 
               {/* Floating Cards */}
