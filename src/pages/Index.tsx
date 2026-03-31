@@ -134,14 +134,14 @@ const Index = () => {
               transition={{ duration: 0.6, delay: 0.2 }}
               className="relative"
             >
-              <div className="relative rounded-3xl overflow-hidden shadow-2xl h-[400px] md:h-[500px]">
-                <AnimatePresence mode="wait">
+              <div className="relative rounded-3xl overflow-hidden shadow-2xl h-[400px] md:h-[500px] bg-muted">
+                <AnimatePresence>
                   <motion.div
                     key={currentSlide}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 0.8 }}
+                    transition={{ duration: 1.2, ease: "easeInOut" }}
                     className="absolute inset-0"
                   >
                     <img
