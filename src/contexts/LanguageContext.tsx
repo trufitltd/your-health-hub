@@ -5843,6 +5843,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "landing.badgeTrusted": "Trusted by 1000+ patients",
     "landing.heroTitlePrefix": "Your Doctor,",
     "landing.heroTitleHighlight": "Anytime, Anywhere",
+    "landing.hero.slide1.attractingText": "Expert medical care from the comfort of your home",
+    "landing.hero.slide2.attractingText": "Connect with certified specialists instantly",
     "landing.heroDescription":
       "Connect with certified doctors and specialists instantly. Get expert medical consultations through secure video calls, chat, and more — all from the comfort of your home.",
     "landing.ctaBookConsultation": "Book Consultation",

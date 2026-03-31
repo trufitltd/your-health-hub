@@ -13,7 +13,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 
 export function Header() {
   const complianceNotice =
-    'MyE-Doctor is fully In Compliant with Medical and Dental Council of Nigeria (MDCN) professional standards and Nigeria Data Protection Commission (NDPC) data protection regulations';
+    'MyE-Doctor is fully In Compliance with the Medical and Dental Council of Nigeria (MDCN) professional standards, and the Nigeria Data Protection Commission (NDPC) data protection regulations';
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
@@ -158,9 +158,9 @@ export function Header() {
             )}
           </button>
         </nav>
-        <div className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/95 px-3 py-2">
-          <p className="flex items-start justify-center gap-2 text-center text-[11px] leading-relaxed text-emerald-900 md:text-xs">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/95 px-3 py-1.5 md:py-2">
+          <p className="flex items-start justify-center gap-2 text-center text-[10px] leading-tight text-emerald-900 md:text-xs md:leading-relaxed">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
             <span>{complianceNotice}</span>
           </p>
         </div>
