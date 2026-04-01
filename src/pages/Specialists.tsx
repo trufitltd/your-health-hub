@@ -4,7 +4,7 @@ import { Layout } from '@/components/layout';
 import { Search, Star, Clock, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { cn, formatSpecialtyLabel } from '@/lib/utils';
+import { cn, formatSpecialtyLabel, formatDoctorName } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -658,13 +658,15 @@ export default function SpecialistsPage() {
                 className="bg-card rounded-2xl border border-border p-6 hover:shadow-card hover:border-primary/20 transition-all duration-300"
               >
                 <div className="flex items-start gap-4 mb-4">
-                  <img
-                    src={doctor.avatar_url || '/placeholder.svg'}
-                    alt={doctor.name}
-                    className="w-16 h-16 rounded-2xl object-cover"
-                  />
+                  <div className="w-20 h-20 rounded-2xl bg-muted overflow-hidden flex-shrink-0 border border-border">
+                    <img
+                      src={doctor.avatar_url || '/placeholder.svg'}
+                      alt={doctor.name}
+                      className="w-full h-full object-cover object-top"
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold truncate">{doctor.name}</h3>
+                    <h3 className="font-semibold truncate">{formatDoctorName(doctor.name)}</h3>
                     {/* <p className="text-sm text-primary">
                       {getLocalizedSpecialty(
                         doctor.registration,
