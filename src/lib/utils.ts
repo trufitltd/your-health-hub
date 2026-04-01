@@ -5,6 +5,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function formatDoctorName(name?: string | null) {
+  if (!name) return "";
+  const trimmed = name.trim();
+  if (trimmed.toLowerCase().startsWith("dr.") || trimmed.toLowerCase().startsWith("dr ")) {
+    return trimmed;
+  }
+  return `Dr. ${trimmed}`;
+}
+
 export function formatSpecialtyLabel(specialty?: string | null, fallback = "General Practice") {
   const normalized = String(specialty ?? "")
     .replace(/[_-]+/g, " ")
