@@ -14,7 +14,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
-import { formatSpecialtyLabel } from '@/lib/utils';
+import { formatSpecialtyLabel, formatDoctorName, cn } from '@/lib/utils';
 import {
   isBlockingAppointmentRow,
   isTimePointBusyByAppointments,
@@ -1266,15 +1266,14 @@ export default function DoctorDiscovery() {
                         <CardContent className="p-6 flex-1 flex flex-col">
                           <div className="flex items-start justify-between mb-4">
                               <div className="relative">
-                                <Avatar className="w-16 h-16">
-                                  <AvatarImage src={doctor.profile_picture_url} />
-                                  <AvatarFallback className="bg-primary/10 text-primary text-lg">
+                                <Avatar className="w-20 h-20 border border-border shadow-sm">
+                                  <AvatarImage src={doctor.profile_picture_url} className="object-cover object-top" />
+                                  <AvatarFallback className="bg-primary/10 text-primary text-xl">
                                     {doctor.full_name.split(' ').map(n => n[0]).join('')}
                                   </AvatarFallback>
                                 </Avatar>
-                                <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(doctor.online_status).text} />
-                              </div>
-                              <div className="flex gap-2 flex-col">
+                                <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full ${getStatusColor(doctor.online_status).bg} ring-2 ring-white z-10`} title={getStatusColor(doctor.online_status).text} />
+                              </div>                              <div className="flex gap-2 flex-col">
                                 <Badge variant="outline" className="text-xs">
                                   {doctor.experience_years
                                     ? `${doctor.experience_years}y exp`
@@ -1291,7 +1290,7 @@ export default function DoctorDiscovery() {
                               </div>
                             </div>
 
-                            <h3 className="font-bold text-lg mb-1">{doctor.full_name}</h3>
+                            <h3 className="font-bold text-lg mb-1">{formatDoctorName(doctor.full_name)}</h3>
                             <p className="text-sm text-primary font-medium mb-2">{formatSpecialtyLabel(doctor.specialty)}</p>
                             {localizedDoctorBio && (
                               <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{localizedDoctorBio}</p>
@@ -1382,19 +1381,19 @@ export default function DoctorDiscovery() {
 
                 <div className="space-y-6">
                   {/* Header */}
-                  <div className="flex gap-6">
-                    <div className="relative">
-                      <Avatar className="w-24 h-24">
-                        <AvatarImage src={selectedDoctor.profile_picture_url} />
-                        <AvatarFallback className="bg-primary/10 text-primary text-2xl">
+                  <div className="flex flex-col sm:flex-row gap-6">
+                    <div className="relative mx-auto sm:mx-0">
+                      <Avatar className="w-28 h-28 border-2 border-primary/10 shadow-md">
+                        <AvatarImage src={selectedDoctor.profile_picture_url} className="object-cover object-top" />
+                        <AvatarFallback className="bg-primary/10 text-primary text-3xl">
                           {selectedDoctor.full_name.split(' ').map(n => n[0]).join('')}
                         </AvatarFallback>
                       </Avatar>
-                      <div className={`absolute bottom-0 right-0 w-5 h-5 rounded-full ${getStatusColor(selectedDoctor.online_status).bg} ring-2 ring-white`} title={getStatusColor(selectedDoctor.online_status).text} />
+                      <div className={`absolute bottom-0 right-1 w-6 h-6 rounded-full ${getStatusColor(selectedDoctor.online_status).bg} ring-2 ring-white z-10`} title={getStatusColor(selectedDoctor.online_status).text} />
                     </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h2 className="text-2xl font-bold">Dr. {selectedDoctor.full_name}</h2>
+                    <div className="flex-1 text-center sm:text-left">
+                      <div className="flex flex-col sm:flex-row items-center sm:items-baseline gap-2 mb-2">
+                        <h2 className="text-2xl font-bold">{formatDoctorName(selectedDoctor.full_name)}</h2>
                         <Badge variant="outline" className="text-xs">{getStatusColor(selectedDoctor.online_status).text}</Badge>
                       </div>
                         <p className="text-lg text-primary font-medium mb-3">{formatSpecialtyLabel(selectedDoctor.specialty)}</p>
