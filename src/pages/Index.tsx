@@ -11,6 +11,7 @@ import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
 import heroDoctor3 from '@/assets/myedoctor_hero3.jpeg';
 import heroDoctor4 from '@/assets/myedoctor_hero4.jpeg';
+import heroDoctor5 from '@/assets/myedoctor_hero5.jpeg';
 
 const Index = () => {
   const { t } = useLanguage();
@@ -54,12 +55,16 @@ const Index = () => {
 
   const heroSlides = [
     {
+      image: heroDoctor4,
+      text: t('landing.hero.slide2.attractingText', 'Connect with certified specialists instantly'),
+    },
+    {
       image: heroDoctor3,
       text: t('landing.hero.slide1.attractingText', 'Expert medical care from the comfort of your home'),
     },
     {
-      image: heroDoctor4,
-      text: t('landing.hero.slide2.attractingText', 'Connect with certified specialists instantly'),
+      image: heroDoctor5,
+      text: t('landing.hero.slide3.attractingText', 'Secure and private healthcare for your peace of mind'),
     }
   ];
 
@@ -83,7 +88,7 @@ const Index = () => {
   return (
     <Layout>
       {/* Hero Section */}
-      <section className="relative min-h-screen flex items-center pt-32 sm:pt-40 lg:pt-20 overflow-hidden">
+      <section className="relative min-h-screen flex items-center pt-32 sm:pt-40 lg:pt-36 overflow-hidden">
         {/* Background */}
         <div className="absolute inset-0 gradient-subtle" />
         <div className="absolute top-20 right-0 w-[600px] h-[600px] bg-primary/5 rounded-full blur-3xl" />
@@ -134,7 +139,7 @@ const Index = () => {
               transition={{ duration: 0.6, delay: 0.2 }}
               className="relative"
             >
-              <div className="relative rounded-3xl overflow-hidden shadow-2xl h-[400px] md:h-[500px] bg-muted">
+              <div className="relative rounded-3xl overflow-hidden shadow-2xl h-[450px] md:h-[650px] lg:h-[750px] bg-muted">
                 <AnimatePresence>
                   <motion.div
                     key={currentSlide}
@@ -147,14 +152,14 @@ const Index = () => {
                     <img
                       src={heroSlides[currentSlide].image}
                       alt={t('landing.heroImageAlt', 'Telemedicine consultation')}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover object-[center_top]"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-foreground/60 via-foreground/20 to-transparent flex items-end p-8">
+                    <div className="absolute inset-0 bg-gradient-to-t from-foreground/70 via-foreground/20 to-transparent flex items-end p-8 md:p-12">
                       <motion.p 
                         initial={{ y: 20, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         transition={{ delay: 0.3 }}
-                        className="text-white text-xl md:text-2xl font-semibold max-w-sm"
+                        className="text-white text-xl md:text-3xl font-bold max-w-lg leading-tight"
                       >
                         {heroSlides[currentSlide].text}
                       </motion.p>
