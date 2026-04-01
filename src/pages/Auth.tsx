@@ -965,16 +965,32 @@ export default function AuthPage() {
         if (error) {
           console.error('Login error:', error);
           const normalizedError = String(error.message || '').toLowerCase();
-          const looksLikeUnregisteredOrInvalidCredentials =
-            normalizedError.includes('invalid login credentials')
-            || normalizedError.includes('invalid credentials')
-            || normalizedError.includes('email not confirmed')
-            || normalizedError.includes('user not found');
+          
+          if (normalizedError.includes('invalid login credentials') || normalizedError.includes('invalid credentials')) {
+            // Check if the email exists to provide a more specific error
+            try {
+              const { data: emailExists, error: checkError } = await supabase.rpc('is_email_registered', {
+                p_email: email.trim().toLowerCase()
+              });
 
-          if (looksLikeUnregisteredOrInvalidCredentials) {
+              if (!checkError && emailExists === true) {
+                // Email exists, so it's a wrong password
+                toast({
+                  title: 'Incorrect password',
+                  description: 'The password you entered is incorrect. Please try again or reset your password.',
+                  variant: 'destructive',
+                });
+                setIsLoading(false);
+                return;
+              }
+            } catch (err) {
+              console.error('Error checking email existence:', err);
+            }
+
+            // Either email doesn't exist or check failed - treat as unregistered
             toast({
               title: 'Account not found',
-              description: 'You have not signed up yet. Please click Get Started to create your account.',
+              description: 'We could not find an account with this email. Please check your spelling or click Get Started to create an account.',
             });
             setMode('register');
             navigate('/auth?mode=register');
@@ -982,7 +998,31 @@ export default function AuthPage() {
             return;
           }
 
-          toast({ title: 'Sign in failed', description: error.message });
+          if (normalizedError.includes('email not confirmed')) {
+            toast({
+              title: 'Email not verified',
+              description: 'Please check your inbox and verify your email address before signing in.',
+            });
+            setIsLoading(false);
+            return;
+          }
+
+          if (normalizedError.includes('user not found')) {
+            toast({
+              title: 'Account not found',
+              description: 'We could not find an account with this email address.',
+            });
+            setMode('register');
+            navigate('/auth?mode=register');
+            setIsLoading(false);
+            return;
+          }
+
+          toast({ 
+            title: 'Sign in failed', 
+            description: error.message,
+            variant: 'destructive'
+          });
           setIsLoading(false);
           return;
         }
