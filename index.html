@@ -13,12 +13,22 @@
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="icon" type="image/png" href="/icon-192.png" />
 
-    <meta property="og:title" content="MyEdoctor" />
-    <meta property="og:type" content="website" />
-
-    <!-- Paystack Inline JS (loaded on all environments by default) -->
     <script>
       (function () {
+        // Detect current path to swap PWA manifest
+        const path = window.location.pathname;
+        const manifestLink = document.querySelector('link[rel="manifest"]');
+        if (manifestLink) {
+          if (path.startsWith('/admin')) {
+            manifestLink.setAttribute('href', '/admin-manifest.json');
+            document.title = "MyEdoctor Admin";
+          } else if (path.startsWith('/coo')) {
+            manifestLink.setAttribute('href', '/coo-manifest.json');
+            document.title = "MyEdoctor COO";
+          }
+        }
+
+        // Paystack Inline JS (loaded on all environments by default)
         const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
         const params = new URLSearchParams(location.search);
         const disableRemote = params.get('disablePaystackRemote') === 'true'
