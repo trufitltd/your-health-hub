@@ -10,7 +10,7 @@ import { useLocaleFormatter } from '@/lib/locale';
 type CooMessage = {
   id: string;
   thread_id: string;
-  thread_type: 'admin' | 'patient';
+  thread_type: 'admin' | 'patient' | 'doctor';
   sender_id: string;
   sender_role: 'coo' | 'admin' | 'patient' | 'doctor';
   sender_name: string;
@@ -19,9 +19,9 @@ type CooMessage = {
 };
 
 interface CooThreadChatProps {
-  /** The thread_id: patient's user_id for patient threads, or 'admin' for admin thread */
+  /** The thread_id: patient's user_id, doctor's user_id, or 'admin' */
   threadId: string;
-  threadType: 'admin' | 'patient';
+  threadType: 'admin' | 'patient' | 'doctor';
   /** The authenticated user's id */
   userId: string;
   /** 'admin', 'patient' or 'doctor' — the role of the person using this component */
