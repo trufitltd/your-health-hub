@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Calendar, Video, Shield, Clock, Star, Users, Heart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout';
+import { FloatingLanguageSelector } from "@/components/LanguageSelector";
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
@@ -378,6 +379,7 @@ const Index = () => {
           </motion.div>
         </div>
       </section>
+      <FloatingLanguageSelector />
     </Layout>
   );
 };

@@ -54,7 +54,7 @@ type ClerkingPanelText = {
 export const CLERKING_PANEL_TEXT: Record<AppLanguage, ClerkingPanelText> = {
   en: {
     panelTitle: 'Clerking',
-    addClerking: 'Add Clerking',
+    addClerking: 'Clinical Notes',
     viewPatientFolder: 'View Patient Folder',
     saveClerking: 'Save Clerking',
     saving: 'Saving...',
@@ -730,7 +730,7 @@ ${ePrescription}
     if (payloadSignature === lastSavedSignatureRef.current) {
       toast({
         title: 'Already Saved',
-        description: 'This clerking content was just saved.'
+        description: 'These clinical notes were just saved.'
       });
       return;
     }
@@ -845,7 +845,7 @@ ${ePrescription}
       localStorage.removeItem(storageKey);
 
       toast({
-        title: 'Clerking Saved',
+        title: 'Clinical Notes Saved',
         description: 'Clinical notes recorded successfully.'
       });
       onClerkingSaved?.();
@@ -855,7 +855,7 @@ ${ePrescription}
       console.error(err);
       toast({
         title: 'Error',
-        description: 'Failed to save clerking.',
+        description: 'Failed to save clinical notes.',
         variant: 'destructive'
       });
     } finally {
