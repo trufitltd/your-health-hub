@@ -46,7 +46,6 @@ import { PricingManagementPanel } from '@/components/admin/PricingManagementPane
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { LanguageSelector } from '@/components/LanguageSelector';
 import { useLocaleFormatter } from '@/lib/locale';
 import { CooThreadChat } from '@/components/coo/CooThreadChat';
 
@@ -1873,9 +1872,6 @@ const CentralAdmin = () => {
             </Link>
 
             <div className="flex items-center gap-4">
-              <div className="hidden md:block">
-                <LanguageSelector />
-              </div>
 
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
                 <Shield className="w-4 h-4 text-primary" />
@@ -1906,9 +1902,6 @@ const CentralAdmin = () => {
             <Card className="lg:sticky lg:top-24 rounded-lg">
               <CardContent className="p-3 sm:p-4">
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
-                  <div className="lg:hidden px-3 pb-2">
-                    <LanguageSelector />
-                  </div>
                   {[
                     { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
                     { id: 'appointments', label: 'Appointments', icon: Clock, badge: unreadAppointmentCount > 0 ? (unreadAppointmentCount > 99 ? '99+' : unreadAppointmentCount) : undefined, badgeTone: 'danger' as const },
