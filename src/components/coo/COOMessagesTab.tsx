@@ -15,7 +15,7 @@ type CooMessage = {
   thread_id: string;
   thread_type: 'admin' | 'patient';
   sender_id: string;
-  sender_role: 'coo' | 'admin' | 'patient';
+  sender_role: 'coo' | 'admin' | 'patient' | 'doctor';
   sender_name: string;
   content: string;
   created_at: string;
@@ -64,6 +64,13 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeIdRef = useRef<string | null>(null);
   const readKey = `coo-messages-read-${cooUserId}`;
+  const formatSenderName = (msg: CooMessage) => {
+    const base = String(msg.sender_name || '').trim() || 'User';
+    if (msg.sender_role === 'doctor') {
+      return /^dr\.?\s/i.test(base) ? base : `Dr. ${base}`;
+    }
+    return base;
+  };
 
   const getReadState = (): Record<string, string> => {
     try { return JSON.parse(localStorage.getItem(readKey) || '{}'); }
@@ -324,13 +331,13 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
                       {!isMine && (
                         <Avatar className="w-7 h-7 flex-shrink-0">
                           <AvatarFallback className="text-[10px] bg-muted">
-                            {msg.sender_name.slice(0, 2).toUpperCase()}
+                            {formatSenderName(msg).slice(0, 2).toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                       )}
                       <div className={cn('flex flex-col', isMine ? 'items-end' : 'items-start')}>
                         {!isMine && (
-                          <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{msg.sender_name}</span>
+                          <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{formatSenderName(msg)}</span>
                         )}
                         <div className={cn(
                           'rounded-2xl px-3 py-2 text-sm shadow-sm',

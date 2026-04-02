@@ -2,9 +2,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
+import { useEffect } from "react";
 import { FloatingLanguageSelector } from "@/components/LanguageSelector";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
@@ -29,6 +30,36 @@ import CompleteRegistration from "./pages/CompleteRegistration";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 const queryClient = new QueryClient();
+
+// Component to handle PWA manifest swapping based on route
+const PwaManifestHandler = () => {
+  const location = useLocation();
+
+  useEffect(() => {
+    const path = location.pathname;
+    const manifestLink = document.querySelector('link[rel="manifest"]');
+    if (manifestLink) {
+      let newHref = '/manifest.webmanifest';
+      let newTitle = "MyEdoctor";
+
+      if (path.startsWith('/admin')) {
+        newHref = '/admin-manifest.json';
+        newTitle = "MyEdoctor Admin";
+      } else if (path.startsWith('/coo')) {
+        newHref = '/coo-manifest.json';
+        newTitle = "MyEdoctor COO";
+      }
+
+      if (manifestLink.getAttribute('href') !== newHref) {
+        manifestLink.setAttribute('href', newHref);
+        document.title = newTitle;
+        console.log(`[PWA] Route change detected. Manifest swapped to: ${newHref}`);
+      }
+    }
+  }, [location.pathname]);
+
+  return null;
+};
 
 // Global error handling for Paystack cross-origin issues
 if (typeof window !== 'undefined') {
@@ -82,6 +113,7 @@ const App = () => (
       <AuthProvider>
         <LanguageProvider>
           <BrowserRouter>
+            <PwaManifestHandler />
             <Routes>
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />

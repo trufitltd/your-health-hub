@@ -4,7 +4,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
-  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2,
+  Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2, Send,
   Badge as BadgeIcon, Settings
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog,
@@ -40,7 +41,7 @@ import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { formatSpecialtyLabel } from '@/lib/utils';
+import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
@@ -55,6 +56,7 @@ interface Doctor {
   full_name: string;
   email: string;
   phone_number?: string | null;
+  city?: string | null;
   specialty: string;
   experience: string;
   verification_status: 'pending' | 'approved' | 'rejected';
@@ -124,6 +126,88 @@ interface AdminClerkingRow {
   doctor_name: string;
   patient_name: string;
 }
+
+type ParsedInboxThreadMessage = {
+  sender: 'admin' | 'user';
+  senderName: string;
+  content: string;
+  timestamp?: string;
+};
+
+const cleanInboxThreadContent = (value: string) => {
+  let text = String(value || '').replace(/\r\n/g, '\n');
+  text = text.replace(/^\s*\[portal:[^\]]+\]\s*$/gim, '');
+  text = text.replace(/^\s*Subject:\s.*$/gim, '');
+  text = text.replace(/^\s*From:\s.*$/gim, '');
+  text = text.replace(/^\s*Sender (Role|User ID|Name|Email|Phone):\s.*$/gim, '');
+  text = text.replace(/\n?---\n[\s\S]*$/g, '');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  return text;
+};
+
+const inferInboxSenderRole = (subject: string | null | undefined, body: string | null | undefined) => {
+  const source = `${subject || ''}\n${body || ''}`.toLowerCase();
+  if (source.includes('sender role: doctor') || source.includes('[portal:doctor]')) return 'doctor';
+  if (source.includes('sender role: patient') || source.includes('[portal:patient]')) return 'patient';
+  if (source.includes('[portal:admin]')) return 'admin';
+  return 'user';
+};
+
+const formatInboxSenderName = (row: {
+  first_name?: string | null;
+  last_name?: string | null;
+  subject?: string | null;
+  message?: string | null;
+}) => {
+  const rawName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || 'User';
+  const senderRole = inferInboxSenderRole(row.subject, row.message);
+  if (senderRole === 'doctor' && !/^dr\.?\s/i.test(rawName)) {
+    return `Dr. ${rawName}`;
+  }
+  return rawName;
+};
+
+const parseInboxThreadMessages = (row: {
+  created_at?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  subject?: string | null;
+  message?: string | null;
+}): ParsedInboxThreadMessage[] => {
+  const body = String(row.message || '').replace(/\r\n/g, '\n');
+  const senderName = formatInboxSenderName(row);
+  const segments: ParsedInboxThreadMessage[] = [];
+  const markerRegex = /--- (Admin|User) Reply \((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\) ---/g;
+  const markers = Array.from(body.matchAll(markerRegex));
+  const firstMarkerIndex = markers[0]?.index ?? body.length;
+  const initialContent = cleanInboxThreadContent(body.slice(0, firstMarkerIndex));
+  const adminInitiated = /\[portal:admin\]/i.test(body);
+
+  if (initialContent) {
+    segments.push({
+      sender: adminInitiated ? 'admin' : 'user',
+      senderName: adminInitiated ? 'Admin' : senderName,
+      content: initialContent,
+      timestamp: row.created_at || undefined,
+    });
+  }
+
+  markers.forEach((marker, index) => {
+    const start = (marker.index || 0) + marker[0].length;
+    const end = markers[index + 1]?.index ?? body.length;
+    const content = cleanInboxThreadContent(body.slice(start, end));
+    if (!content) return;
+    const sender = marker[1].toLowerCase() === 'admin' ? 'admin' : 'user';
+    segments.push({
+      sender,
+      senderName: sender === 'admin' ? 'Admin' : senderName,
+      content,
+      timestamp: `${marker[2].replace(' ', 'T')}:00Z`,
+    });
+  });
+
+  return segments;
+};
 
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
@@ -912,27 +996,10 @@ const CentralAdmin = () => {
   const inboxTotalCount = inboxRows.length > 0 ? Number(inboxRows[0].total_count || 0) : 0;
   const inboxTotalPages = inboxTotalCount > 0 ? Math.ceil(inboxTotalCount / inboxPageSize) : 1;
   const selectedMessage = inboxRows.find((row: any) => row.id === selectedMessageId) || null;
-  const formatInboxMessage = (value: unknown): string => {
-    if (typeof value === 'string') {
-      const normalized = value.replace(/\r\n/g, '\n').trim();
-      return normalized.length > 0 ? normalized : 'No message content provided.';
-    }
-    if (value === null || value === undefined) return 'No message content provided.';
-    if (typeof value === 'object') {
-      try {
-        return JSON.stringify(value, null, 2);
-      } catch {
-        return 'Unable to display message content.';
-      }
-    }
-    return String(value);
-  };
-  const inferSenderRole = (subject: string | null | undefined, body: string | null | undefined) => {
-    const source = `${subject || ''}\n${body || ''}`.toLowerCase();
-    if (source.includes('sender role: doctor') || source.includes('[portal:doctor]')) return 'doctor';
-    if (source.includes('sender role: patient') || source.includes('[portal:patient]')) return 'patient';
-    return 'user';
-  };
+  const selectedThreadMessages = useMemo(
+    () => (selectedMessage ? parseInboxThreadMessages(selectedMessage) : []),
+    [selectedMessage],
+  );
 
   useEffect(() => {
     if (!selectedMessage) {
@@ -2067,21 +2134,27 @@ const CentralAdmin = () => {
                       ) : (
                         contactMessages.slice(0, 6).map((message: any) => (
                           <div key={message.id} className="p-3 rounded-lg border border-border bg-muted/30">
+                            {(() => {
+                              const parsedMessages = parseInboxThreadMessages(message);
+                              const previewText = parsedMessages[0]?.content || 'No message content.';
+                              return (
+                                <>
                             <div className="flex items-start justify-between gap-3">
                               <div>
                                 <p className="text-sm font-semibold">
-                                  {message.first_name} {message.last_name}
+                                  {formatInboxSenderName(message)}
                                 </p>
-                                <p className="text-xs text-muted-foreground">{message.email}</p>
                               </div>
                               <span className="text-xs text-muted-foreground">
-                                {message.created_at ? formatDate(message.created_at) : ''}
+                                {message.created_at ? formatDateTime(message.created_at) : ''}
                               </span>
                             </div>
-                            <p className="text-sm font-medium mt-2">{message.subject}</p>
                             <p className="text-xs text-muted-foreground mt-1 line-clamp-2 [overflow-wrap:anywhere]">
-                              {formatInboxMessage(message.message)}
+                              {previewText}
                             </p>
+                                </>
+                              );
+                            })()}
                           </div>
                         ))
                       )}
@@ -2400,63 +2473,75 @@ const CentralAdmin = () => {
                       </div>
                     </div>
 
-                    <div className="grid lg:grid-cols-3 gap-4">
-                      <div className="lg:col-span-2 space-y-3">
-                        {inboxLoading ? (
-                          <p className="text-sm text-muted-foreground">Loading messages...</p>
-                        ) : inboxRows.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No messages match your filters.</p>
-                        ) : (
-                          inboxRows.map((message: any) => {
-                            const threadReadAtMs = getThreadReadState()[String(message.id || '')] || 0;
-                            const body = String(message.message || '');
-                            const createdAtMs = new Date(String(message.created_at || '')).getTime();
-                            const adminInitiated = /\[portal:admin\]/i.test(body);
-                            const rowUnread = !adminInitiated && !Number.isNaN(createdAtMs) && createdAtMs > threadReadAtMs ? 1 : 0;
-                            const replyUnread = countUserReplyMarkersAfter(body, threadReadAtMs);
-                            const threadUnreadCount = rowUnread + replyUnread;
+                    <div className="flex h-[calc(100vh-15rem)] min-h-[520px] max-h-[820px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
+                      <div className={cn(
+                        'flex flex-col border-r border-border bg-muted/10 w-full lg:w-[320px] lg:flex-shrink-0',
+                        selectedMessage ? 'hidden lg:flex' : 'flex',
+                      )}>
+                        <div className="p-3 border-b border-border flex-shrink-0">
+                          <p className="text-sm font-semibold text-muted-foreground">
+                            Conversations ({inboxTotalCount})
+                          </p>
+                        </div>
+                        <ScrollArea className="flex-1">
+                          {inboxLoading ? (
+                            <p className="p-3 text-sm text-muted-foreground">Loading messages...</p>
+                          ) : inboxRows.length === 0 ? (
+                            <p className="p-3 text-sm text-muted-foreground">No messages match your filters.</p>
+                          ) : (
+                            inboxRows.map((message: any) => {
+                              const threadReadAtMs = getThreadReadState()[String(message.id || '')] || 0;
+                              const body = String(message.message || '');
+                              const createdAtMs = new Date(String(message.created_at || '')).getTime();
+                              const adminInitiated = /\[portal:admin\]/i.test(body);
+                              const rowUnread = !adminInitiated && !Number.isNaN(createdAtMs) && createdAtMs > threadReadAtMs ? 1 : 0;
+                              const replyUnread = countUserReplyMarkersAfter(body, threadReadAtMs);
+                              const threadUnreadCount = rowUnread + replyUnread;
+                              const senderName = formatInboxSenderName(message);
+                              const parsedMessages = parseInboxThreadMessages(message);
+                              const previewText = parsedMessages[0]?.content || 'No message content.';
+                              const isActive = selectedMessageId === message.id;
 
-                            return (
-                            <button
-                              key={message.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedMessageId(message.id);
-                                markAdminThreadRead(message);
-                              }}
-                              className={`w-full text-left p-4 rounded-xl border transition ${
-                                selectedMessageId === message.id
-                                  ? 'border-primary bg-primary/5'
-                                  : 'border-border hover:border-primary/30 hover:bg-muted/40'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <p className="font-semibold text-sm">
-                                    {message.first_name} {message.last_name}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">{message.email}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {threadUnreadCount > 0 ? (
-                                    <span className="w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-[10px] flex items-center justify-center">
-                                      {threadUnreadCount > 99 ? '99+' : threadUnreadCount}
-                                    </span>
-                                  ) : null}
-                                  <span className="text-xs text-muted-foreground">
-                                    {message.created_at ? formatDate(message.created_at) : ''}
-                                  </span>
-                                </div>
-                              </div>
-                              <p className="text-sm font-medium mt-2">{message.subject}</p>
-                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2 [overflow-wrap:anywhere]">
-                                {formatInboxMessage(message.message)}
-                              </p>
-                            </button>
-                          )})
-                        )}
-
-                        <div className="flex items-center justify-between pt-2">
+                              return (
+                                <button
+                                  key={message.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedMessageId(message.id);
+                                    markAdminThreadRead(message);
+                                  }}
+                                  className={cn(
+                                    'w-full flex items-start gap-3 p-3 text-left transition-colors hover:bg-muted/50 border-b border-border/50 last:border-0',
+                                    isActive && 'bg-primary/5 border-l-4 border-l-primary',
+                                  )}
+                                >
+                                  <Avatar className="w-9 h-9 flex-shrink-0">
+                                    <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                                      {senderName.slice(0, 2).toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-1">
+                                      <span className="text-sm font-medium truncate">{senderName}</span>
+                                      {threadUnreadCount > 0 ? (
+                                        <Badge variant="destructive" className="h-5 px-1.5 text-[10px] flex-shrink-0">
+                                          {threadUnreadCount > 99 ? '99+' : threadUnreadCount}
+                                        </Badge>
+                                      ) : null}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground truncate mt-0.5">{previewText}</p>
+                                    <div className="flex items-center justify-end mt-0.5">
+                                      <span className="text-[10px] text-muted-foreground">
+                                        {message.created_at ? formatDateTime(message.created_at) : ''}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })
+                          )}
+                        </ScrollArea>
+                        <div className="p-3 border-t border-border flex items-center justify-between">
                           <Button
                             size="sm"
                             variant="outline"
@@ -2476,67 +2561,94 @@ const CentralAdmin = () => {
                         </div>
                       </div>
 
-                      <div className="lg:col-span-1">
-                        <div className="p-4 rounded-xl border border-border bg-muted/30 h-full">
-                          {!selectedMessage ? (
-                            <p className="text-sm text-muted-foreground">Select a message to view details.</p>
-                          ) : (
-                            <div className="space-y-3">
+                      <div className={cn('flex flex-col flex-1 min-w-0 bg-background', selectedMessage ? 'flex' : 'hidden lg:flex')}>
+                        {!selectedMessage ? (
+                          <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-muted/5">
+                            <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+                              <Send className="w-6 h-6 text-primary" />
+                            </div>
+                            <p className="font-semibold">Select a conversation</p>
+                            <p className="text-sm text-muted-foreground mt-1">Choose a message thread to start replying.</p>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="p-3 border-b border-border flex items-center gap-3 flex-shrink-0">
+                              <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSelectedMessageId(null)}>
+                                <XCircle className="w-5 h-5" />
+                              </Button>
+                              <Avatar className="w-9 h-9">
+                                <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                                  {formatInboxSenderName(selectedMessage).slice(0, 2).toUpperCase()}
+                                </AvatarFallback>
+                              </Avatar>
                               <div>
-                                <p className="text-sm font-semibold">From</p>
-                                <p className="text-sm">{selectedMessage.first_name} {selectedMessage.last_name}</p>
-                                <p className="text-xs text-muted-foreground">{selectedMessage.email}</p>
-                                {selectedMessage.phone && (
-                                  <p className="text-xs text-muted-foreground">{selectedMessage.phone}</p>
-                                )}
-                              </div>
-                              <div>
-                                <p className="text-sm font-semibold">Subject</p>
-                                <p className="text-sm">{selectedMessage.subject}</p>
-                              </div>
-                              <div>
-                                <p className="text-sm font-semibold">Sender Type</p>
-                                <p className="text-xs text-muted-foreground uppercase tracking-wide">
-                                  {inferSenderRole(selectedMessage.subject, selectedMessage.message)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-sm font-semibold">Received</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {selectedMessage.created_at ? formatDateTime(selectedMessage.created_at) : ''}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-sm font-semibold">Message</p>
-                                <p className="text-sm text-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">
-                                  {formatInboxMessage(selectedMessage.message)}
-                                </p>
-                              </div>
-                              <div className="pt-2 border-t border-border space-y-2">
-                                <p className="text-sm font-semibold">Reply to sender</p>
-                                <Input
-                                  value={replySubject}
-                                  onChange={(e) => setReplySubject(e.target.value)}
-                                  placeholder="Reply subject"
-                                />
-                                <Textarea
-                                  value={replyBody}
-                                  onChange={(e) => setReplyBody(e.target.value)}
-                                  placeholder="Write your reply..."
-                                  className="min-h-[120px]"
-                                />
-                                <Button
-                                  size="sm"
-                                  onClick={handleSendInboxReply}
-                                  disabled={isSendingReply || !selectedMessage?.email}
-                                  className="w-full"
-                                >
-                                  {isSendingReply ? 'Sending reply...' : 'Send Reply'}
-                                </Button>
+                                <p className="text-sm font-semibold">{formatInboxSenderName(selectedMessage)}</p>
+                                <Badge variant="outline" className="text-[10px]">
+                                  Thread started {selectedMessage.created_at ? formatDateTime(selectedMessage.created_at) : ''}
+                                </Badge>
                               </div>
                             </div>
-                          )}
-                        </div>
+
+                            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                              {selectedThreadMessages.length === 0 ? (
+                                <p className="text-sm text-muted-foreground text-center mt-8">No message content.</p>
+                              ) : (
+                                selectedThreadMessages.map((threadMsg, index) => {
+                                  const isMine = threadMsg.sender === 'admin';
+                                  return (
+                                    <div key={`${selectedMessage.id}-${index}`} className={cn('flex gap-2 max-w-[80%]', isMine ? 'ml-auto flex-row-reverse' : '')}>
+                                      {!isMine && (
+                                        <Avatar className="w-7 h-7 flex-shrink-0">
+                                          <AvatarFallback className="text-[10px] bg-muted">
+                                            {threadMsg.senderName.slice(0, 2).toUpperCase()}
+                                          </AvatarFallback>
+                                        </Avatar>
+                                      )}
+                                      <div className={cn('flex flex-col', isMine ? 'items-end' : 'items-start')}>
+                                        {!isMine && (
+                                          <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{threadMsg.senderName}</span>
+                                        )}
+                                        <div className={cn(
+                                          'rounded-2xl px-3 py-2 text-sm shadow-sm',
+                                          isMine ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm',
+                                        )}>
+                                          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{threadMsg.content}</p>
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground mt-0.5 px-1">
+                                          {threadMsg.timestamp ? formatDateTime(threadMsg.timestamp) : ''}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+
+                            <div className="p-3 border-t border-border bg-background flex-shrink-0 space-y-2">
+                              <form
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  handleSendInboxReply();
+                                }}
+                                className="flex items-center gap-2"
+                              >
+                                <Input
+                                  value={replyBody}
+                                  onChange={(e) => setReplyBody(e.target.value)}
+                                  placeholder="Type a reply..."
+                                  className="flex-1"
+                                />
+                                <Button
+                                  type="submit"
+                                  size="icon"
+                                  disabled={isSendingReply || !selectedMessage?.email || !replyBody.trim()}
+                                >
+                                  <Send className="w-4 h-4" />
+                                </Button>
+                              </form>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </CardContent>
@@ -2661,6 +2773,7 @@ const CentralAdmin = () => {
                                 <p className="font-semibold">Dr. {doctor.full_name}</p>
                                 <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 <p className="text-xs text-muted-foreground">{doctor.email}</p>
+                                <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
                                 <p className="text-xs text-muted-foreground">
                                   Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                 </p>
@@ -2747,6 +2860,7 @@ const CentralAdmin = () => {
                                   <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                   <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                                   <p className="text-xs text-muted-foreground">Phone: {doctor.phone_number || 'No phone'}</p>
+                                  <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
                                 </div>
                               </div>
                               <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
@@ -2846,6 +2960,7 @@ const CentralAdmin = () => {
                                   <div>
                                     <p className="font-semibold">Dr. {doctor.full_name}</p>
                                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
+                                    <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
                                     <p className="text-xs text-muted-foreground">
                                       Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                     </p>

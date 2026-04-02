@@ -578,6 +578,9 @@ const PatientPortal = () => {
     email: '',
     phone: '',
     age: '',
+    city: '',
+    state: '',
+    country: '',
     bloodType: '',
     preferredLanguage: language as AppLanguage,
   });
@@ -593,6 +596,9 @@ const PatientPortal = () => {
         email: patientRegistration.email || '',
         phone: patientRegistration.phone_number || '',
         age: patientRegistration.age?.toString() || '',
+        city: patientRegistration.city || '',
+        state: patientRegistration.state || '',
+        country: patientRegistration.country || '',
         bloodType: patientRegistration.blood_type || '',
         preferredLanguage: isSupportedAppLanguage((patientRegistration as { preferred_language?: unknown })?.preferred_language)
           ? ((patientRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
@@ -2382,6 +2388,9 @@ const PatientPortal = () => {
         email: profileFormData.email,
         phone_number: profileFormData.phone,
         age: parseInt(profileFormData.age) || null,
+        city: profileFormData.city.trim(),
+        state: profileFormData.state.trim(),
+        country: profileFormData.country.trim(),
         blood_type: profileFormData.bloodType,
       };
       const { error } = await supabase
@@ -5150,6 +5159,30 @@ const PatientPortal = () => {
                             value={profileFormData.age || patientRegistration?.age?.toString() || ''}
                             onChange={(e) => setProfileFormData({...profileFormData, age: e.target.value})}
                             className="mt-1" 
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">{t('auth.fields.city', 'City')}</label>
+                          <Input
+                            value={profileFormData.city || patientRegistration?.city || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, city: e.target.value})}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">{t('auth.fields.state', 'State')}</label>
+                          <Input
+                            value={profileFormData.state || patientRegistration?.state || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, state: e.target.value})}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">{t('auth.fields.country', 'Country')}</label>
+                          <Input
+                            value={profileFormData.country || patientRegistration?.country || ''}
+                            onChange={(e) => setProfileFormData({...profileFormData, country: e.target.value})}
+                            className="mt-1"
                           />
                         </div>
                         <div>

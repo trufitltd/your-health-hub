@@ -12,7 +12,7 @@ type CooMessage = {
   thread_id: string;
   thread_type: 'admin' | 'patient';
   sender_id: string;
-  sender_role: 'coo' | 'admin' | 'patient';
+  sender_role: 'coo' | 'admin' | 'patient' | 'doctor';
   sender_name: string;
   content: string;
   created_at: string;
@@ -24,8 +24,8 @@ interface CooThreadChatProps {
   threadType: 'admin' | 'patient';
   /** The authenticated user's id */
   userId: string;
-  /** 'admin' or 'patient' — the role of the person using this component */
-  senderRole: 'admin' | 'patient';
+  /** 'admin', 'patient' or 'doctor' — the role of the person using this component */
+  senderRole: 'admin' | 'patient' | 'doctor';
   senderName: string;
   /** Label shown in the chat header */
   label?: string;
@@ -43,6 +43,13 @@ export function CooThreadChat({ threadId, threadType, userId, senderRole, sender
   const [unread, setUnread] = useState(0);
   const readKey = `coo-thread-read-${senderRole}-${threadId}`;
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const formatSenderName = (msg: CooMessage) => {
+    const base = String(msg.sender_name || '').trim() || 'User';
+    if (msg.sender_role === 'doctor') {
+      return /^dr\.?\s/i.test(base) ? base : `Dr. ${base}`;
+    }
+    return base;
+  };
 
   const getLastRead = () => {
     try { return localStorage.getItem(readKey) || ''; } catch { return ''; }
@@ -173,13 +180,13 @@ export function CooThreadChat({ threadId, threadType, userId, senderRole, sender
                 {!isMine && (
                   <Avatar className="w-7 h-7 flex-shrink-0">
                     <AvatarFallback className="text-[10px] bg-muted">
-                      {msg.sender_name.slice(0, 2).toUpperCase()}
+                      {formatSenderName(msg).slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                 )}
                 <div className={cn('flex flex-col', isMine ? 'items-end' : 'items-start')}>
                   {!isMine && (
-                    <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{msg.sender_name}</span>
+                    <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{formatSenderName(msg)}</span>
                   )}
                   <div className={cn(
                     'rounded-2xl px-3 py-2 text-sm shadow-sm',
