@@ -71,6 +71,7 @@ import {
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { createPrescriptionPdfBlob } from '@/lib/pdf';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
+import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
@@ -3462,9 +3463,16 @@ const PatientPortal = () => {
                       badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
                       badgeTone: 'danger' as const
                     },
+                    {
+                      id: 'coo-messages',
+                      label: 'COO Messages',
+                      icon: MessageSquare,
+                      badge: unreadCooCount > 0 ? (unreadCooCount > 99 ? '99+' : unreadCooCount) : undefined,
+                      badgeTone: 'danger' as const
+                    },
                     { id: 'records', label: t('patientPortal.recordsTab', 'Investigations'), icon: FileText },
                     { id: 'payments', label: t('common.payments', 'Payments'), icon: Wallet },
-                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: (unreadContactCount + unreadCooCount) > 0 ? ((unreadContactCount + unreadCooCount) > 99 ? '99+' : unreadContactCount + unreadCooCount) : undefined, badgeTone: 'danger' as const },
+                    { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -5071,6 +5079,31 @@ const PatientPortal = () => {
                 </Card>
               </TabsContent>
 
+              <TabsContent value="coo-messages" forceMount className={activeTab !== 'coo-messages' ? 'hidden' : 'space-y-6'}>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>COO Messages</CardTitle>
+                    <CardDescription>Send and receive messages with the COO</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {user?.id && (
+                      <CooThreadChat
+                        threadId={user.id}
+                        threadType="patient"
+                        userId={user.id}
+                        senderRole="patient"
+                        senderName={displayName}
+                        label="COO — Chief Operations Officer"
+                        onUnreadChange={(count) => {
+                          if (activeTab !== 'coo-messages') setUnreadCooCount(count);
+                          else setUnreadCooCount(0);
+                        }}
+                      />
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
               <TabsContent value="contact" className="space-y-6">
                 <ContactMyEDoctorForm
                   role="patient"
@@ -5078,10 +5111,6 @@ const PatientPortal = () => {
                   fullName={patientRegistration?.full_name || user?.user_metadata?.full_name || ''}
                   email={patientRegistration?.email || user?.email || ''}
                   phone={patientRegistration?.phone_number || ''}
-                  onCooUnreadChange={(count) => {
-                    if (activeTab !== 'contact') setUnreadCooCount(count);
-                    else setUnreadCooCount(0);
-                  }}
                 />
               </TabsContent>
 

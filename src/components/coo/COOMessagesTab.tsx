@@ -13,7 +13,7 @@ import { useLocaleFormatter } from '@/lib/locale';
 type CooMessage = {
   id: string;
   thread_id: string;
-  thread_type: 'admin' | 'patient';
+  thread_type: 'admin' | 'patient' | 'doctor';
   sender_id: string;
   sender_role: 'coo' | 'admin' | 'patient' | 'doctor';
   sender_name: string;
@@ -25,15 +25,24 @@ type ThreadPreview = { lastMessage?: string; lastAt?: string; unread: number };
 
 interface COOMessagesTabProps {
   patients: { user_id: string; full_name: string | null; email: string | null }[];
+  doctors: { user_id: string; full_name: string | null; email: string | null }[];
   cooUserId: string;
   cooName: string;
   onUnreadChange?: (count: number) => void;
 }
 
 // Build the static thread list directly from props — no async, never empty
-function buildThreads(patients: COOMessagesTabProps['patients']) {
+function buildThreads(
+  patients: COOMessagesTabProps['patients'],
+  doctors: COOMessagesTabProps['doctors']
+) {
   return [
     { id: 'admin', type: 'admin' as const, label: 'Central Admin' },
+    ...doctors.map((d) => ({
+      id: d.user_id,
+      type: 'doctor' as const,
+      label: d.full_name || d.email || 'Doctor',
+    })),
     ...patients.map((p) => ({
       id: p.user_id,
       type: 'patient' as const,
@@ -42,16 +51,16 @@ function buildThreads(patients: COOMessagesTabProps['patients']) {
   ];
 }
 
-export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }: COOMessagesTabProps) {
+export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnreadChange }: COOMessagesTabProps) {
   const { user } = useAuth();
   const { formatTime, formatDate } = useLocaleFormatter();
 
   // Static thread list — built synchronously, never empty
-  const threads = buildThreads(patients);
+  const threads = buildThreads(patients, doctors);
 
   // Active thread stored as plain id+type+label — set on click, never derived from async state
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<'admin' | 'patient'>('admin');
+  const [activeType, setActiveType] = useState<'admin' | 'patient' | 'doctor'>('admin');
   const [activeLabel, setActiveLabel] = useState('');
 
   // Per-thread previews (last message, unread) loaded async — only affects sidebar, never the chat panel
@@ -178,7 +187,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSelect = (id: string, type: 'admin' | 'patient', label: string) => {
+  const handleSelect = (id: string, type: 'admin' | 'patient' | 'doctor', label: string) => {
     setActiveId(id);
     setActiveType(type);
     setActiveLabel(label);
@@ -260,7 +269,8 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
                 <Avatar className="w-9 h-9 flex-shrink-0">
                   <AvatarFallback className={cn(
                     'text-xs',
-                    thread.type === 'admin' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary',
+                    thread.type === 'admin' ? 'bg-destructive/10 text-destructive' : 
+                    thread.type === 'doctor' ? 'bg-blue-100 text-blue-600' : 'bg-primary/10 text-primary',
                   )}>
                     {thread.label.slice(0, 2).toUpperCase()}
                   </AvatarFallback>
@@ -279,7 +289,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
                   </p>
                   <div className="flex items-center justify-between mt-0.5">
                     <Badge variant="outline" className="text-[10px]">
-                      {thread.type === 'admin' ? 'Admin' : 'Patient'}
+                      {thread.type === 'admin' ? 'Admin' : thread.type === 'doctor' ? 'Doctor' : 'Patient'}
                     </Badge>
                     {preview?.lastAt && (
                       <span className="text-[10px] text-muted-foreground">{formatTime(preview.lastAt)}</span>
@@ -304,7 +314,8 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
               <Avatar className="w-9 h-9">
                 <AvatarFallback className={cn(
                   'text-xs',
-                  activeType === 'admin' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary',
+                  activeType === 'admin' ? 'bg-destructive/10 text-destructive' : 
+                  activeType === 'doctor' ? 'bg-blue-100 text-blue-600' : 'bg-primary/10 text-primary',
                 )}>
                   {activeLabel.slice(0, 2).toUpperCase()}
                 </AvatarFallback>
@@ -312,7 +323,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
               <div>
                 <p className="text-sm font-semibold">{activeLabel}</p>
                 <Badge variant="outline" className="text-[10px]">
-                  {activeType === 'admin' ? 'Admin' : 'Patient'}
+                  {activeType === 'admin' ? 'Admin' : activeType === 'doctor' ? 'Doctor' : 'Patient'}
                 </Badge>
               </div>
             </div>
@@ -388,7 +399,7 @@ export function COOMessagesTab({ patients, cooUserId, cooName, onUnreadChange }:
             </div>
             <p className="font-semibold">Select a conversation</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Choose Admin or a patient to start messaging.
+              Choose Admin, a doctor, or a patient to start messaging.
             </p>
           </div>
         )}
