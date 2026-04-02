@@ -859,6 +859,10 @@ const DoctorPortal = () => {
     fullName: '',
     email: '',
     phone: '',
+    age: '',
+    city: '',
+    state: '',
+    country: '',
     specialty: '',
     consultationRate: '',
     experience: '',
@@ -1178,6 +1182,10 @@ const DoctorPortal = () => {
         fullName: doctorRegistration.full_name || '',
         email: doctorRegistration.email || '',
         phone: doctorRegistration.phone_number || '',
+        age: doctorRegistration.age?.toString() || '',
+        city: doctorRegistration.city || '',
+        state: doctorRegistration.state || '',
+        country: doctorRegistration.country || '',
         specialty: doctorRegistration.specialty || '',
         consultationRate:
           Number((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation) > 0
@@ -2718,6 +2726,10 @@ const DoctorPortal = () => {
         full_name: profileFormData.fullName.trim(),
         email: profileFormData.email.trim(),
         phone_number: profileFormData.phone.trim(),
+        age: parseInt(profileFormData.age, 10) || null,
+        city: profileFormData.city.trim(),
+        state: profileFormData.state.trim(),
+        country: profileFormData.country.trim(),
         specialty: profileFormData.specialty.trim(),
         experience: profileFormData.experience.trim(),
         bio: profileFormData.bio.trim(),
@@ -4515,6 +4527,39 @@ const DoctorPortal = () => {
                                 value={profileFormData.phone || doctorRegistration?.phone_number || ''} 
                                 onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
                                 className="mt-1" 
+                              />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('common.age', 'Age')}</label>
+                              <Input
+                                type="number"
+                                value={profileFormData.age || doctorRegistration?.age?.toString() || ''}
+                                onChange={(e) => setProfileFormData({...profileFormData, age: e.target.value})}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('auth.fields.city', 'City')}</label>
+                              <Input
+                                value={profileFormData.city || doctorRegistration?.city || ''}
+                                onChange={(e) => setProfileFormData({...profileFormData, city: e.target.value})}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('auth.fields.state', 'State')}</label>
+                              <Input
+                                value={profileFormData.state || doctorRegistration?.state || ''}
+                                onChange={(e) => setProfileFormData({...profileFormData, state: e.target.value})}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">{t('auth.fields.country', 'Country')}</label>
+                              <Input
+                                value={profileFormData.country || doctorRegistration?.country || ''}
+                                onChange={(e) => setProfileFormData({...profileFormData, country: e.target.value})}
+                                className="mt-1"
                               />
                             </div>
                             <div>

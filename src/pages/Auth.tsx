@@ -655,10 +655,32 @@ export default function AuthPage() {
           return;
         }
 
+        const normalizedGender = String(gender || '').trim();
+        const normalizedAge = Number(String(age || '').trim());
+        const normalizedCity = String(city || '').trim();
+        const normalizedState = String(state || '').trim();
+        const normalizedCountry = String(country || '').trim();
+        const normalizedMaritalStatus = String(maritalStatus || '').trim();
+        const normalizedEmergencyContactName = String(emergencyContactName || '').trim();
+        const normalizedEmergencyContactPhone = String(emergencyContactPhone || '').trim();
+        const normalizedIdentificationType = String(identificationType || '').trim();
+        const normalizedIdentificationNumber = String(identificationNumber || '').trim();
+
         // Validate patient registration fields if role is patient
         if (role === 'patient') {
-          if (!gender || !age || !city || !state || !country || !maritalStatus || 
-              !emergencyContactName || !emergencyContactPhone || !identificationType || !identificationNumber) {
+          if (
+            !normalizedGender
+            || !Number.isFinite(normalizedAge)
+            || normalizedAge <= 0
+            || !normalizedCity
+            || !normalizedState
+            || !normalizedCountry
+            || !normalizedMaritalStatus
+            || !normalizedEmergencyContactName
+            || !normalizedEmergencyContactPhone
+            || !normalizedIdentificationType
+            || !normalizedIdentificationNumber
+          ) {
             toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
             setIsLoading(false);
             return;
@@ -729,19 +751,19 @@ export default function AuthPage() {
               name: normalizedFullName,
               role,
               phone_number: normalizedPhone,
-              gender: gender || 'other',
-              age: age || '18',
-              city: city || 'Unknown',
-              state: state || 'Unknown',
-              country: country || 'Unknown',
-              marital_status: maritalStatus || 'single',
-              emergency_contact_name: emergencyContactName || 'Not Provided',
-              emergency_contact_phone: emergencyContactPhone || normalizedPhone,
-              identification_type: role === 'doctor' ? (doctorIdType || 'nin') : (identificationType || 'hospital_id'),
+              gender: normalizedGender || undefined,
+              age: Number.isFinite(normalizedAge) ? String(Math.floor(normalizedAge)) : undefined,
+              city: normalizedCity || undefined,
+              state: normalizedState || undefined,
+              country: normalizedCountry || undefined,
+              marital_status: normalizedMaritalStatus || undefined,
+              emergency_contact_name: normalizedEmergencyContactName || undefined,
+              emergency_contact_phone: normalizedEmergencyContactPhone || undefined,
+              identification_type: role === 'doctor' ? (doctorIdType || 'nin') : (normalizedIdentificationType || undefined),
               identification_number:
                 role === 'doctor'
                   ? (doctorIdNumber || String(Date.now()))
-                  : (identificationNumber || String(Date.now())),
+                  : (normalizedIdentificationNumber || undefined),
               hospital_affiliation: role === 'doctor' ? (hospitalAffiliation || 'Pending update') : undefined,
               specialty:
                 role === 'doctor'
@@ -861,13 +883,19 @@ export default function AuthPage() {
             const patientPayload = {
               user_id: data.user.id,
               full_name: normalizedFullName,
-              gender,
-              age: parseInt(age || '0') || 18,
+              gender: normalizedGender,
+              age: Math.floor(normalizedAge),
               phone_number: normalizedPhone,
               email: normalizedEmail,
               profile_picture_url: null,
-              identification_type: identificationType,
-              identification_number: identificationNumber,
+              city: normalizedCity,
+              state: normalizedState,
+              country: normalizedCountry,
+              marital_status: normalizedMaritalStatus,
+              emergency_contact_name: normalizedEmergencyContactName,
+              emergency_contact_phone: normalizedEmergencyContactPhone,
+              identification_type: normalizedIdentificationType,
+              identification_number: normalizedIdentificationNumber,
             };
 
             // Direct upsert to avoid RPC complexity
@@ -1353,6 +1381,14 @@ export default function AuthPage() {
                             <SelectItem value="other">{t('auth.values.gender.other', 'Other')}</SelectItem>
                           </SelectContent>
                         </Select>
+                        <input
+                          className="sr-only"
+                          tabIndex={-1}
+                          aria-hidden="true"
+                          value={gender}
+                          onChange={() => {}}
+                          required
+                        />
                       </div>
                       <div>
                         <Label htmlFor="age">{t('common.age', 'Age')} *</Label>
@@ -1361,6 +1397,7 @@ export default function AuthPage() {
                           type="number"
                           placeholder={t('common.age', 'Age')}
                           className="h-12"
+                          min={1}
                           required
                           value={age}
                           onChange={(e) => setAge(e.target.value)}
@@ -1419,6 +1456,14 @@ export default function AuthPage() {
                           <SelectItem value="widowed">{t('auth.values.marital.widowed', 'Widowed')}</SelectItem>
                         </SelectContent>
                       </Select>
+                      <input
+                        className="sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        value={maritalStatus}
+                        onChange={() => {}}
+                        required
+                      />
                     </div>
 
                     {/* Emergency Contact */}
@@ -1465,6 +1510,14 @@ export default function AuthPage() {
                             <SelectItem value="hospital_id">{t('auth.values.id.hospitalCard', 'Hospital / HMO ID Card')}</SelectItem>
                           </SelectContent>
                         </Select>
+                        <input
+                          className="sr-only"
+                          tabIndex={-1}
+                          aria-hidden="true"
+                          value={identificationType}
+                          onChange={() => {}}
+                          required
+                        />
                       </div>
                       <div>
                         <Label htmlFor="identificationNumber">{t('auth.fields.identificationNumber', 'Identification Number')} *</Label>
@@ -1798,24 +1851,6 @@ export default function AuthPage() {
               )}
             </Button>
           </form>
-
-          {mode === 'login' && (
-            <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground mb-2">Central team login</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <Link to="/admin/login">
-                  <Button type="button" variant="outline" className="w-full">
-                    Central Admin Login
-                  </Button>
-                </Link>
-                <Link to="/coo/login">
-                  <Button type="button" variant="outline" className="w-full">
-                    COO Login
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          )}
 
           {/* Toggle Mode */}
           {mode !== 'verify' && mode !== 'reset' && (
