@@ -50,6 +50,36 @@ export function usePwaInstall() {
     typeof window !== "undefined" ? window.__pwaDeferredPrompt ?? null : null
   );
 
+  // Dynamic manifest swapping logic
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const updateManifest = () => {
+      const path = window.location.pathname;
+      const manifestLink = document.querySelector('link[rel="manifest"]');
+      if (manifestLink) {
+        let newHref = '/manifest.webmanifest';
+        if (path.startsWith('/admin')) {
+          newHref = '/admin-manifest.json';
+        } else if (path.startsWith('/coo')) {
+          newHref = '/coo-manifest.json';
+        }
+
+        if (manifestLink.getAttribute('href') !== newHref) {
+          manifestLink.setAttribute('href', newHref);
+          // Force browser to re-read manifest if possible
+          console.log(`[PWA] Manifest swapped to: ${newHref}`);
+        }
+      }
+    };
+
+    updateManifest();
+    
+    // We also listen for popstate (back/forward) as it might change the path
+    window.addEventListener('popstate', updateManifest);
+    return () => window.removeEventListener('popstate', updateManifest);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 

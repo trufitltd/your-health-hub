@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => ({
         display: "standalone",
         start_url: "/",
         scope: "/",
+        id: "/main-pwa",
         icons: [
           {
             src: "/icon-192.png",

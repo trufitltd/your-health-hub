@@ -32,6 +32,7 @@ type DoctorRow = {
   full_name: string | null;
   email: string | null;
   phone_number: string | null;
+  city?: string | null;
   verification_status: string | null;
   medical_license_url?: string | null;
   rate_per_consultation?: number | null;
@@ -42,6 +43,9 @@ type PatientRow = {
   full_name: string | null;
   email: string | null;
   phone_number: string | null;
+  age?: number | null;
+  gender?: string | null;
+  city?: string | null;
 };
 
 type PaymentRow = {
@@ -193,7 +197,7 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctor_registrations')
-        .select('user_id, full_name, email, phone_number, verification_status, medical_license_url, rate_per_consultation')
+        .select('user_id, full_name, email, phone_number, city, verification_status, medical_license_url, rate_per_consultation')
         .order('created_at', { ascending: false });
       if (error) throw error;
       return (data || []) as DoctorRow[];
@@ -206,7 +210,7 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patient_registrations')
-        .select('user_id, full_name, email, phone_number')
+        .select('user_id, full_name, email, phone_number, age, gender, city')
         .limit(5000);
       if (error) throw error;
       return (data || []) as PatientRow[];
@@ -883,6 +887,7 @@ export default function COOPortal() {
                           <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
@@ -938,6 +943,7 @@ export default function COOPortal() {
                           <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
@@ -978,6 +984,9 @@ export default function COOPortal() {
                       <p className="text-sm font-medium">{patient.full_name || 'Patient'}</p>
                       <p className="text-xs text-muted-foreground">{patient.email || 'No email'}</p>
                       <p className="text-xs text-muted-foreground">{patient.phone_number || 'No phone'}</p>
+                      <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
+                      <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
+                      <p className="text-xs text-muted-foreground">City: {patient.city || 'N/A'}</p>
                     </div>
                   ))
                 )}
