@@ -65,6 +65,7 @@ import { PatientWalletService } from '@/services/PatientWalletService';
 import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab';
+import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
@@ -283,6 +284,7 @@ const DoctorPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const [unreadCooMessages, setUnreadCooMessages] = useState(0);
   const [unreadContactCount, setUnreadContactCount] = useState(0);
   const [contactReadVersion, setContactReadVersion] = useState(0);
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
@@ -3128,6 +3130,13 @@ const DoctorPortal = () => {
                       badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? `${formatNumber(99)}+` : formatNumber(unreadMessagesCount)) : undefined,
                       badgeTone: 'danger' as const
                     },
+                    {
+                      id: 'coo-messages',
+                      label: 'COO Messages',
+                      icon: MessageSquare,
+                      badge: unreadCooMessages > 0 ? (unreadCooMessages > 99 ? '99+' : unreadCooMessages) : undefined,
+                      badgeTone: 'danger' as const
+                    },
                     { id: 'contact', label: 'Contact MyE-Doctor', icon: Phone, badge: unreadContactCount > 0 ? (unreadContactCount > 99 ? '99+' : unreadContactCount) : undefined, badgeTone: 'danger' as const },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
@@ -4417,6 +4426,31 @@ const DoctorPortal = () => {
                       focusSessionId={messagesFocusSessionId}
                       jumpToUnreadSignal={messagesJumpToUnreadSignal}
                     />
+                  </TabsContent>
+
+                  <TabsContent value="coo-messages" forceMount className={activeTab !== 'coo-messages' ? 'hidden' : 'space-y-6'}>
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>COO Messages</CardTitle>
+                        <CardDescription>Send and receive messages with the COO</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {user?.id && (
+                          <CooThreadChat
+                            threadId={user.id}
+                            threadType="doctor"
+                            userId={user.id}
+                            senderRole="doctor"
+                            senderName={doctorRegistration?.full_name || displayName || 'Doctor'}
+                            label="COO — Chief Operations Officer"
+                            onUnreadChange={(count) => {
+                              if (activeTab !== 'coo-messages') setUnreadCooMessages(count);
+                              else setUnreadCooMessages(0);
+                            }}
+                          />
+                        )}
+                      </CardContent>
+                    </Card>
                   </TabsContent>
 
                   <TabsContent value="contact" className="space-y-6">
