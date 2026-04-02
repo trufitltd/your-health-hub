@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Send, MessageSquare, X } from 'lucide-react';
-import { CooThreadChat } from '@/components/coo/CooThreadChat';
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { Send, MessageSquare, X, PlusCircle, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { useQuery } from '@tanstack/react-query';
+import { useLocaleFormatter } from '@/lib/locale';
 
 interface ContactMyEDoctorFormProps {
   fullName?: string | null;
@@ -20,7 +20,6 @@ interface ContactMyEDoctorFormProps {
   phone?: string | null;
   role: 'doctor' | 'patient';
   userId?: string | null;
-  onCooUnreadChange?: (count: number) => void;
 }
 
 interface ContactMessageRow {
@@ -127,15 +126,16 @@ export const ContactMyEDoctorForm = ({
   phone,
   role,
   userId,
-  onCooUnreadChange,
 }: ContactMyEDoctorFormProps) => {
+  const { formatTime, formatDate } = useLocaleFormatter();
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState('');
   const [isReplying, setIsReplying] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [showNewTicketForm, setShowNewTicketForm] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const roleLabel = role === 'doctor' ? 'Doctor' : 'Patient';
   const safeFullName = (fullName || '').trim();
@@ -146,6 +146,7 @@ export const ContactMyEDoctorForm = ({
 
   const canSubmit = !!parsedName.firstName && !!safeEmail;
   const readStorageKey = userId ? `${role}-contact-thread-read-${userId}` : null;
+
   const { data: myMessages = [], isLoading: myMessagesLoading, isError: myMessagesError, refetch: refetchMyMessages } = useQuery({
     queryKey: ['my-contact-messages', normalizedEmail],
     queryFn: async () => {
@@ -156,93 +157,6 @@ export const ContactMyEDoctorForm = ({
     enabled: !!normalizedEmail,
     refetchInterval: 15000,
   });
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canSubmit) {
-      toast({
-        title: 'Missing profile details',
-        description: 'Please update your profile name and email before sending a message.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const finalSubject = `[Portal:${roleLabel}] ${subject.trim()}`;
-      const finalMessage = message.trim();
-
-      const { error } = await supabase.from('contact_messages').insert({
-        first_name: parsedName.firstName,
-        last_name: parsedName.lastName || '-',
-        email: safeEmail,
-        phone: safePhone || null,
-        subject: finalSubject,
-        message: finalMessage,
-      });
-
-      if (error) throw error;
-
-      setSubject('');
-      setMessage('');
-      refetchMyMessages();
-      toast({
-        title: 'Message sent',
-        description: 'Your message was sent to Central Admin.',
-      });
-    } catch (error) {
-      console.error('Failed to send portal contact message:', error);
-      toast({
-        title: 'Failed to send',
-        description: 'Please try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleReply = async (messageId: string) => {
-    if (!messageId || !replyMessage.trim()) {
-      toast({
-        title: 'Reply required',
-        description: 'Please enter your reply.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setIsReplying(true);
-    try {
-      const { error } = await supabase.rpc('user_append_contact_reply', {
-        p_message_id: messageId,
-        p_reply: replyMessage.trim(),
-        p_sender_role: roleLabel,
-        p_sender_user_id: userId || null,
-        p_sender_name: safeFullName || null,
-        p_sender_phone: safePhone || null,
-      });
-      if (error) throw error;
-
-      setReplyMessage('');
-      setReplyTargetId(null);
-      refetchMyMessages();
-      toast({
-        title: 'Reply sent',
-        description: 'Your reply was added to the conversation thread.',
-      });
-    } catch (error) {
-      console.error('Failed to append reply in contact thread:', error);
-      toast({
-        title: 'Reply failed',
-        description: 'Please ensure migration db/50_add_user_append_contact_reply_rpc.sql is applied.',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsReplying(false);
-    }
-  };
 
   const getThreadReadState = () => {
     if (!readStorageKey || typeof window === 'undefined') return {} as Record<string, number>;
@@ -267,12 +181,104 @@ export const ContactMyEDoctorForm = ({
     window.dispatchEvent(new Event('contact-thread-read-updated'));
   };
 
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSubmit) {
+      toast({
+        title: 'Missing profile details',
+        description: 'Please update your profile name and email before sending a message.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const finalSubject = `[Portal:${roleLabel}] ${subject.trim()}`;
+      const finalMessage = message.trim();
+
+      const { data, error } = await supabase.from('contact_messages').insert({
+        first_name: parsedName.firstName,
+        last_name: parsedName.lastName || '-',
+        email: safeEmail,
+        phone: safePhone || null,
+        subject: finalSubject,
+        message: finalMessage,
+      }).select().single();
+
+      if (error) throw error;
+
+      setSubject('');
+      setMessage('');
+      setShowNewTicketForm(false);
+      await refetchMyMessages();
+      if (data?.id) setSelectedConversationId(data.id);
+      
+      toast({
+        title: 'Message sent',
+        description: 'Your message was sent to Central Admin.',
+      });
+    } catch (error) {
+      console.error('Failed to send portal contact message:', error);
+      toast({
+        title: 'Failed to send',
+        description: 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReply = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!selectedConversationId || !replyMessage.trim()) return;
+
+    setIsReplying(true);
+    const content = replyMessage.trim();
+    setReplyMessage('');
+
+    try {
+      const { error } = await supabase.rpc('user_append_contact_reply', {
+        p_message_id: selectedConversationId,
+        p_reply: content,
+        p_sender_role: roleLabel,
+        p_sender_user_id: userId || null,
+        p_sender_name: safeFullName || null,
+        p_sender_phone: safePhone || null,
+      });
+      if (error) throw error;
+
+      await refetchMyMessages();
+      toast({
+        title: 'Reply sent',
+        description: 'Your reply was added to the conversation thread.',
+      });
+    } catch (error) {
+      console.error('Failed to append reply in contact thread:', error);
+      setReplyMessage(content);
+      toast({
+        title: 'Reply failed',
+        description: 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsReplying(false);
+    }
+  };
+
   useEffect(() => {
-    if (selectedConversationId) return;
+    if (selectedConversationId || showNewTicketForm) return;
     if (myMessages.length > 0) {
       setSelectedConversationId(myMessages[0].id);
+    } else if (!myMessagesLoading) {
+        setShowNewTicketForm(true);
     }
-  }, [myMessages, selectedConversationId]);
+  }, [myMessages, selectedConversationId, showNewTicketForm, myMessagesLoading]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [selectedConversationId, myMessages]);
 
   const selectedConversation = myMessages.find((item) => item.id === selectedConversationId) || null;
   const selectedParsedMessages = selectedConversation
@@ -283,250 +289,276 @@ export const ContactMyEDoctorForm = ({
     )
     : [];
 
+  const formatMsgDate = (iso?: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toDateString() === new Date().toDateString()
+      ? formatTime(iso)
+      : `${formatDate(iso)} ${formatTime(iso)}`;
+  };
+
+  const chatOpen = (selectedConversationId !== null || showNewTicketForm);
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-            <MessageSquare className="w-5 h-5" />
-          </div>
-          <div>
-            <CardTitle>Contact MyE-Doctor</CardTitle>
-            <CardDescription>Send a message directly to Central Admin.</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <Label>Full Name</Label>
-              <Input value={safeFullName} readOnly disabled className="mt-1.5" />
+    <Card className="border-none shadow-none bg-transparent">
+      <CardContent className="p-0">
+        <div className="flex h-[calc(100vh-15rem)] min-h-[520px] max-h-[820px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
+          {/* Thread list */}
+          <div className={cn(
+            'flex flex-col border-r border-border bg-muted/10 w-full lg:w-[300px] lg:flex-shrink-0',
+            chatOpen ? 'hidden lg:flex' : 'flex',
+          )}>
+            <div className="p-3 border-b border-border flex items-center justify-between flex-shrink-0">
+              <p className="text-sm font-semibold text-muted-foreground">
+                Support Tickets ({myMessages.length})
+              </p>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-8 w-8 text-primary"
+                onClick={() => {
+                  setShowNewTicketForm(true);
+                  setSelectedConversationId(null);
+                }}
+              >
+                <PlusCircle className="h-5 w-5" />
+              </Button>
             </div>
-            <div>
-              <Label>Email</Label>
-              <Input value={safeEmail} readOnly disabled className="mt-1.5" />
-            </div>
-            <div>
-              <Label>Phone</Label>
-              <Input value={safePhone || 'Not provided'} readOnly disabled className="mt-1.5" />
-            </div>
-            <div>
-              <Label>Role</Label>
-              <Input value={roleLabel} readOnly disabled className="mt-1.5" />
-            </div>
-          </div>
-
-          <div>
-            <Label htmlFor="portal-contact-subject">Subject</Label>
-            <Input
-              id="portal-contact-subject"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="How can we help?"
-              className="mt-1.5"
-              required
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="portal-contact-message">Message</Label>
-            <Textarea
-              id="portal-contact-message"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Tell us more about your request..."
-              className="mt-1.5 min-h-[140px]"
-              required
-            />
-          </div>
-
-          <Button type="submit" className="w-full sm:w-auto" disabled={isSubmitting || !canSubmit}>
-            {isSubmitting ? 'Sending...' : 'Send Message'}
-            <Send className="w-4 h-4 ml-2" />
-          </Button>
-        </form>
-
-        {userId && (
-          <div className="mt-8 border-t border-border pt-6">
-            <h3 className="text-sm font-semibold mb-3">Messages with COO</h3>
-            <CooThreadChat
-              threadId={userId}
-              threadType="patient"
-              userId={userId}
-              senderRole={role}
-              senderName={role === 'doctor' && !/^dr\.?\s/i.test(safeFullName || '')
-                ? `Dr. ${safeFullName || safeEmail || 'Doctor'}`
-                : (safeFullName || safeEmail || (role === 'doctor' ? 'Doctor' : 'Patient'))}
-              label="COO — Chief Operations Officer"
-              onUnreadChange={onCooUnreadChange}
-            />
-          </div>
-        )}
-
-        <div className="mt-8 border-t border-border pt-6">
-          <h3 className="text-sm font-semibold mb-3">Conversation History</h3>
-          {myMessagesLoading ? (
-            <p className="text-sm text-muted-foreground">Loading messages...</p>
-          ) : myMessagesError ? (
-            <p className="text-sm text-muted-foreground">Conversation unavailable until support chat migration is applied.</p>
-          ) : myMessages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No messages yet.</p>
-          ) : (
-            <div className="flex h-[calc(100vh-20rem)] min-h-[480px] max-h-[760px] bg-card rounded-xl border border-border overflow-hidden shadow-sm">
-              <div className={cn(
-                'flex flex-col border-r border-border bg-muted/10 w-full lg:w-[280px] lg:flex-shrink-0',
-                selectedConversation ? 'hidden lg:flex' : 'flex',
-              )}>
-                <div className="p-3 border-b border-border flex-shrink-0">
-                  <p className="text-sm font-semibold text-muted-foreground">
-                    Conversations ({myMessages.length})
-                  </p>
+            <ScrollArea className="flex-1">
+              {myMessagesLoading ? (
+                <div className="p-4 space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="animate-pulse flex items-center gap-3">
+                      <div className="w-9 h-9 bg-muted rounded-full" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 bg-muted rounded w-1/2" />
+                        <div className="h-2 bg-muted rounded w-3/4" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <ScrollArea className="flex-1">
-                  {myMessages.map((item) => {
-                    const latestAdminActivityMs = getLatestAdminActivityMs(item);
-                    const readState = getThreadReadState();
-                    const threadReadAtMs = readState[item.id] || 0;
-                    const unread = latestAdminActivityMs > threadReadAtMs;
-                    const userDisplayName = (safeFullName || [item.first_name, item.last_name].filter(Boolean).join(' ') || roleLabel).trim();
-                    const parsedMessages = parseThreadMessages(item, userDisplayName, role);
-                    const previewText = parsedMessages[0]?.content || 'No message content';
-                    const displayName = role === 'doctor' && !/^dr\.?\s/i.test(userDisplayName) ? `Dr. ${userDisplayName}` : userDisplayName;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedConversationId(item.id);
-                          setReplyTargetId(item.id);
-                          if (latestAdminActivityMs > 0) {
-                            markThreadRead(item.id, latestAdminActivityMs);
-                          }
-                        }}
-                        className={cn(
-                          'w-full flex items-start gap-3 p-3 text-left transition-colors hover:bg-muted/50 border-b border-border/50 last:border-0',
-                          selectedConversationId === item.id && 'bg-primary/5 border-l-4 border-l-primary',
-                        )}
-                      >
-                        <Avatar className="w-9 h-9 flex-shrink-0">
-                          <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                            {displayName.slice(0, 2).toUpperCase()}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-sm font-medium truncate">{displayName}</span>
-                            {unread ? (
-                              <Badge variant="destructive" className="h-5 px-1.5 text-[10px] flex-shrink-0">New</Badge>
-                            ) : null}
-                          </div>
-                          <p className="text-xs text-muted-foreground truncate mt-0.5">{previewText}</p>
-                          <div className="flex items-center justify-end mt-0.5">
-                            <span className="text-[10px] text-muted-foreground">
-                              {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
-                            </span>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </ScrollArea>
-              </div>
+              ) : myMessages.length === 0 ? (
+                <div className="p-8 text-center">
+                  <p className="text-sm text-muted-foreground">No support tickets found.</p>
+                  <Button 
+                    variant="link" 
+                    className="mt-2"
+                    onClick={() => setShowNewTicketForm(true)}
+                  >
+                    Start a new ticket
+                  </Button>
+                </div>
+              ) : (
+                myMessages.map((item) => {
+                  const latestAdminActivityMs = getLatestAdminActivityMs(item);
+                  const readState = getThreadReadState();
+                  const threadReadAtMs = readState[item.id] || 0;
+                  const unread = latestAdminActivityMs > threadReadAtMs;
+                  const userDisplayName = (safeFullName || [item.first_name, item.last_name].filter(Boolean).join(' ') || roleLabel).trim();
+                  const parsedMessages = parseThreadMessages(item, userDisplayName, role);
+                  const previewText = parsedMessages[0]?.content || 'No message content';
+                  const displayName = role === 'doctor' && !/^dr\.?\s/i.test(userDisplayName) ? `Dr. ${userDisplayName}` : userDisplayName;
+                  const isActive = selectedConversationId === item.id;
 
-              <div className={cn('flex flex-col flex-1 min-w-0 bg-background', selectedConversation ? 'flex' : 'hidden lg:flex')}>
-                {selectedConversation ? (
-                  <>
-                    <div className="p-3 border-b border-border flex items-center gap-3 flex-shrink-0">
-                      <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSelectedConversationId(null)}>
-                        <X className="w-5 h-5" />
-                      </Button>
-                      <Avatar className="w-9 h-9">
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedConversationId(item.id);
+                        setShowNewTicketForm(false);
+                        if (latestAdminActivityMs > 0) {
+                          markThreadRead(item.id, latestAdminActivityMs);
+                        }
+                      }}
+                      className={cn(
+                        'w-full flex items-start gap-3 p-3 text-left transition-colors hover:bg-muted/50 border-b border-border/50 last:border-0',
+                        isActive && 'bg-primary/5 border-l-4 border-l-primary',
+                      )}
+                    >
+                      <Avatar className="w-9 h-9 flex-shrink-0">
                         <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                          {((role === 'doctor' ? `Dr. ${safeFullName || roleLabel}` : (safeFullName || roleLabel))).slice(0, 2).toUpperCase()}
+                          {displayName.slice(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <div>
-                        <p className="text-sm font-semibold">
-                          {role === 'doctor' ? 'Dr. ' : ''}{safeFullName || roleLabel}
-                        </p>
-                        <Badge variant="outline" className="text-[10px]">
-                          Thread started {selectedConversation.created_at ? new Date(selectedConversation.created_at).toLocaleString() : ''}
-                        </Badge>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-sm font-medium truncate">{item.subject.replace(/\[Portal:.*?\]\s*/, '')}</span>
+                          {unread && (
+                            <Badge variant="destructive" className="h-5 px-1.5 text-[10px] flex-shrink-0">New</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">{previewText}</p>
+                        <div className="flex items-center justify-between mt-1">
+                           <span className="text-[10px] text-muted-foreground italic">
+                            {formatDate(item.created_at)}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </ScrollArea>
+          </div>
+
+          {/* Main Chat/Form Area */}
+          <div className={cn('flex flex-col flex-1 min-w-0 bg-background', chatOpen ? 'flex' : 'hidden lg:flex')}>
+            {showNewTicketForm ? (
+              <div className="flex flex-col h-full overflow-hidden">
+                <div className="p-3 border-b border-border flex items-center gap-3 flex-shrink-0">
+                  <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setShowNewTicketForm(false)}>
+                    <X className="w-5 h-5" />
+                  </Button>
+                  <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
+                    <PlusCircle className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">New Support Ticket</p>
+                    <p className="text-[10px] text-muted-foreground">Send a message to Central Admin</p>
+                  </div>
+                </div>
+                <ScrollArea className="flex-1 p-4 lg:p-6">
+                  <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-6 py-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Your Name</Label>
+                        <Input value={safeFullName} readOnly disabled className="bg-muted/50 text-sm" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Email Address</Label>
+                        <Input value={safeEmail} readOnly disabled className="bg-muted/50 text-sm" />
                       </div>
                     </div>
 
-                    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-                      {selectedParsedMessages.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center mt-8">No message content.</p>
-                      ) : (
-                        selectedParsedMessages.map((threadMsg, index) => {
-                          const isMine = threadMsg.sender === 'user';
-                          return (
-                            <div key={`${selectedConversation.id}-${index}`} className={cn('flex gap-2 max-w-[80%]', isMine ? 'ml-auto flex-row-reverse' : '')}>
-                              {!isMine && (
-                                <Avatar className="w-7 h-7 flex-shrink-0">
-                                  <AvatarFallback className="text-[10px] bg-muted">
-                                    {threadMsg.senderName.slice(0, 2).toUpperCase()}
-                                  </AvatarFallback>
-                                </Avatar>
-                              )}
-                              <div className={cn('flex flex-col', isMine ? 'items-end' : 'items-start')}>
-                                {!isMine && (
-                                  <span className="text-[10px] text-muted-foreground mb-0.5 px-1">{threadMsg.senderName}</span>
-                                )}
-                                <div className={cn(
-                                  'rounded-2xl px-3 py-2 text-sm shadow-sm',
-                                  isMine ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm',
-                                )}>
-                                  <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{threadMsg.content}</p>
-                                </div>
-                                <span className="text-[10px] text-muted-foreground mt-0.5 px-1">
-                                  {threadMsg.timestamp ? new Date(threadMsg.timestamp).toLocaleString() : ''}
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-ticket-subject" className="text-xs font-semibold">Subject</Label>
+                      <Input
+                        id="new-ticket-subject"
+                        value={subject}
+                        onChange={(e) => setSubject(e.target.value)}
+                        placeholder="What do you need help with?"
+                        className="text-sm"
+                        required
+                      />
                     </div>
 
-                    <div className="p-3 border-t border-border bg-background flex-shrink-0 space-y-2">
-                      <form
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (selectedConversation.id) {
-                            handleReply(selectedConversation.id);
-                          }
-                        }}
-                        className="flex items-center gap-2"
-                      >
-                        <Input
-                          value={replyMessage}
-                          onChange={(e) => setReplyMessage(e.target.value)}
-                          placeholder="Type a reply..."
-                          className="flex-1"
-                        />
-                        <Button type="submit" size="icon" disabled={isReplying || !replyMessage.trim()}>
-                          <Send className="w-4 h-4" />
-                        </Button>
-                      </form>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-ticket-message" className="text-xs font-semibold">Message</Label>
+                      <Textarea
+                        id="new-ticket-message"
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        placeholder="Please describe your issue or question in detail..."
+                        className="min-h-[200px] text-sm resize-none"
+                        required
+                      />
                     </div>
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-muted/5">
-                    <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                      <Send className="w-6 h-6 text-primary" />
-                    </div>
-                    <p className="font-semibold">Select a conversation</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Choose a thread to open chat.
+
+                    <Button type="submit" className="w-full" disabled={isSubmitting || !canSubmit}>
+                      {isSubmitting ? 'Sending Ticket...' : 'Send Support Ticket'}
+                      <Send className="w-4 h-4 ml-2" />
+                    </Button>
+                  </form>
+                </ScrollArea>
+              </div>
+            ) : selectedConversation ? (
+              <>
+                {/* Chat Header */}
+                <div className="p-3 border-b border-border flex items-center gap-3 flex-shrink-0">
+                  <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSelectedConversationId(null)}>
+                    <X className="w-5 h-5" />
+                  </Button>
+                  <Avatar className="w-9 h-9">
+                    <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                      {selectedConversation.subject.slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold truncate">
+                      {selectedConversation.subject.replace(/\[Portal:.*?\]\s*/, '')}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Started {formatDate(selectedConversation.created_at)} at {formatTime(selectedConversation.created_at)}
                     </p>
                   </div>
-                )}
+                </div>
+
+                {/* Chat Messages */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 bg-muted/5">
+                  {selectedParsedMessages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                       <p className="text-sm text-muted-foreground">No message content found.</p>
+                    </div>
+                  ) : (
+                    selectedParsedMessages.map((threadMsg, index) => {
+                      const isMine = threadMsg.sender === 'user';
+                      return (
+                        <div key={`${selectedConversation.id}-${index}`} className={cn('flex gap-2 max-w-[85%]', isMine ? 'ml-auto flex-row-reverse' : '')}>
+                          {!isMine && (
+                            <Avatar className="w-8 h-8 flex-shrink-0">
+                              <AvatarFallback className="text-[10px] bg-primary/10 text-primary font-bold">
+                                AD
+                              </AvatarFallback>
+                            </Avatar>
+                          )}
+                          <div className={cn('flex flex-col', isMine ? 'items-end' : 'items-start')}>
+                            {!isMine && (
+                              <span className="text-[10px] font-medium text-muted-foreground mb-1 px-1">Central Admin</span>
+                            )}
+                            <div className={cn(
+                              'rounded-2xl px-4 py-2.5 text-sm shadow-sm',
+                              isMine 
+                                ? 'bg-primary text-primary-foreground rounded-tr-sm' 
+                                : 'bg-background border border-border text-foreground rounded-tl-sm',
+                            )}>
+                              <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+                                {threadMsg.content}
+                              </p>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground mt-1 px-1">
+                              {formatMsgDate(threadMsg.timestamp)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                {/* Chat Input */}
+                <div className="p-4 border-t border-border bg-background flex-shrink-0">
+                  <form onSubmit={handleReply} className="flex items-center gap-2 max-w-4xl mx-auto">
+                    <Input
+                      value={replyMessage}
+                      onChange={(e) => setReplyMessage(e.target.value)}
+                      placeholder="Type your reply to admin..."
+                      className="flex-1 py-6 text-sm"
+                      disabled={isReplying}
+                    />
+                    <Button type="submit" size="icon" className="h-12 w-12 flex-shrink-0" disabled={isReplying || !replyMessage.trim()}>
+                      <Send className="w-5 h-5" />
+                    </Button>
+                  </form>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-muted/5">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                  <MessageSquare className="w-8 h-8 text-primary" />
+                </div>
+                <h3 className="font-bold text-lg">Support Center</h3>
+                <p className="text-sm text-muted-foreground mt-2 max-w-sm">
+                  Select a support ticket from the list or start a new conversation with our admin team.
+                </p>
+                <Button className="mt-6" onClick={() => setShowNewTicketForm(true)}>
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  New Support Ticket
+                </Button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

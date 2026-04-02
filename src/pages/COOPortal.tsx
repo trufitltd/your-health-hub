@@ -858,6 +858,7 @@ export default function COOPortal() {
           <TabsContent value="messages" forceMount className={activeTab !== 'messages' ? 'hidden' : ''}>
             <COOMessagesTab
               patients={patients}
+              doctors={doctors}
               cooUserId={user.id}
               cooName={cooDisplayName}
               onUnreadChange={(count) => {
