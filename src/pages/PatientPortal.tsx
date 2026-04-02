@@ -57,7 +57,6 @@ import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotif
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
-import { LanguageSelector } from '@/components/LanguageSelector';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
 import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
@@ -3362,9 +3361,6 @@ const PatientPortal = () => {
                   <span className="text-[10px] text-muted-foreground leading-tight">Powered by HealthLink</span>
                 </div>
               </Link>
-              <div className="hidden lg:block">
-                <LanguageSelector />
-              </div>
             </div>
 
             <div className="flex items-center gap-2 sm:gap-4">
@@ -3449,9 +3445,6 @@ const PatientPortal = () => {
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
-                  <div className="lg:hidden px-3 pb-2">
-                    <LanguageSelector />
-                  </div>
                   {[
                     { id: 'overview', label: t('common.overview', 'Overview'), icon: Activity },
                     { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar },
