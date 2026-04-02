@@ -66,6 +66,8 @@ export function Header() {
           ? '/coo'
           : '/patient-portal';
 
+  const isHomePage = location.pathname === '/';
+
   return (
     <header
       className={cn(
@@ -110,7 +112,7 @@ export function Header() {
           <div className="hidden md:flex items-center gap-3">
             {!isLoading && user ? (
               <div className="flex items-center gap-2">
-                <LanguageSelector />
+                {isHomePage && <LanguageSelector />}
                 <Link to={dashboardLink}>
                   <Button variant="default" size="sm" className="gap-2">
                     <LayoutDashboard className="w-4 h-4" />
@@ -129,7 +131,7 @@ export function Header() {
               </div>
             ) : (
               <>
-                <LanguageSelector />
+                {isHomePage && <LanguageSelector />}
                 <Link to="/auth">
                   <Button variant="ghost" size="sm">
                     <User className="w-4 h-4 mr-1" />
@@ -158,12 +160,14 @@ export function Header() {
             )}
           </button>
         </nav>
-        <div className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/95 px-3 py-1.5 md:py-2">
-          <p className="flex items-start justify-center gap-2 text-center text-[10px] leading-tight text-emerald-900 md:text-xs md:leading-relaxed">
-            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
-            <span>{complianceNotice}</span>
-          </p>
-        </div>
+        {isHomePage && (
+          <div className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/95 px-3 py-1.5 md:py-2">
+            <p className="flex items-start justify-center gap-2 text-center text-[10px] leading-tight text-emerald-900 md:text-xs md:leading-relaxed">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
+              <span>{complianceNotice}</span>
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Mobile Menu */}
@@ -191,7 +195,7 @@ export function Header() {
                 </Link>
               ))}
               <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-border">
-                <LanguageSelector />
+                {isHomePage && <LanguageSelector />}
                 {!isLoading && user ? (
                   <>
                     <div className="px-4 py-2 rounded-lg bg-muted">

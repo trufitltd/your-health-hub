@@ -689,8 +689,8 @@ export function ConsultationRoom({
     }
 
     toast({
-      title: ui('Clerking Required'),
-      description: ui('Please add clerking before leaving or ending this call.')
+      title: ui('Clinical Notes Required'),
+      description: ui('Please provide clinical notes before leaving or ending this call.')
     });
     setNotesPanelView('clerking');
     setIsChatOpen(false);
@@ -1631,7 +1631,7 @@ export function ConsultationRoom({
                     onClick={() => toggleDoctorNotesView('clerking')}
                   >
                     <Stethoscope className="w-4 h-4 mr-2" />
-                    {isNotesOpen && notesPanelView === 'clerking' ? ui('Close Clerking') : ui('Add Clerking')}
+                    {isNotesOpen && notesPanelView === 'clerking' ? ui('Close Clinical Notes') : ui('Clinical Notes')}
                     {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
                   </Button>
                   <Button
@@ -1696,7 +1696,7 @@ export function ConsultationRoom({
                 onClick={() => toggleDoctorNotesView('clerking')}
               >
                 <Stethoscope className="w-4 h-4 mr-2" />
-                {isNotesOpen && notesPanelView === 'clerking' ? ui('Close') : ui('Add Clerking')}
+                {isNotesOpen && notesPanelView === 'clerking' ? ui('Close') : ui('Clinical Notes')}
                 {isNotesOpen && notesPanelView === 'clerking' && <X className="w-4 h-4 ml-2" />}
               </Button>
               <Button

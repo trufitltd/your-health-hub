@@ -52,7 +52,6 @@ import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { createDefaultSchedule } from '@/services/scheduleService';
 import { SUPPORTED_LANGUAGES, useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
-import { LanguageSelector } from '@/components/LanguageSelector';
 import {
   formatAppointmentStatusLabel,
   normalizeAppointmentStatus,
@@ -3039,9 +3038,6 @@ const DoctorPortal = () => {
                   {formatNumber(stats.pendingRequests + unreadReviewsCount)}
                 </span>
               </Button>
-              <div className="hidden lg:block">
-                <LanguageSelector />
-              </div>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -3107,9 +3103,6 @@ const DoctorPortal = () => {
                 </div>
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
-                  <div className="lg:hidden px-3 pb-2">
-                    <LanguageSelector />
-                  </div>
                   {[
                     { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
                     { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar, badge: stats.pendingRequests },
