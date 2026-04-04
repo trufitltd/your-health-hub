@@ -315,11 +315,19 @@ export default function AuthPage() {
     if (typeof window === 'undefined') return;
     if (handledSignupRedirectRef.current) return;
 
+    const queryMode = (searchParams.get('mode') || '').toLowerCase();
     const queryType = (searchParams.get('type') || '').toLowerCase();
     const queryVerified = searchParams.get('verified') === '1';
     const hash = window.location.hash || '';
     const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
     const hashType = (hashParams.get('type') || '').toLowerCase();
+    const isRecoveryLinkReturn = queryMode === 'reset' || queryType === 'recovery' || hashType === 'recovery';
+
+    if (isRecoveryLinkReturn) {
+      setMode('reset');
+      return;
+    }
+
     const isSignupLinkReturn = queryVerified || queryType === 'signup' || hashType === 'signup';
     if (!isSignupLinkReturn) return;
 
@@ -347,6 +355,20 @@ export default function AuthPage() {
       });
     })();
   }, [searchParams]);
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setMode('reset');
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const setRateLimitBlock = (until: number) => {
     setRateLimitBlockedUntil(until);
