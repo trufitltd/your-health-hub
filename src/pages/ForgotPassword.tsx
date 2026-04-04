@@ -85,7 +85,7 @@ const ForgotPassword = () => {
               {t('auth.resetPassword.title', 'Reset your password')}
             </h1>
             <p className="text-muted-foreground">
-              {t('auth.resetPassword.subtitle', 'Enter your email address and we\'ll send you a link to reset your password')}
+              {t('auth.resetPassword.requestSubtitle', 'Enter your email address and we\'ll send you a link to reset your password')}
             </p>
           </div>
 

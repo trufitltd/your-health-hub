@@ -1185,7 +1185,7 @@ export default function AuthPage() {
               : mode === 'verify'
               ? `${t('auth.subtitle.enterVerificationCode', 'Enter the verification code sent to')} ${email}`
               : mode === 'reset'
-              ? t('auth.resetPassword.subtitle', 'Enter your new password below')
+              ? t('auth.resetPassword.newPasswordSubtitle', 'Enter your new password below')
               : t('auth.subtitle.joinPatients', 'Join thousands of patients getting quality healthcare')}
           </p>
 
