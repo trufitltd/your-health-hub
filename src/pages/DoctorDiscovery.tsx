@@ -1430,10 +1430,6 @@ export default function DoctorDiscovery() {
                       <p className="font-semibold">{selectedDoctor.experience_years ? `${selectedDoctor.experience_years} Years` : 'Not specified'}</p>
                     </div>
                     <div className="p-4 rounded-lg bg-muted/50">
-                      <p className="text-sm text-muted-foreground mb-1">Age</p>
-                      <p className="font-semibold">{selectedDoctor.age} Years Old</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-muted/50">
                       <p className="text-sm text-muted-foreground mb-1">Hospital</p>
                       <p className="font-semibold text-sm">{selectedDoctor.hospital_affiliation}</p>
                     </div>
