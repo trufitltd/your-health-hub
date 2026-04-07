@@ -232,6 +232,8 @@ export default function AuthPage() {
   const [verificationCode, setVerificationCode] = useState('');
   const [pendingUserData, setPendingUserData] = useState<any>(null);
   const [rateLimitBlockedUntil, setRateLimitBlockedUntil] = useState<number | null>(null);
+  const [isCheckingDoctorSignup, setIsCheckingDoctorSignup] = useState(false);
+  const [doctorSignupBlockedMessage, setDoctorSignupBlockedMessage] = useState('');
   const handledSignupRedirectRef = useRef(false);
   const navigate = useNavigate();
 
@@ -424,6 +426,48 @@ export default function AuthPage() {
     return Math.floor(parsed);
   };
 
+  const getDoctorSignupStatus = async () => {
+    const fallbackMessage = 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.';
+    const { data, error } = await supabase.rpc('get_doctor_signup_status');
+    if (error) {
+      console.warn('Doctor signup status lookup failed:', error);
+      return { open: true, message: fallbackMessage };
+    }
+    const row = Array.isArray(data) ? data[0] : null;
+    return {
+      open: row?.doctor_signup_open !== false,
+      message: String(row?.doctor_signup_closed_message || '').trim() || fallbackMessage,
+    };
+  };
+
+  const handleRoleSelection = async (nextRole: UserRole) => {
+    if (nextRole !== 'doctor') {
+      setRole('patient');
+      setDoctorSignupBlockedMessage('');
+      return;
+    }
+
+    setIsCheckingDoctorSignup(true);
+    try {
+      const doctorSignupStatus = await getDoctorSignupStatus();
+      if (!doctorSignupStatus.open) {
+        setRole('patient');
+        setDoctorSignupBlockedMessage(doctorSignupStatus.message);
+        toast({
+          title: 'Doctor sign up is currently closed',
+          description: doctorSignupStatus.message,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      setDoctorSignupBlockedMessage('');
+      setRole('doctor');
+    } finally {
+      setIsCheckingDoctorSignup(false);
+    }
+  };
+
   const ensurePatientRegistrationFallback = async (user: any) => {
     if (!user?.id) return;
     const fullName = getMetadataFullName(user);
@@ -507,7 +551,7 @@ export default function AuthPage() {
       specialty,
       experience,
       rate_per_consultation: isGeneralPracticeSpecialty(specialty || '')
-        ? 5000
+        ? (metadataParsedRate && metadataParsedRate > 0 ? metadataParsedRate : 5000)
         : (metadataParsedRate && metadataParsedRate >= MIN_SPECIALIST_RATE_NGN ? metadataParsedRate : MIN_SPECIALIST_RATE_NGN),
       profile_picture_url: profilePictureUrl,
       medical_license_url: medicalLicenseUrl || '',
@@ -715,6 +759,17 @@ export default function AuthPage() {
         }
         // Validate doctor registration fields if role is doctor
         if (role === 'doctor') {
+          const doctorSignupStatus = await getDoctorSignupStatus();
+          if (!doctorSignupStatus.open) {
+            toast({
+              title: 'Doctor sign up is currently closed',
+              description: doctorSignupStatus.message,
+              variant: 'destructive',
+            });
+            setIsLoading(false);
+            return;
+          }
+
           if (!gender || !age || !city || !state || !country || !maritalStatus || 
               !hospitalAffiliation || !specialty || !doctorIdType || !doctorIdNumber || !doctorExperience) {
             toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
@@ -737,12 +792,22 @@ export default function AuthPage() {
 
           const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
           const requiresSpecialistRate = !isGeneralPracticeSpecialty(resolvedSpecialty || '');
+          const isGpSpecialty = isGeneralPracticeSpecialty(resolvedSpecialty || '');
           const parsedRate = parseConsultationRate(consultationRate);
 
           if (requiresSpecialistRate && (!parsedRate || parsedRate < MIN_SPECIALIST_RATE_NGN)) {
             toast({
               title: 'Consultation rate required',
               description: `Specialist consultation rate must be at least NGN ${MIN_SPECIALIST_RATE_NGN.toLocaleString()}.`,
+            });
+            setIsLoading(false);
+            return;
+          }
+
+          if (isGpSpecialty && (!parsedRate || parsedRate <= 0)) {
+            toast({
+              title: 'Consultation rate required',
+              description: 'General Practitioner consultation rate is required and must be greater than zero.',
             });
             setIsLoading(false);
             return;
@@ -757,9 +822,8 @@ export default function AuthPage() {
 
         const signupResolvedSpecialty = role === 'doctor' ? (specialty === 'others' ? otherSpecialty : specialty) : '';
         const signupParsedRate = role === 'doctor' ? parseConsultationRate(consultationRate) : null;
-        const signupIsGp = role === 'doctor' && isGeneralPracticeSpecialty(signupResolvedSpecialty || '');
         const signupRatePerConsultation = role === 'doctor'
-          ? (signupIsGp ? 5000 : signupParsedRate)
+          ? signupParsedRate
           : null;
 
         // Sign up with Supabase using email - keep metadata minimal to debug 500 error
@@ -835,7 +899,14 @@ export default function AuthPage() {
               variant: 'destructive',
             });
           } else {
-            toast({ title: 'Registration failed', description: error.message });
+            const errorMessage = String(error.message || '');
+            const isDoctorSignupClosed = errorMessage.toLowerCase().includes('doctor signup is currently closed');
+            toast({
+              title: isDoctorSignupClosed ? 'Doctor sign up is currently closed' : 'Registration failed',
+              description: isDoctorSignupClosed
+                ? 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.'
+                : errorMessage,
+            });
           }
           setIsLoading(false);
           return;
@@ -880,9 +951,7 @@ export default function AuthPage() {
               specialty: resolvedSpecialty,
               preferred_consultation_languages: consultationLanguages,
               experience: doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
-              rate_per_consultation: isGeneralPracticeSpecialty(resolvedSpecialty || '')
-                ? 5000
-                : (parsedRate || null),
+              rate_per_consultation: parsedRate || null,
               profile_picture_url: existingDoctorRegistration?.profile_picture_url || null,
               medical_license_url: existingDoctorRegistration?.medical_license_url || '',
               identification_type: doctorIdType,
@@ -1198,12 +1267,16 @@ export default function AuthPage() {
                   <button
                     key={r}
                     type="button"
-                    onClick={() => setRole(r)}
+                    onClick={() => {
+                      void handleRoleSelection(r);
+                    }}
+                    disabled={isCheckingDoctorSignup && r === 'doctor'}
                     className={cn(
                       'flex-1 p-4 rounded-xl border-2 transition-all duration-200',
                       role === r
                         ? 'border-primary bg-primary-light'
-                        : 'border-border hover:border-primary/50'
+                        : 'border-border hover:border-primary/50',
+                      isCheckingDoctorSignup && r === 'doctor' ? 'opacity-60 cursor-not-allowed' : ''
                     )}
                   >
                     <p className="font-semibold capitalize">
@@ -1217,6 +1290,11 @@ export default function AuthPage() {
                   </button>
                 ))}
               </div>
+              {!!doctorSignupBlockedMessage && (
+                <p className="mt-3 text-sm text-destructive">
+                  {doctorSignupBlockedMessage}
+                </p>
+              )}
             </div>
           )}
 
@@ -1721,8 +1799,8 @@ export default function AuthPage() {
                       </div>
                     )}
 
-                    {/* Specialist Rate (shown directly under specialty selection for non-GP specialties) */}
-                    {specialistRequiresRate && (
+                    {/* Consultation Rate (shown directly under specialty selection) */}
+                    {(specialistRequiresRate || generalPractitionerSelected) && (
                       <div className="space-y-2">
                         <Label htmlFor="consultationRate">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')} *</Label>
                         <Input
@@ -1735,22 +1813,22 @@ export default function AuthPage() {
                           value={consultationRate}
                           onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
                         />
-                        <p className="text-xs text-muted-foreground">
-                          Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
-                          Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
-                          {parsedConsultationRate && (
-                            <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
-                          )}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* General Practitioner Fixed Rate (shown directly under specialty selection for GPs) */}
-                    {generalPractitionerSelected && (
-                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-                        <p className="text-xs text-foreground">
-                          General Practitioner consultations are fixed at NGN 5,000.00 per session. You receive 50% (NGN 2,500.00) and MyE-Doctor receives 50% (NGN 2,500.00).
-                        </p>
+                        {specialistRequiresRate ? (
+                          <p className="text-xs text-muted-foreground">
+                            Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
+                            Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
+                            {parsedConsultationRate && (
+                              <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
+                            )}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Revenue sharing: You receive 60% and MyE-Doctor receives 40%.
+                            {parsedConsultationRate && (
+                              <> You keep {formatCurrency(parsedConsultationRate * 0.6)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4)}.</>
+                            )}
+                          </p>
+                        )}
                       </div>
                     )}
 

@@ -126,7 +126,7 @@ const normalizeBioLanguageCode = (value: string | null | undefined) => {
 
 const isGeneralPracticeSpecialty = (value: string | null | undefined) => {
   const normalized = (value || '').toLowerCase().replace(/_/g, ' ').trim();
-  return normalized === 'general practitioner' || normalized === 'general practice';
+  return normalized === 'general practitioner' || normalized === 'general practice' || normalized === 'gp';
 };
 
 const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
@@ -872,7 +872,9 @@ const DoctorPortal = () => {
   });
   const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
   const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
+  const gpProfileSelected = !!effectiveProfileSpecialty && isGeneralPracticeSpecialty(effectiveProfileSpecialty);
   const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
+  const hasPositiveConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
   const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate >= MIN_SPECIALIST_RATE_NGN;
   const currentRegisteredRate = Number((doctorRegistration as { rate_per_consultation?: number | null } | null)?.rate_per_consultation || 0);
   const showMissingSpecialistRateBanner = specialistProfileSelected && currentRegisteredRate < MIN_SPECIALIST_RATE_NGN;
@@ -2709,9 +2711,21 @@ const DoctorPortal = () => {
         return;
       }
 
+      if (gpProfileSelected && !hasPositiveConsultationRate) {
+        toast({
+          title: t('auth.toast.consultationRateRequiredTitle', 'Consultation rate required'),
+          description: 'Please enter a valid GP consultation rate greater than zero.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const normalizedRateChangeReason = rateChangeReason.trim();
       const specialistRateChanged = specialistProfileSelected
         && hasValidConsultationRate
+        && Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009;
+      const gpRateChanged = gpProfileSelected
+        && hasPositiveConsultationRate
         && Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009;
 
       if (specialistRateChanged && normalizedRateChangeReason.length < 5) {
@@ -2738,6 +2752,9 @@ const DoctorPortal = () => {
         bio_translations: bioTranslationsPayload,
         specialty_translations: specialtyTranslationsPayload,
         preferred_consultation_languages: normalizedConsultationLanguages,
+        ...(gpProfileSelected && hasPositiveConsultationRate
+          ? { rate_per_consultation: parsedConsultationRate }
+          : {}),
       };
       const { error } = await supabase
         .from('doctor_registrations')
@@ -2773,7 +2790,9 @@ const DoctorPortal = () => {
         title: t('common.success', 'Success'),
         description: specialistRateChanged
           ? 'Profile updated and specialist rate change request sent to admin.'
-          : t('common.profileUpdated', 'Profile updated successfully!'),
+          : gpRateChanged
+            ? 'Profile updated and GP consultation rate saved.'
+            : t('common.profileUpdated', 'Profile updated successfully!'),
       });
     } catch (error) {
       toast({
@@ -4597,19 +4616,19 @@ const DoctorPortal = () => {
                                 className="mt-1" 
                               />
                             </div>
-                            {specialistProfileSelected && (
-                              <div>
-                                <label className="text-sm font-medium">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')}</label>
-                                <Input
-                                  value={profileFormData.consultationRate}
-                                  onChange={(e) => setProfileFormData({
-                                    ...profileFormData,
-                                    consultationRate: e.target.value.replace(/[^0-9.,]/g, ''),
-                                  })}
-                                  placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
-                                  className="mt-1"
-                                  inputMode="decimal"
-                                />
+                            <div>
+                              <label className="text-sm font-medium">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')}</label>
+                              <Input
+                                value={profileFormData.consultationRate}
+                                onChange={(e) => setProfileFormData({
+                                  ...profileFormData,
+                                  consultationRate: e.target.value.replace(/[^0-9.,]/g, ''),
+                                })}
+                                placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
+                                className="mt-1"
+                                inputMode="decimal"
+                              />
+                              {specialistProfileSelected ? (
                                 <p className="mt-1 text-xs text-muted-foreground">
                                   Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
                                   Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
@@ -4617,6 +4636,15 @@ const DoctorPortal = () => {
                                     <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
                                   )}
                                 </p>
+                              ) : (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  Revenue sharing: You receive 60% and MyE-Doctor receives 40%.
+                                  {hasPositiveConsultationRate && (
+                                    <> You keep {formatCurrency(parsedConsultationRate * 0.6)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4)}.</>
+                                  )}
+                                </p>
+                              )}
+                              {specialistProfileSelected && (
                                 <div className="mt-3 space-y-2">
                                   <label className="text-xs font-medium text-muted-foreground">Reason for rate change request</label>
                                   <Textarea
@@ -4632,8 +4660,8 @@ const DoctorPortal = () => {
                                     </p>
                                   )}
                                 </div>
-                              </div>
-                            )}
+                              )}
+                            </div>
                             <div>
                               <label className="text-sm font-medium">{t('common.experience', 'Experience')}</label>
                               <Input 
