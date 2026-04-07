@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -125,6 +126,12 @@ interface AdminClerkingRow {
   doctor_name: string;
   patient_name: string;
 }
+
+const hasDoctorRegistrationLicense = (doctor: Pick<Doctor, 'medical_license_url' | 'license_file_url'>) => {
+  const directUrl = String(doctor.medical_license_url || '').trim();
+  const fallbackUrl = String(doctor.license_file_url || '').trim();
+  return directUrl.length > 0 || fallbackUrl.length > 0;
+};
 
 type ParsedInboxThreadMessage = {
   sender: 'admin' | 'user';
@@ -246,8 +253,13 @@ const CentralAdmin = () => {
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isUpdatingDoctorSignupStatus, setIsUpdatingDoctorSignupStatus] = useState(false);
   const [clerkingSearch, setClerkingSearch] = useState('');
   const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'clerking'>(null);
+  const [doctorSignupOpen, setDoctorSignupOpen] = useState(true);
+  const [doctorSignupClosedMessage, setDoctorSignupClosedMessage] = useState(
+    'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
+  );
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
@@ -471,6 +483,32 @@ const CentralAdmin = () => {
     enabled: !!user && isAdmin,
     refetchInterval: 30000,
   });
+
+  const { data: doctorSignupStatus } = useQuery({
+    queryKey: ['admin-doctor-signup-status'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_doctor_signup_status');
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : null;
+      return {
+        doctor_signup_open: row?.doctor_signup_open !== false,
+        doctor_signup_closed_message:
+          String(row?.doctor_signup_closed_message || '').trim()
+          || 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
+      };
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  useEffect(() => {
+    if (!doctorSignupStatus) return;
+    setDoctorSignupOpen(doctorSignupStatus.doctor_signup_open !== false);
+    setDoctorSignupClosedMessage(
+      String(doctorSignupStatus.doctor_signup_closed_message || '').trim()
+      || 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
+    );
+  }, [doctorSignupStatus]);
 
   const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
     queryKey: ['admin-contact-messages'],
@@ -832,15 +870,26 @@ const CentralAdmin = () => {
   }
 
   // Calculate statistics
+  const doctorStatusCounts = doctors.reduce(
+    (acc, doctor) => {
+      const reviewStatus = !hasDoctorRegistrationLicense(doctor)
+        ? 'incomplete'
+        : ((doctor.verification_status || 'pending') as 'pending' | 'approved' | 'rejected');
+      acc[reviewStatus] += 1;
+      return acc;
+    },
+    { pending: 0, approved: 0, rejected: 0, incomplete: 0 } as Record<'pending' | 'approved' | 'rejected' | 'incomplete', number>,
+  );
+
   const stats = {
     totalDoctors: doctors.length,
     totalPatients: patients.length,
-    approvedDoctors: doctors.filter(d => d.verification_status === 'approved').length,
-    pendingVerification: doctors.filter(d => d.verification_status === 'pending').length,
-    incompleteDoctors: doctors.filter((d) => !String(d.medical_license_url || '').trim()).length,
-    rejectedDoctors: doctors.filter(d => d.verification_status === 'rejected').length,
+    approvedDoctors: doctorStatusCounts.approved,
+    pendingVerification: doctorStatusCounts.pending,
+    incompleteDoctors: doctorStatusCounts.incomplete,
+    rejectedDoctors: doctorStatusCounts.rejected,
     totalConsultations: doctors.reduce((sum, d) => sum + (d.total_consultations || 0), 0),
-    averageRating: doctors.length > 0 
+    averageRating: doctors.length > 0
       ? (doctors.reduce((sum, d) => sum + (d.rating || 0), 0) / doctors.length).toFixed(2)
       : 0,
   };
@@ -1118,11 +1167,7 @@ const CentralAdmin = () => {
     }
   };
 
-  const hasMedicalLicense = (doctor: Doctor) => {
-    const directUrl = String(doctor.medical_license_url || '').trim();
-    const fallbackUrl = String(doctor.license_file_url || '').trim();
-    return directUrl.length > 0 || fallbackUrl.length > 0;
-  };
+  const hasMedicalLicense = (doctor: Doctor) => hasDoctorRegistrationLicense(doctor);
 
   const getMedicalLicenseUrl = (doctor: Doctor | null | undefined) => {
     if (!doctor) return '';
@@ -1141,6 +1186,40 @@ const CentralAdmin = () => {
   const getDoctorReviewStatus = (doctor: Doctor): 'pending' | 'approved' | 'rejected' | 'incomplete' => {
     if (!hasMedicalLicense(doctor)) return 'incomplete';
     return (doctor.verification_status || 'pending') as 'pending' | 'approved' | 'rejected' | 'incomplete';
+  };
+
+  const handleOverviewStatClick = (
+    statKey: 'total_doctors' | 'total_patients' | 'approved' | 'pending' | 'incomplete'
+  ) => {
+    if (statKey === 'total_doctors') {
+      setSearchQuery('');
+      setStatusFilter('all');
+      setActiveTab('doctors');
+      return;
+    }
+
+    if (statKey === 'total_patients') {
+      setActiveTab('patients');
+      return;
+    }
+
+    if (statKey === 'approved') {
+      setSearchQuery('');
+      setStatusFilter('approved');
+      setActiveTab('doctors');
+      return;
+    }
+
+    if (statKey === 'pending') {
+      setSearchQuery('');
+      setStatusFilter('pending');
+      setActiveTab('verification');
+      return;
+    }
+
+    setSearchQuery('');
+    setStatusFilter('incomplete');
+    setActiveTab('incomplete-doctors');
   };
 
   // Filter doctors
@@ -1833,6 +1912,39 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleUpdateDoctorSignupStatus = async () => {
+    setIsUpdatingDoctorSignupStatus(true);
+    try {
+      const safeMessage =
+        doctorSignupClosedMessage.trim()
+        || 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.';
+
+      const { error } = await supabase.rpc('set_doctor_signup_status', {
+        p_doctor_signup_open: doctorSignupOpen,
+        p_doctor_signup_closed_message: safeMessage,
+      });
+
+      if (error) throw error;
+
+      queryClient.invalidateQueries({ queryKey: ['admin-doctor-signup-status'] });
+
+      toast({
+        title: 'Success',
+        description: doctorSignupOpen
+          ? 'Doctor sign up has been reopened.'
+          : 'Doctor sign up has been closed for this round.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to update doctor sign up status.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUpdatingDoctorSignupStatus(false);
+    }
+  };
+
   const handleInstallApp = async () => {
     const ua = navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/i.test(ua);
@@ -1920,6 +2032,16 @@ const CentralAdmin = () => {
                     <button
                       key={item.id}
                       onClick={() => {
+                        if (item.id === 'doctors') {
+                          setSearchQuery('');
+                          setStatusFilter('all');
+                        } else if (item.id === 'verification') {
+                          setSearchQuery('');
+                          setStatusFilter('pending');
+                        } else if (item.id === 'incomplete-doctors') {
+                          setSearchQuery('');
+                          setStatusFilter('incomplete');
+                        }
                         setActiveTab(item.id);
                         setSidebarOpen(false);
                       }}
@@ -2038,11 +2160,11 @@ const CentralAdmin = () => {
             {activeTab === 'overview' && (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-4">
                 {[
-                  { label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
-                  { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
-                  { label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
-                  { label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
-                  { label: 'Incomplete Doctors', value: stats.incompleteDoctors, icon: AlertCircle, color: 'bg-destructive/10 text-destructive' },
+                  { key: 'total_doctors' as const, label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
+                  { key: 'total_patients' as const, label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
+                  { key: 'approved' as const, label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
+                  { key: 'pending' as const, label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
+                  { key: 'incomplete' as const, label: 'Incomplete Doctors', value: stats.incompleteDoctors, icon: AlertCircle, color: 'bg-destructive/10 text-destructive' },
                 ].map((stat, index) => (
                   <motion.div
                     key={stat.label}
@@ -2050,7 +2172,18 @@ const CentralAdmin = () => {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.1 }}
                   >
-                    <Card>
+                    <Card
+                      role="button"
+                      tabIndex={0}
+                      className="cursor-pointer transition-shadow hover:shadow-md"
+                      onClick={() => handleOverviewStatClick(stat.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          handleOverviewStatClick(stat.key);
+                        }
+                      }}
+                    >
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div>
@@ -3271,6 +3404,43 @@ const CentralAdmin = () => {
                       </div>
                       <Button onClick={handleChangePassword} disabled={isChangingPassword}>
                         {isChangingPassword ? 'Updating...' : 'Update Password'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Doctor Sign Up Control</CardTitle>
+                    <CardDescription>Close or reopen doctor registration rounds.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                        <div>
+                          <p className="text-sm font-medium">Doctor sign up is {doctorSignupOpen ? 'open' : 'closed'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            When closed, doctors will be informed that sign up has been closed for this round.
+                          </p>
+                        </div>
+                        <Switch checked={doctorSignupOpen} onCheckedChange={setDoctorSignupOpen} />
+                      </div>
+
+                      {!doctorSignupOpen && (
+                        <div>
+                          <label className="text-sm font-medium">Closed message shown to doctors</label>
+                          <Textarea
+                            className="mt-1"
+                            rows={3}
+                            value={doctorSignupClosedMessage}
+                            onChange={(e) => setDoctorSignupClosedMessage(e.target.value)}
+                            placeholder="Doctor sign up has been closed for this round and will resume soon. Please keep checking the site."
+                          />
+                        </div>
+                      )}
+
+                      <Button onClick={handleUpdateDoctorSignupStatus} disabled={isUpdatingDoctorSignupStatus}>
+                        {isUpdatingDoctorSignupStatus ? 'Updating...' : 'Save Doctor Sign Up Status'}
                       </Button>
                     </div>
                   </CardContent>
