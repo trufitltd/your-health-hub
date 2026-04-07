@@ -41,7 +41,7 @@ const Index = () => {
   ];
 
   const stats = [
-    { value: `${formatNumber(50)}+`, label: t('landing.stats.certifiedDoctors', 'Certified Doctors') },
+    { value: `${formatNumber(100)}+`, label: t('landing.stats.certifiedDoctors', 'Certified Doctors') },
     { value: `${formatNumber(1000)}+`, label: t('landing.stats.happyPatients', 'Happy Patients') },
     { value: `${formatNumber(15)}+`, label: t('landing.stats.specialties', 'Specialties') },
     { value: `${formatNumber(99)}%`, label: t('landing.stats.satisfactionRate', 'Satisfaction Rate') },
