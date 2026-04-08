@@ -375,6 +375,10 @@ export default function COOPortal() {
     () => doctors.filter((doctor) => getDoctorListingStatus(doctor) === 'incomplete'),
     [doctors],
   );
+  const incompleteDoctorIds = useMemo(
+    () => new Set(incompleteDoctors.map((doctor) => doctor.user_id)),
+    [incompleteDoctors],
+  );
 
   const filteredDoctors = useMemo(() => {
     const q = doctorEmailSearch.trim().toLowerCase();
@@ -521,6 +525,14 @@ export default function COOPortal() {
   };
 
   const openQuickMessage = (target: QuickMessageTarget) => {
+    if (target.type === 'doctor' && incompleteDoctorIds.has(target.id)) {
+      toast({
+        title: 'Messaging unavailable',
+        description: 'You cannot message doctors with incomplete registration.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setQuickMessageTarget(target);
     setQuickMessageBody('');
   };
@@ -803,14 +815,45 @@ export default function COOPortal() {
                     <div key={apt.id} className="rounded-lg border p-3 space-y-1">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-medium">
-                          {patientById.get(apt.patient_id || '')?.full_name || 'Unknown Patient'}
+                          {apt.patient_id ? (
+                            <button
+                              type="button"
+                              onClick={() => openQuickMessage({
+                                id: apt.patient_id!,
+                                type: 'patient',
+                                name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                email: patientById.get(apt.patient_id || '')?.email || '',
+                              })}
+                              className="text-left hover:underline"
+                            >
+                              {patientById.get(apt.patient_id || '')?.full_name || 'Unknown Patient'}
+                            </button>
+                          ) : (
+                            'Unknown Patient'
+                          )}
                         </p>
                         <Badge className="bg-primary/10 text-primary border-primary/20 text-xs">
                           {normalizeAppointmentStatus(apt.status)?.replace(/_/g, ' ')}
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Doctor: {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                        Doctor:{' '}
+                        {apt.doctor_id ? (
+                          <button
+                            type="button"
+                            onClick={() => openQuickMessage({
+                              id: apt.doctor_id!,
+                              type: 'doctor',
+                              name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                              email: doctorById.get(apt.doctor_id || '')?.email || '',
+                            })}
+                            className="text-left hover:underline"
+                          >
+                            {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                          </button>
+                        ) : (
+                          'N/A'
+                        )}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Appointment: {formatDateTime(apt.date)} · Booked: {formatDateTime(apt.created_at)}
@@ -844,13 +887,47 @@ export default function COOPortal() {
                         </p>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
-                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.doctor_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.doctor_id!,
+                                  type: 'doctor',
+                                  name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                                  email: doctorById.get(apt.doctor_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
                         </div>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Patient</p>
-                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.patient_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.patient_id!,
+                                  type: 'patient',
+                                  name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                  email: patientById.get(apt.patient_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {patientById.get(apt.patient_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
                         </div>
@@ -880,13 +957,47 @@ export default function COOPortal() {
                         </p>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
-                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.doctor_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.doctor_id!,
+                                  type: 'doctor',
+                                  name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                                  email: doctorById.get(apt.doctor_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
                         </div>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Patient</p>
-                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.patient_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.patient_id!,
+                                  type: 'patient',
+                                  name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                  email: patientById.get(apt.patient_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {patientById.get(apt.patient_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
                         </div>
@@ -916,13 +1027,47 @@ export default function COOPortal() {
                         </p>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
-                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.doctor_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.doctor_id!,
+                                  type: 'doctor',
+                                  name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                                  email: doctorById.get(apt.doctor_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
                         </div>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Patient</p>
-                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.patient_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.patient_id!,
+                                  type: 'patient',
+                                  name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                  email: patientById.get(apt.patient_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {patientById.get(apt.patient_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
                         </div>
@@ -954,13 +1099,47 @@ export default function COOPortal() {
                         </p>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
-                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.doctor_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.doctor_id!,
+                                  type: 'doctor',
+                                  name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                                  email: doctorById.get(apt.doctor_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
                         </div>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Patient</p>
-                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.patient_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.patient_id!,
+                                  type: 'patient',
+                                  name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                  email: patientById.get(apt.patient_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {patientById.get(apt.patient_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
                         </div>
@@ -992,13 +1171,47 @@ export default function COOPortal() {
                         </p>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
-                          <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.doctor_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.doctor_id!,
+                                  type: 'doctor',
+                                  name: doctorById.get(apt.doctor_id || '')?.full_name || 'Doctor',
+                                  email: doctorById.get(apt.doctor_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {doctorById.get(apt.doctor_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{doctorById.get(apt.doctor_id || '')?.phone_number || 'N/A'}</p>
                         </div>
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Patient</p>
-                          <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.full_name || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {apt.patient_id ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: apt.patient_id!,
+                                  type: 'patient',
+                                  name: patientById.get(apt.patient_id || '')?.full_name || 'Patient',
+                                  email: patientById.get(apt.patient_id || '')?.email || '',
+                                })}
+                                className="text-left hover:underline"
+                              >
+                                {patientById.get(apt.patient_id || '')?.full_name || 'N/A'}
+                              </button>
+                            ) : (
+                              'N/A'
+                            )}
+                          </p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.email || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">{patientById.get(apt.patient_id || '')?.phone_number || 'N/A'}</p>
                         </div>
@@ -1013,7 +1226,7 @@ export default function COOPortal() {
           <TabsContent value="messages" forceMount className={activeTab !== 'messages' ? 'hidden' : ''}>
             <COOMessagesTab
               patients={patients}
-              doctors={doctors}
+              doctors={doctors.filter((doctor) => !incompleteDoctorIds.has(doctor.user_id))}
               cooUserId={user.id}
               cooName={cooDisplayName}
               onUnreadChange={(count) => {
@@ -1048,18 +1261,22 @@ export default function COOPortal() {
                     return (
                       <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
                         <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => openQuickMessage({
-                              id: doctor.user_id,
-                              type: 'doctor',
-                              name: doctor.full_name || 'Doctor',
-                              email: doctor.email || '',
-                            })}
-                            className="text-sm font-medium text-left hover:underline"
-                          >
-                            {doctor.full_name || 'Doctor'}
-                          </button>
+                          {listingStatus === 'incomplete' ? (
+                            <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openQuickMessage({
+                                id: doctor.user_id,
+                                type: 'doctor',
+                                name: doctor.full_name || 'Doctor',
+                                email: doctor.email || '',
+                              })}
+                              className="text-sm font-medium text-left hover:underline"
+                            >
+                              {doctor.full_name || 'Doctor'}
+                            </button>
+                          )}
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
                           <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
@@ -1265,6 +1482,7 @@ export default function COOPortal() {
                 ) : (
                   paymentOverview.rows.map((payment) => {
                     const patient = payment.patient_id ? patientById.get(payment.patient_id) : null;
+                    const messageTargetPatientId = patient?.user_id || payment.patient_id || null;
                     const patientName = patient?.full_name || payment.patient_name || 'Unknown Patient';
                     const patientEmail = patient?.email || payment.patient_email || 'N/A';
                     const patientPhone = patient?.phone_number || payment.patient_phone || 'N/A';
@@ -1275,7 +1493,23 @@ export default function COOPortal() {
                         <p className="text-sm font-medium">{formatCurrency(Number(payment.amount || 0))}</p>
                         <p className="text-xs text-muted-foreground">{formatDateTime(payment.created_at || null)}</p>
                         <p className="text-xs">
-                          <span className="font-medium">Patient:</span> {patientName}
+                          <span className="font-medium">Patient:</span>{' '}
+                          {messageTargetPatientId ? (
+                            <button
+                              type="button"
+                              onClick={() => openQuickMessage({
+                                id: messageTargetPatientId,
+                                type: 'patient',
+                                name: patientName,
+                                email: patientEmail === 'N/A' ? '' : patientEmail,
+                              })}
+                              className="font-medium hover:underline"
+                            >
+                              {patientName}
+                            </button>
+                          ) : (
+                            patientName
+                          )}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           <span className="font-medium text-foreground">Email:</span> {patientEmail}
