@@ -10,11 +10,20 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings, Download } from 'lucide-react';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
 import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
 import { toast } from '@/components/ui/use-toast';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 type AppointmentRow = {
   id: string;
@@ -33,6 +42,7 @@ type DoctorRow = {
   email: string | null;
   phone_number: string | null;
   city?: string | null;
+  state?: string | null;
   verification_status: string | null;
   medical_license_url?: string | null;
   rate_per_consultation?: number | null;
@@ -46,6 +56,7 @@ type PatientRow = {
   age?: number | null;
   gender?: string | null;
   city?: string | null;
+  state?: string | null;
 };
 
 type PaymentRow = {
@@ -81,6 +92,13 @@ type ProfileRow = {
   full_name: string | null;
 };
 
+type QuickMessageTarget = {
+  id: string;
+  type: 'doctor' | 'patient';
+  name: string;
+  email: string;
+};
+
 const isSuccessfulPayment = (status: string | null | undefined) => {
   const normalized = String(status || '').trim().toLowerCase();
   return ['completed', 'success', 'paid', 'succeeded'].includes(normalized);
@@ -96,7 +114,7 @@ export default function COOPortal() {
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { formatDateTime, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('appointments');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [onlineDoctorIds, setOnlineDoctorIds] = useState<Record<string, OnlineDoctorPresence>>({});
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -107,6 +125,12 @@ export default function COOPortal() {
     newPassword: '',
     confirmPassword: '',
   });
+  const [doctorEmailSearch, setDoctorEmailSearch] = useState('');
+  const [activeDoctorEmailSearch, setActiveDoctorEmailSearch] = useState('');
+  const [patientEmailSearch, setPatientEmailSearch] = useState('');
+  const [quickMessageTarget, setQuickMessageTarget] = useState<QuickMessageTarget | null>(null);
+  const [quickMessageBody, setQuickMessageBody] = useState('');
+  const [isSendingQuickMessage, setIsSendingQuickMessage] = useState(false);
 
   const allowedEmails = useMemo(() => {
     const cooRaw = (import.meta.env.VITE_COO_EMAILS as string | undefined) || '';
@@ -197,7 +221,7 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctor_registrations')
-        .select('user_id, full_name, email, phone_number, city, verification_status, medical_license_url, rate_per_consultation')
+        .select('user_id, full_name, email, phone_number, city, state, verification_status, medical_license_url, rate_per_consultation')
         .order('created_at', { ascending: false });
       if (error) throw error;
       return (data || []) as DoctorRow[];
@@ -210,7 +234,7 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patient_registrations')
-        .select('user_id, full_name, email, phone_number, age, gender, city')
+        .select('user_id, full_name, email, phone_number, age, gender, city, state')
         .limit(5000);
       if (error) throw error;
       return (data || []) as PatientRow[];
@@ -352,6 +376,24 @@ export default function COOPortal() {
     [doctors],
   );
 
+  const filteredDoctors = useMemo(() => {
+    const q = doctorEmailSearch.trim().toLowerCase();
+    if (!q) return doctors;
+    return doctors.filter((doctor) => String(doctor.email || '').toLowerCase().includes(q));
+  }, [doctors, doctorEmailSearch]);
+
+  const filteredActiveDoctors = useMemo(() => {
+    const q = activeDoctorEmailSearch.trim().toLowerCase();
+    if (!q) return activeDoctorsOverview.activeDoctorsList;
+    return activeDoctorsOverview.activeDoctorsList.filter((doctor) => String(doctor.email || '').toLowerCase().includes(q));
+  }, [activeDoctorsOverview.activeDoctorsList, activeDoctorEmailSearch]);
+
+  const filteredPatients = useMemo(() => {
+    const q = patientEmailSearch.trim().toLowerCase();
+    if (!q) return patients;
+    return patients.filter((patient) => String(patient.email || '').toLowerCase().includes(q));
+  }, [patients, patientEmailSearch]);
+
   if (!user) return <Navigate to="/coo/login" replace />;
   if (!isAllowed) return <Navigate to="/coo/login" replace />;
 
@@ -373,10 +415,12 @@ export default function COOPortal() {
   })();
 
   const cooNavItems = [
+    { id: 'dashboard', label: 'Dashboard' },
     { id: 'appointments', label: 'Appointments' },
     { id: 'patients', label: 'Patients' },
     { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
     { id: 'doctors', label: 'Doctors' },
+    { id: 'active-doctors', label: 'Active Doctors', badge: activeDoctorsOverview.activeOnlineCount > 0 ? (activeDoctorsOverview.activeOnlineCount > 99 ? '99+' : activeDoctorsOverview.activeOnlineCount) : undefined },
     { id: 'incomplete-doctors', label: 'Incomplete Doctors', badge: incompleteDoctors.length > 0 ? (incompleteDoctors.length > 99 ? '99+' : incompleteDoctors.length) : undefined },
     { id: 'payments', label: 'Payments' },
     { id: 'settings', label: 'Settings' },
@@ -470,6 +514,49 @@ export default function COOPortal() {
     }
     if (result === 'already_installed') return;
     navigate('/install');
+  };
+
+  const openStatDetails = (tabId: (typeof cooNavItems)[number]['id']) => {
+    setActiveTab(tabId);
+  };
+
+  const openQuickMessage = (target: QuickMessageTarget) => {
+    setQuickMessageTarget(target);
+    setQuickMessageBody('');
+  };
+
+  const handleSendQuickMessage = async () => {
+    const content = quickMessageBody.trim();
+    if (!content || !quickMessageTarget || !user?.id) return;
+
+    try {
+      setIsSendingQuickMessage(true);
+      const { error } = await supabase.from('coo_messages').insert({
+        thread_id: quickMessageTarget.id,
+        thread_type: quickMessageTarget.type,
+        sender_id: user.id,
+        sender_role: 'coo',
+        sender_name: cooDisplayName,
+        content,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: 'Message sent',
+        description: `Your message has been sent to ${quickMessageTarget.name}.`,
+      });
+      setQuickMessageTarget(null);
+      setQuickMessageBody('');
+    } catch (error: any) {
+      toast({
+        title: 'Failed to send message',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSendingQuickMessage(false);
+    }
   };
 
   return (
@@ -567,8 +654,27 @@ export default function COOPortal() {
               </Card>
             ) : null}
 
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList className="hidden">
+                {cooNavItems.map((item) => (
+                  <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>
+                ))}
+              </TabsList>
+
+          <TabsContent value="dashboard" className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('patients')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('patients');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Total Registered Patients</CardDescription>
                   <CardTitle className="text-3xl">{patientCount}</CardTitle>
@@ -576,7 +682,18 @@ export default function COOPortal() {
                 <CardContent><Users className="w-5 h-5 text-primary" /></CardContent>
               </Card>
 
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('appointments')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('appointments');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Appointments (New / Existing)</CardDescription>
                   <CardTitle className="text-3xl">{appointmentOverview.newAppointments} / {appointmentOverview.existingAppointments}</CardTitle>
@@ -584,7 +701,18 @@ export default function COOPortal() {
                 <CardContent><CalendarClock className="w-5 h-5 text-primary" /></CardContent>
               </Card>
 
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('active-doctors')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('active-doctors');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Active Doctors Online Now</CardDescription>
                   <CardTitle className="text-3xl">{activeDoctorsOverview.activeOnlineCount}</CardTitle>
@@ -592,7 +720,18 @@ export default function COOPortal() {
                 <CardContent><Stethoscope className="w-5 h-5 text-primary" /></CardContent>
               </Card>
 
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('messages')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('messages');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Patient Messages</CardDescription>
                   <CardTitle className="text-3xl">{contactInbox.length}</CardTitle>
@@ -600,7 +739,18 @@ export default function COOPortal() {
                 <CardContent><MessageSquare className="w-5 h-5 text-primary" /></CardContent>
               </Card>
 
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('payments')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('payments');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Payment Success / Failed</CardDescription>
                   <CardTitle className="text-3xl">{paymentOverview.successfulCount} / {paymentOverview.failedCount}</CardTitle>
@@ -608,7 +758,18 @@ export default function COOPortal() {
                 <CardContent><CreditCard className="w-5 h-5 text-primary" /></CardContent>
               </Card>
 
-              <Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('incomplete-doctors')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('incomplete-doctors');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-destructive/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"
+              >
                 <CardHeader className="pb-2">
                   <CardDescription>Incomplete Doctor Registrations</CardDescription>
                   <CardTitle className="text-3xl">{incompleteDoctors.length}</CardTitle>
@@ -617,14 +778,6 @@ export default function COOPortal() {
               </Card>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-              <TabsList className="hidden">
-                {cooNavItems.map((item) => (
-                  <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>
-                ))}
-              </TabsList>
-
-          <TabsContent value="appointments" className="space-y-4">
             <Card>
               <CardHeader>
                 <CardTitle>Appointment Overview</CardTitle>
@@ -667,7 +820,9 @@ export default function COOPortal() {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
 
+          <TabsContent value="appointments" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
               <Card>
                 <CardHeader>
@@ -876,19 +1031,38 @@ export default function COOPortal() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {doctors.length === 0 ? (
+                <div className="pb-2">
+                  <Input
+                    type="email"
+                    placeholder="Search doctor by email"
+                    value={doctorEmailSearch}
+                    onChange={(event) => setDoctorEmailSearch(event.target.value)}
+                  />
+                </div>
+                {filteredDoctors.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No doctors found.</p>
                 ) : (
-                  doctors.map((doctor) => {
+                  filteredDoctors.map((doctor) => {
                     const presence = onlineDoctorIds[doctor.user_id];
                     const listingStatus = getDoctorListingStatus(doctor);
                     return (
                       <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
+                          <button
+                            type="button"
+                            onClick={() => openQuickMessage({
+                              id: doctor.user_id,
+                              type: 'doctor',
+                              name: doctor.full_name || 'Doctor',
+                              email: doctor.email || '',
+                            })}
+                            className="text-sm font-medium text-left hover:underline"
+                          >
+                            {doctor.full_name || 'Doctor'}
+                          </button>
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
-                          <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
@@ -924,6 +1098,69 @@ export default function COOPortal() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="active-doctors" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Active Doctors Online Now</CardTitle>
+                <CardDescription>
+                  Showing only approved doctors currently online.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="pb-2">
+                  <Input
+                    type="email"
+                    placeholder="Search active doctor by email"
+                    value={activeDoctorEmailSearch}
+                    onChange={(event) => setActiveDoctorEmailSearch(event.target.value)}
+                  />
+                </div>
+                {filteredActiveDoctors.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No doctors are currently online.</p>
+                ) : (
+                  filteredActiveDoctors.map((doctor) => {
+                    const presence = onlineDoctorIds[doctor.user_id];
+                    return (
+                      <div key={doctor.user_id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-primary/20 bg-primary/5 p-3">
+                        <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => openQuickMessage({
+                              id: doctor.user_id,
+                              type: 'doctor',
+                              name: doctor.full_name || 'Doctor',
+                              email: doctor.email || '',
+                            })}
+                            className="text-sm font-medium text-left hover:underline"
+                          >
+                            {doctor.full_name || 'Doctor'}
+                          </button>
+                          <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
+                          <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                          </p>
+                          {presence?.online_at && (
+                            <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1 self-start sm:self-auto">
+                          <Badge className="bg-success/10 text-success border-success/20">
+                            Approved
+                          </Badge>
+                          <Badge className="bg-green-500/10 text-green-700 border-green-500/20">
+                            Online
+                          </Badge>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="incomplete-doctors" className="space-y-4">
             <Card>
               <CardHeader>
@@ -944,7 +1181,7 @@ export default function COOPortal() {
                           <p className="text-sm font-medium">{doctor.full_name || 'Doctor'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
-                          <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
+                          <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
@@ -977,17 +1214,36 @@ export default function COOPortal() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {patients.length === 0 ? (
+                <div className="pb-2">
+                  <Input
+                    type="email"
+                    placeholder="Search patient by email"
+                    value={patientEmailSearch}
+                    onChange={(event) => setPatientEmailSearch(event.target.value)}
+                  />
+                </div>
+                {filteredPatients.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No patient records found.</p>
                 ) : (
-                  patients.map((patient) => (
+                  filteredPatients.map((patient) => (
                     <div key={patient.user_id} className="rounded-lg border p-3">
-                      <p className="text-sm font-medium">{patient.full_name || 'Patient'}</p>
+                      <button
+                        type="button"
+                        onClick={() => openQuickMessage({
+                          id: patient.user_id,
+                          type: 'patient',
+                          name: patient.full_name || 'Patient',
+                          email: patient.email || '',
+                        })}
+                        className="text-sm font-medium text-left hover:underline"
+                      >
+                        {patient.full_name || 'Patient'}
+                      </button>
                       <p className="text-xs text-muted-foreground">{patient.email || 'No email'}</p>
                       <p className="text-xs text-muted-foreground">{patient.phone_number || 'No phone'}</p>
                       <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
                       <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
-                      <p className="text-xs text-muted-foreground">City: {patient.city || 'N/A'}</p>
+                      <p className="text-xs text-muted-foreground">Location: {patient.city || 'N/A'}, {patient.state || 'N/A'}</p>
                     </div>
                   ))
                 )}
@@ -1120,6 +1376,59 @@ export default function COOPortal() {
 
 
         </Tabs>
+
+        <Dialog
+          open={!!quickMessageTarget}
+          onOpenChange={(open) => {
+            if (!open) {
+              setQuickMessageTarget(null);
+              setQuickMessageBody('');
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Send Message</DialogTitle>
+              <DialogDescription>
+                {quickMessageTarget
+                  ? `Send a direct message to ${quickMessageTarget.name} (${quickMessageTarget.email || 'No email'}).`
+                  : 'Send a direct message.'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              <Textarea
+                placeholder="Type your message..."
+                value={quickMessageBody}
+                onChange={(event) => setQuickMessageBody(event.target.value)}
+                rows={5}
+              />
+              <p className="text-xs text-muted-foreground">
+                This sends immediately to the selected {quickMessageTarget?.type || 'user'} thread.
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setQuickMessageTarget(null);
+                  setQuickMessageBody('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleSendQuickMessage}
+                disabled={isSendingQuickMessage || !quickMessageBody.trim() || !quickMessageTarget}
+              >
+                {isSendingQuickMessage ? 'Sending...' : 'Send Message'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
           </main>
         </div>
 
