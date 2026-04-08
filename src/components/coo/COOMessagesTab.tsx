@@ -22,6 +22,12 @@ type CooMessage = {
 };
 
 type ThreadPreview = { lastMessage?: string; lastAt?: string; unread: number };
+type ThreadItem = {
+  id: string;
+  type: 'admin' | 'patient' | 'doctor';
+  label: string;
+  email?: string | null;
+};
 
 interface COOMessagesTabProps {
   patients: { user_id: string; full_name: string | null; email: string | null }[];
@@ -37,18 +43,20 @@ function buildThreads(
   doctors: COOMessagesTabProps['doctors']
 ) {
   return [
-    { id: 'admin', type: 'admin' as const, label: 'Central Admin' },
+    { id: 'admin', type: 'admin' as const, label: 'Central Admin', email: null },
     ...doctors.map((d) => ({
       id: d.user_id,
       type: 'doctor' as const,
       label: d.full_name || d.email || 'Doctor',
+      email: d.email,
     })),
     ...patients.map((p) => ({
       id: p.user_id,
       type: 'patient' as const,
       label: p.full_name || p.email || 'Patient',
+      email: p.email,
     })),
-  ];
+  ] as ThreadItem[];
 }
 
 export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnreadChange }: COOMessagesTabProps) {
@@ -62,6 +70,7 @@ export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnread
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<'admin' | 'patient' | 'doctor'>('admin');
   const [activeLabel, setActiveLabel] = useState('');
+  const [searchEmail, setSearchEmail] = useState('');
 
   // Per-thread previews (last message, unread) loaded async — only affects sidebar, never the chat panel
   const [previews, setPreviews] = useState<Record<string, ThreadPreview>>({});
@@ -80,6 +89,12 @@ export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnread
     }
     return base;
   };
+
+  const filteredThreads = threads.filter((thread) => {
+    const q = searchEmail.trim().toLowerCase();
+    if (!q) return true;
+    return String(thread.email || '').toLowerCase().includes(q);
+  });
 
   const getReadState = (): Record<string, string> => {
     try { return JSON.parse(localStorage.getItem(readKey) || '{}'); }
@@ -253,9 +268,16 @@ export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnread
           <p className="text-sm font-semibold text-muted-foreground">
             Conversations ({threads.length})
           </p>
+          <Input
+            type="email"
+            placeholder="Search by email"
+            value={searchEmail}
+            onChange={(event) => setSearchEmail(event.target.value)}
+            className="mt-2 h-8 text-xs"
+          />
         </div>
         <ScrollArea className="flex-1">
-          {threads.map((thread) => {
+          {filteredThreads.map((thread) => {
             const preview = previews[thread.id];
             return (
               <button
@@ -287,6 +309,9 @@ export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnread
                   <p className="text-xs text-muted-foreground truncate mt-0.5">
                     {preview?.lastMessage || 'No messages yet'}
                   </p>
+                  {thread.email && (
+                    <p className="text-[10px] text-muted-foreground truncate mt-0.5">{thread.email}</p>
+                  )}
                   <div className="flex items-center justify-between mt-0.5">
                     <Badge variant="outline" className="text-[10px]">
                       {thread.type === 'admin' ? 'Admin' : thread.type === 'doctor' ? 'Doctor' : 'Patient'}
@@ -299,6 +324,9 @@ export function COOMessagesTab({ patients, doctors, cooUserId, cooName, onUnread
               </button>
             );
           })}
+          {filteredThreads.length === 0 && (
+            <div className="p-3 text-xs text-muted-foreground">No threads match that email.</div>
+          )}
         </ScrollArea>
       </div>
 
