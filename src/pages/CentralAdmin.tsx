@@ -2899,7 +2899,9 @@ const CentralAdmin = () => {
                                 <p className="font-semibold">Dr. {doctor.full_name}</p>
                                 <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                 <p className="text-xs text-muted-foreground">{doctor.email}</p>
-                                <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
+                                </p>
                                 <p className="text-xs text-muted-foreground">
                                   Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                 </p>
@@ -2986,7 +2988,9 @@ const CentralAdmin = () => {
                                   <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)}</p>
                                   <p className="text-xs text-muted-foreground">{doctor.email || 'No email'}</p>
                                   <p className="text-xs text-muted-foreground">Phone: {doctor.phone_number || 'No phone'}</p>
-                                  <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
+                                  </p>
                                 </div>
                               </div>
                               <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
@@ -3086,7 +3090,9 @@ const CentralAdmin = () => {
                                   <div>
                                     <p className="font-semibold">Dr. {doctor.full_name}</p>
                                     <p className="text-sm text-muted-foreground">{formatSpecialtyLabel(doctor.specialty)} • License: {doctor.license_number}</p>
-                                    <p className="text-xs text-muted-foreground">City: {doctor.city || 'N/A'}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
+                                    </p>
                                     <p className="text-xs text-muted-foreground">
                                       Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                     </p>
