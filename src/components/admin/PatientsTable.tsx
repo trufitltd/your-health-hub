@@ -26,6 +26,7 @@ interface PatientWithStats {
   age?: number | null;
   gender?: string | null;
   city?: string | null;
+  state?: string | null;
   profile_picture_url: string | null;
   total_appointments: number;
   completed_appointments: number;
@@ -117,6 +118,7 @@ export function PatientsTable() {
             age: patient.age ?? null,
             gender: patient.gender ?? null,
             city: patient.city ?? null,
+            state: patient.state ?? null,
             profile_picture_url: patient.profile_picture_url,
             total_appointments: total,
             completed_appointments: completed,
@@ -159,7 +161,7 @@ export function PatientsTable() {
                 <p className="text-xs text-muted-foreground">{patient.phone_number}</p>
                 <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
                 <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
-                <p className="text-xs text-muted-foreground">City: {patient.city || 'N/A'}</p>
+                <p className="text-xs text-muted-foreground">Location: {patient.city || 'N/A'}, {patient.state || 'N/A'}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
