@@ -49,7 +49,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { triggerNotificationAlert } from '@/lib/notificationAlert';
 import { createDefaultSchedule } from '@/services/scheduleService';
 import { SUPPORTED_LANGUAGES, useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
 import {
@@ -289,6 +289,8 @@ const DoctorPortal = () => {
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
+  const doctorAppointmentSnapshotRef = useRef<Map<string, string>>(new Map());
+  const doctorReminderSentRef = useRef<Set<string>>(new Set());
   const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
   const [withdrawalNarration, setWithdrawalNarration] = useState('');
@@ -301,7 +303,6 @@ const DoctorPortal = () => {
   const appliedPreferredLanguageRef = useRef(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
   const { user, role, signOut } = useAuth();
-  const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
@@ -391,7 +392,12 @@ const DoctorPortal = () => {
           if (String(newRow.email).toLowerCase() !== lowerEmail) return;
           if (!/\[portal:admin\]/i.test(String(newRow.message || ''))) return;
 
-          playNotificationSound();
+          void triggerNotificationAlert({
+            title: 'New message from MyE-Doctor',
+            body: 'You received a new support message.',
+            tag: `doctor-support-insert-${user.id}`,
+            urgent: true,
+          });
           toast({
             title: 'New message from MyE-Doctor',
             description: 'You received a new support message.',
@@ -413,7 +419,12 @@ const DoctorPortal = () => {
           const newCount = countAdminReplyMarkers(String(newRow.message || ''));
           if (newCount <= oldCount) return;
 
-          playNotificationSound();
+          void triggerNotificationAlert({
+            title: 'New message from MyE-Doctor',
+            body: 'You received a new support reply.',
+            tag: `doctor-support-update-${user.id}`,
+            urgent: true,
+          });
           toast({
             title: 'New message from MyE-Doctor',
             description: 'You received a new support reply.',
@@ -427,7 +438,7 @@ const DoctorPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [playNotificationSound, queryClient, user?.email, user?.id]);
+  }, [queryClient, user?.email, user?.id]);
 
   const getSeenReviewIds = () => {
     if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
@@ -1704,6 +1715,107 @@ const DoctorPortal = () => {
       setIsRescheduling(false);
     }
   };
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const nextSnapshot = new Map<string, string>();
+    (fetchedAppointments || []).forEach((apt: any) => {
+      const key = String(apt.id || '');
+      if (!key) return;
+      nextSnapshot.set(
+        key,
+        `${String(apt.status || '')}|${String(apt.reschedule_request_status || '')}|${String(apt.date || '')}|${String(apt.time || '')}`,
+      );
+    });
+
+    const prevSnapshot = doctorAppointmentSnapshotRef.current;
+    if (prevSnapshot.size === 0) {
+      doctorAppointmentSnapshotRef.current = nextSnapshot;
+      return;
+    }
+
+    nextSnapshot.forEach((value, appointmentId) => {
+      const prevValue = prevSnapshot.get(appointmentId);
+      if (prevValue === value) return;
+
+      const apt = (fetchedAppointments || []).find((row: any) => String(row.id || '') === appointmentId);
+      const patientName = String((apt as any)?.patient_name || 'a patient');
+      const statusLabel = formatAppointmentStatusLabel(String((apt as any)?.status || ''));
+
+      if (!prevValue) {
+        void triggerNotificationAlert({
+          title: 'New appointment request',
+          body: `${patientName} booked an appointment.`,
+          tag: `doctor-appointment-new-${appointmentId}`,
+          urgent: true,
+        });
+        toast({
+          title: 'New appointment request',
+          description: `${patientName} booked an appointment.`,
+        });
+        return;
+      }
+
+      void triggerNotificationAlert({
+        title: 'Appointment update',
+        body: `${patientName}: ${statusLabel}.`,
+        tag: `doctor-appointment-update-${appointmentId}`,
+        urgent: true,
+      });
+      toast({
+        title: 'Appointment update',
+        description: `${patientName}: ${statusLabel}.`,
+      });
+    });
+
+    doctorAppointmentSnapshotRef.current = nextSnapshot;
+  }, [fetchedAppointments, user?.id]);
+
+  const checkDoctorFiveMinuteReminders = useCallback(() => {
+    if (!user?.id) return;
+
+    const nowMs = Date.now();
+    (fetchedAppointments || []).forEach((apt: any) => {
+      const status = String(apt.status || '').trim().toLowerCase();
+      if (!['confirmed', 'in_progress'].includes(status)) return;
+      const dateStr = String(apt.date || '');
+      const timeStr = String(apt.time || '');
+      if (!dateStr || !timeStr) return;
+
+      const appointmentMs = new Date(`${dateStr}T${timeStr}`).getTime();
+      if (Number.isNaN(appointmentMs)) return;
+      const diffMs = appointmentMs - nowMs;
+      if (diffMs <= 0 || diffMs > 5 * 60 * 1000) return;
+
+      const reminderKey = `${String(apt.id || '')}:${dateStr}:${timeStr}`;
+      if (doctorReminderSentRef.current.has(reminderKey)) return;
+      doctorReminderSentRef.current.add(reminderKey);
+
+      const patientName = String(apt.patient_name || 'Patient');
+      const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
+
+      void triggerNotificationAlert({
+        title: 'Appointment reminder',
+        body: `Upcoming consultation with ${patientName} in ${minutesLeft} minute(s).`,
+        tag: `doctor-reminder-${reminderKey}`,
+        urgent: true,
+      });
+      toast({
+        title: 'Appointment reminder',
+        description: `Upcoming consultation with ${patientName} in ${minutesLeft} minute(s).`,
+      });
+    });
+  }, [fetchedAppointments, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    checkDoctorFiveMinuteReminders();
+    const timer = window.setInterval(() => {
+      checkDoctorFiveMinuteReminders();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [checkDoctorFiveMinuteReminders, user?.id]);
 
   // Calculate upcoming appointments (next 24 hours) and next appointment
   const now = new Date();

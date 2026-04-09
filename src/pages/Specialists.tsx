@@ -20,8 +20,15 @@ interface DoctorCard {
   registration?: Record<string, unknown> | null;
 }
 
+const normalizeDoctorNameForVisibility = (value: string | null | undefined) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^dr\.?\s+/, '')
+    .replace(/\s+/g, ' ');
+
 const isExcludedDoctorName = (value: string | null | undefined) =>
-  String(value || '').trim().toLowerCase() === 'test doctor';
+  normalizeDoctorNameForVisibility(value) === 'test doctor';
 
 interface DoctorScheduleRow {
   doctor_id: string;
