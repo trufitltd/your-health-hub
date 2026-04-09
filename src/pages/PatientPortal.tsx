@@ -55,7 +55,7 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { triggerNotificationAlert } from '@/lib/notificationAlert';
 import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
@@ -320,13 +320,15 @@ const PatientPortal = () => {
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const followUpNoticeShownRef = useRef<string | null>(null);
+  const patientAppointmentSnapshotRef = useRef<Map<string, string>>(new Map());
+  const patientReminderSentRef = useRef<Set<string>>(new Set());
+  const patientNotificationAlertedIdsRef = useRef<Set<string>>(new Set());
   const [selectedPrescription, setSelectedPrescription] = useState<PatientPrescription | null>(null);
   const [prescriptionDetailsOpen, setPrescriptionDetailsOpen] = useState(false);
   const [selectedInvestigationRequest, setSelectedInvestigationRequest] = useState<PatientInvestigationRequest | null>(null);
   const [investigationDetailsOpen, setInvestigationDetailsOpen] = useState(false);
   const [isRequestingRefillId, setIsRequestingRefillId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
-  const { playNotificationSound } = useNotificationSound();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { t, language, setLanguage } = useLanguage();
   const { formatDate, formatDateTime, formatTime, formatClockTime, formatNumber, formatCurrency } = useLocaleFormatter();
@@ -503,6 +505,124 @@ const PatientPortal = () => {
   const queryClient = useQueryClient();
   const { initializePayment } = usePaystackPayment();
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const nextSnapshot = new Map<string, string>();
+    (appointments || []).forEach((apt: any) => {
+      const key = String(apt.id || '');
+      if (!key) return;
+      nextSnapshot.set(
+        key,
+        `${String(apt.status || '')}|${String(apt.reschedule_request_status || '')}|${String(apt.date || '')}|${String(apt.time || '')}`,
+      );
+    });
+
+    const prevSnapshot = patientAppointmentSnapshotRef.current;
+    if (prevSnapshot.size === 0) {
+      patientAppointmentSnapshotRef.current = nextSnapshot;
+      return;
+    }
+
+    nextSnapshot.forEach((value, appointmentId) => {
+      const prevValue = prevSnapshot.get(appointmentId);
+      if (prevValue === value) return;
+
+      const apt = (appointments || []).find((row: any) => String(row.id || '') === appointmentId);
+      const doctorName = getDoctorNameById((apt as any)?.doctor_id, (apt as any)?.specialist_name) || 'your doctor';
+      const statusLabel = formatAppointmentStatusLabel(String((apt as any)?.status || ''));
+
+      if (!prevValue) {
+        void triggerNotificationAlert({
+          title: 'Appointment update',
+          body: `A new appointment with ${doctorName} was created.`,
+          tag: `patient-appointment-new-${appointmentId}`,
+          urgent: true,
+        });
+        toast({
+          title: 'Appointment update',
+          description: `A new appointment with ${doctorName} was created.`,
+        });
+        return;
+      }
+
+      void triggerNotificationAlert({
+        title: 'Appointment update',
+        body: `${doctorName}: ${statusLabel}.`,
+        tag: `patient-appointment-update-${appointmentId}`,
+        urgent: true,
+      });
+      toast({
+        title: 'Appointment update',
+        description: `${doctorName}: ${statusLabel}.`,
+      });
+    });
+
+    patientAppointmentSnapshotRef.current = nextSnapshot;
+  }, [appointments, user?.id]);
+
+  const checkPatientFiveMinuteReminders = useCallback(() => {
+    if (!user?.id) return;
+
+    const nowMs = Date.now();
+    (appointments || []).forEach((apt: any) => {
+      const status = String(apt.status || '').trim().toLowerCase();
+      if (!['confirmed', 'in_progress'].includes(status)) return;
+      const dateStr = String(apt.date || '');
+      const timeStr = String(apt.time || '');
+      if (!dateStr || !timeStr) return;
+
+      const appointmentMs = new Date(`${dateStr}T${timeStr}`).getTime();
+      if (Number.isNaN(appointmentMs)) return;
+      const diffMs = appointmentMs - nowMs;
+      if (diffMs <= 0 || diffMs > 5 * 60 * 1000) return;
+
+      const reminderKey = `${String(apt.id || '')}:${dateStr}:${timeStr}`;
+      if (patientReminderSentRef.current.has(reminderKey)) return;
+      patientReminderSentRef.current.add(reminderKey);
+
+      const doctorName = String((apt as any)?.specialist_name || 'your doctor');
+      const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
+
+      void triggerNotificationAlert({
+        title: 'Appointment reminder',
+        body: `Consultation with ${doctorName} in ${minutesLeft} minute(s).`,
+        tag: `patient-reminder-${reminderKey}`,
+        urgent: true,
+      });
+      toast({
+        title: 'Appointment reminder',
+        description: `Consultation with ${doctorName} in ${minutesLeft} minute(s).`,
+      });
+    });
+  }, [appointments, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    checkPatientFiveMinuteReminders();
+    const timer = window.setInterval(() => {
+      checkPatientFiveMinuteReminders();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [checkPatientFiveMinuteReminders, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    notifications
+      .filter((notification) => !notification.read && notification.type === 'appointment')
+      .forEach((notification) => {
+        if (patientNotificationAlertedIdsRef.current.has(notification.id)) return;
+        patientNotificationAlertedIdsRef.current.add(notification.id);
+        void triggerNotificationAlert({
+          title: 'Appointment reminder',
+          body: notification.message,
+          tag: `patient-notification-${notification.id}`,
+          urgent: true,
+        });
+      });
+  }, [notifications, user?.id]);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const pendingWalletWithdrawalsCount = useMemo(
     () => walletWithdrawalRequests.filter((row) => {
@@ -669,7 +789,12 @@ const PatientPortal = () => {
           if (String(newRow.email).toLowerCase() !== lowerEmail) return;
           if (!/\[portal:admin\]/i.test(String(newRow.message || ''))) return;
 
-          playNotificationSound();
+          void triggerNotificationAlert({
+            title: 'New message from MyE-Doctor',
+            body: 'You received a new support message.',
+            tag: `patient-support-insert-${user.id}`,
+            urgent: true,
+          });
           toast({
             title: 'New message from MyE-Doctor',
             description: 'You received a new support message.',
@@ -691,7 +816,12 @@ const PatientPortal = () => {
           const newCount = countAdminReplyMarkers(String(newRow.message || ''));
           if (newCount <= oldCount) return;
 
-          playNotificationSound();
+          void triggerNotificationAlert({
+            title: 'New message from MyE-Doctor',
+            body: 'You received a new support reply.',
+            tag: `patient-support-update-${user.id}`,
+            urgent: true,
+          });
           toast({
             title: 'New message from MyE-Doctor',
             description: 'You received a new support reply.',
@@ -705,7 +835,7 @@ const PatientPortal = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [playNotificationSound, queryClient, user?.email, user?.id]);
+  }, [queryClient, user?.email, user?.id]);
 
   // Fetch prescriptions from doctor_consultation_notes
   const { data: fetchedPrescriptions = [], isLoading: prescriptionsLoading } = useQuery({

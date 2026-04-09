@@ -109,8 +109,23 @@ const formatConsultationLanguageLabel = (value: string) => {
       .join(' ');
 };
 
+const normalizeDoctorNameForVisibility = (value: string | null | undefined) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^dr\.?\s+/, '')
+    .replace(/\s+/g, ' ');
+
 const isExcludedDoctorName = (value: string | null | undefined) =>
-  String(value || '').trim().toLowerCase() === 'test doctor';
+  normalizeDoctorNameForVisibility(value) === 'test doctor';
+
+const isTestPatientName = (value: string | null | undefined) =>
+  String(value || '').trim().toLowerCase() === 'test patient';
+
+const isDoctorVisibleInDiscovery = (doctorName: string | null | undefined, canViewTestDoctor: boolean) => {
+  if (!isExcludedDoctorName(doctorName)) return true;
+  return canViewTestDoctor;
+};
 
 const URL_PARAM_DOCTOR_TYPE_VALUES = new Set(['all', 'general', 'specialist']);
 const URL_PARAM_AVAILABILITY_MODE_VALUES = new Set(['none', 'now', 'exact', 'range']);
@@ -211,6 +226,37 @@ export default function DoctorDiscovery() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+
+  const { data: canViewTestDoctor = false } = useQuery({
+    queryKey: ['doctor-discovery-can-view-test-doctor', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return false;
+
+      if (isTestPatientName(user.user_metadata?.full_name)) {
+        return true;
+      }
+
+      const [patientRegistrationResult, profileResult] = await Promise.all([
+        supabase
+          .from('patient_registrations')
+          .select('full_name')
+          .eq('user_id', user.id)
+          .maybeSingle(),
+        supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .maybeSingle(),
+      ]);
+
+      const registrationName = patientRegistrationResult.data?.full_name;
+      const profileName = profileResult.data?.full_name;
+
+      return isTestPatientName(registrationName) || isTestPatientName(profileName);
+    },
+    enabled: !!user?.id,
+    staleTime: 60 * 1000,
+  });
 
   // Handle scroll to show/hide filters
   useEffect(() => {
@@ -323,7 +369,7 @@ export default function DoctorDiscovery() {
 
   // Fetch doctors who have an available schedule based on mode (excluding booked slots)
   const { data: availableDoctorIds = [] } = useQuery({
-    queryKey: ['available-doctors', availabilityMode, availabilityFilters],
+    queryKey: ['available-doctors', availabilityMode, availabilityFilters, canViewTestDoctor],
     queryFn: async () => {
       const checkTimes: Array<{ date: string; time: string; dayIndex: number }> = [];
 
@@ -379,7 +425,7 @@ export default function DoctorDiscovery() {
 
       const activeDoctorIds = approvedDoctors
         .filter((doctor) =>
-          !isExcludedDoctorName((doctor as any).full_name)
+          isDoctorVisibleInDiscovery((doctor as any).full_name, canViewTestDoctor)
           && String((doctor as any).medical_license_url || '').trim().length > 0
         )
         .map((doctor) => doctor.user_id)
@@ -455,7 +501,7 @@ export default function DoctorDiscovery() {
 
   // Fetch doctors
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
-    queryKey: ['doctors-discovery'],
+    queryKey: ['doctors-discovery', canViewTestDoctor],
     queryFn: async () => {
       const doctorsWithLanguagesQuery = await supabase
         .from('doctor_registrations')
@@ -532,7 +578,7 @@ export default function DoctorDiscovery() {
       }
 
       registrationRows = registrationRows.filter((doctor) =>
-        !isExcludedDoctorName(doctor.full_name)
+        isDoctorVisibleInDiscovery(doctor.full_name, canViewTestDoctor)
         && String(doctor.medical_license_url || '').trim().length > 0
       );
 
