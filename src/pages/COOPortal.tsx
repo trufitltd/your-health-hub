@@ -17,6 +17,12 @@ import { useLocaleFormatter } from '@/lib/locale';
 import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
 import { toast } from '@/components/ui/use-toast';
 import {
+  triggerNotificationAlert,
+  getNotificationAlertIntensity,
+  setNotificationAlertIntensity as persistNotificationAlertIntensity,
+  type NotificationAlertIntensity,
+} from '@/lib/notificationAlert';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -120,6 +126,7 @@ export default function COOPortal() {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
   const [cooProfilePicture, setCooProfilePicture] = useState<string>('');
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
@@ -131,6 +138,22 @@ export default function COOPortal() {
   const [quickMessageTarget, setQuickMessageTarget] = useState<QuickMessageTarget | null>(null);
   const [quickMessageBody, setQuickMessageBody] = useState('');
   const [isSendingQuickMessage, setIsSendingQuickMessage] = useState(false);
+  const handleNotificationIntensityChange = (rawValue: string) => {
+    const nextValue: NotificationAlertIntensity =
+      rawValue === 'low' || rawValue === 'medium' || rawValue === 'high' ? rawValue : 'high';
+    setNotificationAlertIntensityState(nextValue);
+    persistNotificationAlertIntensity(nextValue);
+  };
+
+  const handleTestAlert = () => {
+    void triggerNotificationAlert({
+      title: 'Test Alert',
+      body: 'This is a test alert for ring and vibration.',
+      tag: `settings-test-alert-${user?.id || 'coo'}-${Date.now()}`,
+      urgent: true,
+      intensity: notificationAlertIntensity,
+    });
+  };
 
   const allowedEmails = useMemo(() => {
     const cooRaw = (import.meta.env.VITE_COO_EMAILS as string | undefined) || '';
@@ -1602,6 +1625,32 @@ export default function COOPortal() {
                   </div>
                   <Button onClick={handleChangePassword} disabled={isChangingPassword}>
                     {isChangingPassword ? 'Updating...' : 'Update Password'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Notification Alerts</CardTitle>
+                <CardDescription>Tune ring and vibration intensity for this device and test it immediately.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4 max-w-md">
+                  <div>
+                    <label className="text-sm font-medium">Intensity</label>
+                    <select
+                      className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={notificationAlertIntensity}
+                      onChange={(e) => handleNotificationIntensityChange(e.target.value)}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                  <Button type="button" variant="outline" onClick={handleTestAlert}>
+                    Test Alert
                   </Button>
                 </div>
               </CardContent>
