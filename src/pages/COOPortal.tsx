@@ -22,6 +22,7 @@ import {
   setNotificationAlertIntensity as persistNotificationAlertIntensity,
   type NotificationAlertIntensity,
 } from '@/lib/notificationAlert';
+import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
 import {
   Dialog,
   DialogContent,
@@ -168,6 +169,33 @@ export default function COOPortal() {
   const userEmail = (user?.email || '').toLowerCase();
   const metadataRole = String(user?.user_metadata?.role || '').toLowerCase();
   const isAllowed = !!user && (metadataRole === 'coo' || allowedEmails.includes(userEmail));
+
+  useRequestNotificationPermission();
+
+  useEffect(() => {
+    if (!isAllowed || !user?.id) return;
+    const channel = supabase
+      .channel(`coo-incoming-notify-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'coo_messages' },
+        (payload) => {
+          const msg = payload.new as { sender_role?: string; sender_name?: string; content?: string; thread_id?: string } | null;
+          if (!msg || msg.sender_role === 'coo') return;
+          const sender = String(msg.sender_name || msg.sender_role || 'User').trim();
+          const body = String(msg.content || 'Sent you a message.').slice(0, 90);
+          void triggerNotificationAlert({
+            title: `New message from ${sender}`,
+            body,
+            tag: `coo-message-${msg.thread_id}`,
+            urgent: true,
+          });
+          toast({ title: `New message from ${sender}`, description: body });
+        },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isAllowed, user?.id]);
 
   useEffect(() => {
     setCooProfilePicture((user?.user_metadata?.avatar as string) || '');

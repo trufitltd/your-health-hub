@@ -54,6 +54,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
+import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import {
   triggerNotificationAlert,
@@ -344,6 +345,7 @@ const PatientPortal = () => {
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
   useRealtimeMessageNotifications(user?.id, 'patient');
+  useRequestNotificationPermission();
 
   const getMessageReadState = useCallback(() => {
     if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;

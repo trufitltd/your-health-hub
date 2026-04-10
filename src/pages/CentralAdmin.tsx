@@ -41,6 +41,7 @@ import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
+import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
@@ -230,6 +231,7 @@ const CentralAdmin = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { playNotificationSound } = useNotificationSound();
+  useRequestNotificationPermission();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -573,13 +575,12 @@ const CentralAdmin = () => {
         { event: 'INSERT', schema: 'public', table: 'contact_messages' },
         (payload) => {
           const incoming = payload.new as { first_name?: string | null; last_name?: string | null; subject?: string | null } | null;
+          const description = `${incoming?.first_name || 'User'} ${incoming?.last_name || ''} • ${incoming?.subject || 'No subject'}`.trim();
           playNotificationSound();
+          void triggerNotificationAlert({ title: 'New contact message', body: description, tag: `admin-contact-insert-${user?.id}`, urgent: true });
           queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
           queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
-          toast({
-            title: 'New contact message',
-            description: `${incoming?.first_name || 'User'} ${incoming?.last_name || ''} • ${incoming?.subject || 'No subject'}`.trim(),
-          });
+          toast({ title: 'New contact message', description });
         }
       )
       .on(
@@ -592,13 +593,12 @@ const CentralAdmin = () => {
           const newCount = countUserReplyMarkersAfter(String(newRow?.message || ''), 0);
           if (newCount <= oldCount) return;
 
+          const description = `A user replied in thread ${newRow?.email ? `(${newRow.email})` : ''}`.trim();
           playNotificationSound();
+          void triggerNotificationAlert({ title: 'New reply received', body: description, tag: `admin-contact-update-${user?.id}`, urgent: true });
           queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
           queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
-          toast({
-            title: 'New reply received',
-            description: `A user replied in thread ${newRow?.email ? `(${newRow.email})` : ''}`.trim(),
-          });
+          toast({ title: 'New reply received', description });
         }
       )
       .subscribe();
