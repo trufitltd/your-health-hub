@@ -55,7 +55,12 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { triggerNotificationAlert } from '@/lib/notificationAlert';
+import {
+  triggerNotificationAlert,
+  getNotificationAlertIntensity,
+  setNotificationAlertIntensity as persistNotificationAlertIntensity,
+  type NotificationAlertIntensity,
+} from '@/lib/notificationAlert';
 import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
@@ -693,6 +698,7 @@ const PatientPortal = () => {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
     email: '',
@@ -708,6 +714,22 @@ const PatientPortal = () => {
     newPassword: '',
     confirmPassword: '',
   });
+  const handleNotificationIntensityChange = (rawValue: string) => {
+    const nextValue: NotificationAlertIntensity =
+      rawValue === 'low' || rawValue === 'medium' || rawValue === 'high' ? rawValue : 'high';
+    setNotificationAlertIntensityState(nextValue);
+    persistNotificationAlertIntensity(nextValue);
+  };
+
+  const handleTestAlert = () => {
+    void triggerNotificationAlert({
+      title: t('common.notificationTest', 'Test Alert'),
+      body: t('common.notificationTestDescription', 'This is a test alert for ring and vibration.'),
+      tag: `settings-test-alert-${user?.id || 'patient'}-${Date.now()}`,
+      urgent: true,
+      intensity: notificationAlertIntensity,
+    });
+  };
   // Initialize form data when patientRegistration loads
   useEffect(() => {
     if (patientRegistration) {
@@ -5372,6 +5394,32 @@ const PatientPortal = () => {
                         {isSavingProfile
                           ? t('patientPortal.actions.saving', 'Saving...')
                           : t('patientPortal.actions.saveChanges', 'Save Changes')}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{t('common.notificationAlerts', 'Notification Alerts')}</CardTitle>
+                    <CardDescription>{t('common.notificationAlertsDescription', 'Tune ring and vibration intensity for this device and test it immediately.')}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-w-md">
+                      <div>
+                        <label className="text-sm font-medium">{t('common.intensity', 'Intensity')}</label>
+                        <select
+                          className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={notificationAlertIntensity}
+                          onChange={(e) => handleNotificationIntensityChange(e.target.value)}
+                        >
+                          <option value="low">{t('common.low', 'Low')}</option>
+                          <option value="medium">{t('common.medium', 'Medium')}</option>
+                          <option value="high">{t('common.high', 'High')}</option>
+                        </select>
+                      </div>
+                      <Button type="button" variant="outline" onClick={handleTestAlert}>
+                        {t('common.testAlert', 'Test Alert')}
                       </Button>
                     </div>
                   </CardContent>
