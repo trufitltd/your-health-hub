@@ -49,7 +49,12 @@ import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
-import { triggerNotificationAlert } from '@/lib/notificationAlert';
+import {
+  triggerNotificationAlert,
+  getNotificationAlertIntensity,
+  setNotificationAlertIntensity as persistNotificationAlertIntensity,
+  type NotificationAlertIntensity,
+} from '@/lib/notificationAlert';
 import { createDefaultSchedule } from '@/services/scheduleService';
 import { SUPPORTED_LANGUAGES, useLanguage, type AppLanguage } from '@/contexts/LanguageContext';
 import {
@@ -866,6 +871,7 @@ const DoctorPortal = () => {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [rateChangeReason, setRateChangeReason] = useState('');
+  const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
 
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
@@ -934,6 +940,23 @@ const DoctorPortal = () => {
   ];
 
   const folderLanguageText = CLERKING_PANEL_TEXT[language] ?? CLERKING_PANEL_TEXT.en;
+  const handleNotificationIntensityChange = (rawValue: string) => {
+    const nextValue: NotificationAlertIntensity =
+      rawValue === 'low' || rawValue === 'medium' || rawValue === 'high' ? rawValue : 'high';
+    setNotificationAlertIntensityState(nextValue);
+    persistNotificationAlertIntensity(nextValue);
+  };
+
+  const handleTestAlert = () => {
+    void triggerNotificationAlert({
+      title: t('common.notificationTest', 'Test Alert'),
+      body: t('common.notificationTestDescription', 'This is a test alert for ring and vibration.'),
+      tag: `settings-test-alert-${user?.id || 'doctor'}-${Date.now()}`,
+      urgent: true,
+      intensity: notificationAlertIntensity,
+    });
+  };
+
   const folderMetaTextByLanguage: Record<AppLanguage, { date: string; time: string; lastUpdated: string; accessNotice: string }> = {
     en: { date: 'Date', time: 'Time', lastUpdated: 'Last Updated', accessNotice: 'Folder access is limited to patients you have consulted with.' },
     ha: { date: 'Kwana', time: 'Lokaci', lastUpdated: 'Sabuntawa ta ƙarshe', accessNotice: 'Samun damar jaka yana iyakance ga majiyyatan da ka yi shawara da su.' },
@@ -4940,6 +4963,32 @@ const DoctorPortal = () => {
                             {isSavingProfile
                               ? t('doctorPortal.actions.saving', 'Saving...')
                               : t('doctorPortal.actions.saveChanges', 'Save Changes')}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t('common.notificationAlerts', 'Notification Alerts')}</CardTitle>
+                        <CardDescription>{t('common.notificationAlertsDescription', 'Tune ring and vibration intensity for this device and test it immediately.')}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4 max-w-md">
+                          <div>
+                            <label className="text-sm font-medium">{t('common.intensity', 'Intensity')}</label>
+                            <select
+                              className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                              value={notificationAlertIntensity}
+                              onChange={(e) => handleNotificationIntensityChange(e.target.value)}
+                            >
+                              <option value="low">{t('common.low', 'Low')}</option>
+                              <option value="medium">{t('common.medium', 'Medium')}</option>
+                              <option value="high">{t('common.high', 'High')}</option>
+                            </select>
+                          </div>
+                          <Button type="button" variant="outline" onClick={handleTestAlert}>
+                            {t('common.testAlert', 'Test Alert')}
                           </Button>
                         </div>
                       </CardContent>
