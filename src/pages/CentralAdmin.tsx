@@ -49,6 +49,12 @@ import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import { CooThreadChat } from '@/components/coo/CooThreadChat';
+import {
+  triggerNotificationAlert,
+  getNotificationAlertIntensity,
+  setNotificationAlertIntensity as persistNotificationAlertIntensity,
+  type NotificationAlertIntensity,
+} from '@/lib/notificationAlert';
 
 interface Doctor {
   id: string;
@@ -253,6 +259,7 @@ const CentralAdmin = () => {
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
   const [isUpdatingDoctorSignupStatus, setIsUpdatingDoctorSignupStatus] = useState(false);
   const [clerkingSearch, setClerkingSearch] = useState('');
   const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'clerking'>(null);
@@ -269,6 +276,22 @@ const CentralAdmin = () => {
     newPassword: '',
     confirmPassword: '',
   });
+  const handleNotificationIntensityChange = (rawValue: string) => {
+    const nextValue: NotificationAlertIntensity =
+      rawValue === 'low' || rawValue === 'medium' || rawValue === 'high' ? rawValue : 'high';
+    setNotificationAlertIntensityState(nextValue);
+    persistNotificationAlertIntensity(nextValue);
+  };
+
+  const handleTestAlert = () => {
+    void triggerNotificationAlert({
+      title: 'Test Alert',
+      body: 'This is a test alert for ring and vibration.',
+      tag: `settings-test-alert-${user?.id || 'admin'}-${Date.now()}`,
+      urgent: true,
+      intensity: notificationAlertIntensity,
+    });
+  };
 
   const adminEmails = useMemo(() => {
     const raw = import.meta.env.VITE_ADMIN_EMAILS as string | undefined;
@@ -3376,6 +3399,32 @@ const CentralAdmin = () => {
 
                       <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
                         {isSavingProfile ? 'Saving...' : 'Save Profile'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Notification Alerts</CardTitle>
+                    <CardDescription>Tune ring and vibration intensity for this device and test it immediately.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-w-md">
+                      <div>
+                        <label className="text-sm font-medium">Intensity</label>
+                        <select
+                          className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={notificationAlertIntensity}
+                          onChange={(e) => handleNotificationIntensityChange(e.target.value)}
+                        >
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                        </select>
+                      </div>
+                      <Button type="button" variant="outline" onClick={handleTestAlert}>
+                        Test Alert
                       </Button>
                     </div>
                   </CardContent>
