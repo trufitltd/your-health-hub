@@ -8,7 +8,7 @@ import { LanguageProvider } from "@/contexts/LanguageContext";
 import { useEffect, useState } from "react";
 import { useRequestNotificationPermission } from "@/hooks/useRequestNotificationPermission";
 import { usePushSubscription } from "@/hooks/usePushSubscription";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import ForgotPassword from "./pages/ForgotPassword";
