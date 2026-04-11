@@ -41,7 +41,6 @@ import { toast } from '@/components/ui/use-toast';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { PatientsTable } from '@/components/admin/PatientsTable';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
-import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
@@ -222,8 +221,89 @@ const parseInboxThreadMessages = (row: {
   return segments;
 };
 
+import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
+import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
+
 const CentralAdmin = () => {
   const { user, signOut } = useAuth();
+
+  const { data: adminAppointments = [], isLoading: adminAppointmentsLoading } = useQuery({
+    queryKey: ['admin-appointments-feed'],
+    queryFn: async () => {
+      const { data: appointmentRows, error: appointmentsError } = await supabase
+        .from('appointments')
+        .select('id, patient_id, doctor_id, date, time, status, created_at, updated_at')
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (appointmentsError) {
+        console.error('Error fetching admin appointments feed:', appointmentsError);
+        throw appointmentsError;
+      }
+
+      const rows = appointmentRows || [];
+      if (rows.length === 0) return [] as AdminAppointmentRow[];
+
+      const patientIds = Array.from(new Set(rows.map((row: any) => String(row.patient_id || '')).filter(Boolean)));
+      const doctorIds = Array.from(new Set(rows.map((row: any) => String(row.doctor_id || '')).filter(Boolean)));
+
+      const [patientResult, doctorResult] = await Promise.all([
+        patientIds.length > 0
+          ? supabase
+              .from('patient_registrations')
+              .select('user_id, full_name, email, phone_number')
+              .in('user_id', patientIds)
+          : Promise.resolve({ data: [], error: null } as any),
+        doctorIds.length > 0
+          ? supabase
+              .from('doctor_registrations')
+              .select('user_id, full_name, email, phone_number')
+              .in('user_id', doctorIds)
+          : Promise.resolve({ data: [], error: null } as any),
+      ]);
+
+      if (patientResult.error) {
+        console.warn('Error loading patient details for admin appointments:', patientResult.error);
+      }
+      if (doctorResult.error) {
+        console.warn('Error loading doctor details for admin appointments:', doctorResult.error);
+      }
+
+      const patientMap = new Map(
+        ((patientResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
+      );
+      const doctorMap = new Map(
+        ((doctorResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
+      );
+
+      return rows.map((row: any) => {
+        const patient = patientMap.get(String(row.patient_id || ''));
+        const doctor = doctorMap.get(String(row.doctor_id || ''));
+        return {
+          id: String(row.id),
+          patient_id: row.patient_id || null,
+          doctor_id: row.doctor_id || null,
+          date: row.date || null,
+          time: row.time || null,
+          status: normalizeAppointmentStatus(row.status),
+          created_at: row.created_at || null,
+          updated_at: row.updated_at || null,
+          patient_name: String(patient?.full_name || row.patient_name || 'Patient'),
+          patient_email: String(patient?.email || ''),
+          patient_phone: String(patient?.phone_number || ''),
+          doctor_name: String(doctor?.full_name || row.specialist_name || 'Doctor'),
+          doctor_email: String(doctor?.email || ''),
+          doctor_phone: String(doctor?.phone_number || ''),
+        } satisfies AdminAppointmentRow;
+      });
+    },
+    enabled: !!user,
+    refetchInterval: 15000,
+  });
+
+  // Realtime notifications for admin
+  useRealtimeNotifications(user?.id, 'admin', user?.email);
+  useAppointmentReminders(adminAppointments, user?.id);
   const { t } = useLanguage();
   const { formatDate, formatDateTime, formatCurrency } = useLocaleFormatter();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
@@ -231,7 +311,6 @@ const CentralAdmin = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { playNotificationSound } = useNotificationSound();
-  useRequestNotificationPermission();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -565,93 +644,6 @@ const CentralAdmin = () => {
     setUnreadInboxCount(unread);
   }, [contactMessages, inboxReadStorageKey, messageReadVersion]);
 
-  useEffect(() => {
-    if (!user?.id || !isAdmin) return;
-
-    const channel = supabase
-      .channel(`admin-contact-incoming-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'contact_messages' },
-        (payload) => {
-          const incoming = payload.new as { first_name?: string | null; last_name?: string | null; subject?: string | null } | null;
-          const description = `${incoming?.first_name || 'User'} ${incoming?.last_name || ''} • ${incoming?.subject || 'No subject'}`.trim();
-          playNotificationSound();
-          void triggerNotificationAlert({ title: 'New contact message', body: description, tag: `admin-contact-insert-${user?.id}`, urgent: true });
-          queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
-          queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
-          toast({ title: 'New contact message', description });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
-        (payload) => {
-          const newRow = payload.new as { message?: string | null; email?: string | null } | null;
-          const oldRow = payload.old as { message?: string | null } | null;
-          const oldCount = countUserReplyMarkersAfter(String(oldRow?.message || ''), 0);
-          const newCount = countUserReplyMarkersAfter(String(newRow?.message || ''), 0);
-          if (newCount <= oldCount) return;
-
-          const description = `A user replied in thread ${newRow?.email ? `(${newRow.email})` : ''}`.trim();
-          playNotificationSound();
-          void triggerNotificationAlert({ title: 'New reply received', body: description, tag: `admin-contact-update-${user?.id}`, urgent: true });
-          queryClient.invalidateQueries({ queryKey: ['admin-contact-messages'] });
-          queryClient.invalidateQueries({ queryKey: ['admin-contact-inbox'] });
-          toast({ title: 'New reply received', description });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [isAdmin, playNotificationSound, queryClient, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id || !isAdmin) return;
-
-    const channel = supabase
-      .channel(`admin-clerking-feed-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'doctor_consultation_notes' },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ['admin-clerking-notes'] });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [isAdmin, queryClient, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id || !isAdmin) return;
-
-    const channel = supabase
-      .channel(`admin-appointments-feed-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'appointments' },
-        (payload) => {
-          const incoming = payload.new as { patient_name?: string | null; specialist_name?: string | null; date?: string | null; time?: string | null } | null;
-          playNotificationSound();
-          queryClient.invalidateQueries({ queryKey: ['admin-appointments-feed'] });
-          toast({
-            title: 'New appointment booked',
-            description: `${incoming?.patient_name || 'Patient'} booked ${incoming?.specialist_name || 'Doctor'} at ${incoming?.time || 'N/A'} on ${incoming?.date || 'N/A'}`,
-          });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [isAdmin, playNotificationSound, queryClient, user?.id]);
-
   const inboxStartDate = useMemo(() => {
     if (inboxRange === 'all') return null;
     const now = new Date();
@@ -743,80 +735,6 @@ const CentralAdmin = () => {
     },
     enabled: !!user && isAdmin && activeTab === 'messages' && recipientSearch.trim().length > 0,
     refetchInterval: false,
-  });
-
-  const { data: adminAppointments = [], isLoading: adminAppointmentsLoading } = useQuery({
-    queryKey: ['admin-appointments-feed'],
-    queryFn: async () => {
-      const { data: appointmentRows, error: appointmentsError } = await supabase
-        .from('appointments')
-        .select('id, patient_id, doctor_id, date, time, status, created_at, updated_at')
-        .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (appointmentsError) {
-        console.error('Error fetching admin appointments feed:', appointmentsError);
-        throw appointmentsError;
-      }
-
-      const rows = appointmentRows || [];
-      if (rows.length === 0) return [] as AdminAppointmentRow[];
-
-      const patientIds = Array.from(new Set(rows.map((row: any) => String(row.patient_id || '')).filter(Boolean)));
-      const doctorIds = Array.from(new Set(rows.map((row: any) => String(row.doctor_id || '')).filter(Boolean)));
-
-      const [patientResult, doctorResult] = await Promise.all([
-        patientIds.length > 0
-          ? supabase
-              .from('patient_registrations')
-              .select('user_id, full_name, email, phone_number')
-              .in('user_id', patientIds)
-          : Promise.resolve({ data: [], error: null } as any),
-        doctorIds.length > 0
-          ? supabase
-              .from('doctor_registrations')
-              .select('user_id, full_name, email, phone_number')
-              .in('user_id', doctorIds)
-          : Promise.resolve({ data: [], error: null } as any),
-      ]);
-
-      if (patientResult.error) {
-        console.warn('Error loading patient details for admin appointments:', patientResult.error);
-      }
-      if (doctorResult.error) {
-        console.warn('Error loading doctor details for admin appointments:', doctorResult.error);
-      }
-
-      const patientMap = new Map(
-        ((patientResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
-      );
-      const doctorMap = new Map(
-        ((doctorResult.data || []) as Array<any>).map((row) => [String(row.user_id), row]),
-      );
-
-      return rows.map((row: any) => {
-        const patient = patientMap.get(String(row.patient_id || ''));
-        const doctor = doctorMap.get(String(row.doctor_id || ''));
-        return {
-          id: String(row.id),
-          patient_id: row.patient_id || null,
-          doctor_id: row.doctor_id || null,
-          date: row.date || null,
-          time: row.time || null,
-          status: normalizeAppointmentStatus(row.status),
-          created_at: row.created_at || null,
-          updated_at: row.updated_at || null,
-          patient_name: String(patient?.full_name || row.patient_name || 'Patient'),
-          patient_email: String(patient?.email || ''),
-          patient_phone: String(patient?.phone_number || ''),
-          doctor_name: String(doctor?.full_name || row.specialist_name || 'Doctor'),
-          doctor_email: String(doctor?.email || ''),
-          doctor_phone: String(doctor?.phone_number || ''),
-        } satisfies AdminAppointmentRow;
-      });
-    },
-    enabled: !!user && isAdmin,
-    refetchInterval: 15000,
   });
 
   const newAppointments = useMemo(() => {
