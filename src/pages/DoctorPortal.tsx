@@ -47,8 +47,8 @@ import { useDoctorEarnings } from '@/hooks/useDoctorEarnings';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { usePatientPresence } from '@/hooks/usePatientPresence';
-import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
-import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
+import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
+import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import {
   triggerNotificationAlert,
@@ -295,7 +295,7 @@ const DoctorPortal = () => {
   const [messagesFocusSessionId, setMessagesFocusSessionId] = useState<string | null>(null);
   const [messagesJumpToUnreadSignal, setMessagesJumpToUnreadSignal] = useState(0);
   const [unreadReviewIds, setUnreadReviewIds] = useState<string[]>([]);
-  const doctorAppointmentSnapshotRef = useRef<Map<string, string>>(new Map());
+  // Appointments snapshot for change detection
   const doctorReminderSentRef = useRef<Set<string>>(new Set());
   const [withdrawalDialogOpen, setWithdrawalDialogOpen] = useState(false);
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
@@ -383,69 +383,6 @@ const DoctorPortal = () => {
     return () => window.removeEventListener('contact-thread-read-updated', onReadUpdated);
   }, []);
 
-  useEffect(() => {
-    if (!user?.id || !user.email) return;
-    const lowerEmail = user.email.toLowerCase();
-
-    const channel = supabase
-      .channel(`doctor-contact-replies-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'contact_messages' },
-        (payload) => {
-          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
-          if (!newRow?.email) return;
-          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
-          if (!/\[portal:admin\]/i.test(String(newRow.message || ''))) return;
-
-          void triggerNotificationAlert({
-            title: 'New message from MyE-Doctor',
-            body: 'You received a new support message.',
-            tag: `doctor-support-insert-${user.id}`,
-            urgent: true,
-          });
-          toast({
-            title: 'New message from MyE-Doctor',
-            description: 'You received a new support message.',
-          });
-          queryClient.invalidateQueries({ queryKey: ['doctor-contact-unread', user.id] });
-          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'contact_messages' },
-        (payload) => {
-          const newRow = payload.new as { email?: string | null; message?: string | null } | null;
-          const oldRow = payload.old as { message?: string | null } | null;
-          if (!newRow?.email) return;
-          if (String(newRow.email).toLowerCase() !== lowerEmail) return;
-
-          const oldCount = countAdminReplyMarkers(String(oldRow?.message || ''));
-          const newCount = countAdminReplyMarkers(String(newRow.message || ''));
-          if (newCount <= oldCount) return;
-
-          void triggerNotificationAlert({
-            title: 'New message from MyE-Doctor',
-            body: 'You received a new support reply.',
-            tag: `doctor-support-update-${user.id}`,
-            urgent: true,
-          });
-          toast({
-            title: 'New message from MyE-Doctor',
-            description: 'You received a new support reply.',
-          });
-          queryClient.invalidateQueries({ queryKey: ['doctor-contact-unread', user.id] });
-          queryClient.invalidateQueries({ queryKey: ['my-contact-messages', lowerEmail] });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [queryClient, user?.email, user?.id]);
-
   const getSeenReviewIds = () => {
     if (!reviewSeenStorageKey || typeof window === 'undefined') return new Set<string>();
     try {
@@ -472,8 +409,6 @@ const DoctorPortal = () => {
   }, [user?.id, role]);
   
   useTrackUserPresence(user?.id, 'doctor');
-  useRealtimeMessageNotifications(user?.id, 'doctor');
-  useRequestNotificationPermission();
 
   const getMessageReadState = useCallback(() => {
     if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
@@ -631,51 +566,6 @@ const DoctorPortal = () => {
       supabase.removeChannel(channel);
     };
   }, [user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const channel = supabase
-      .channel(`doctor-unread-messages-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
-        async (payload) => {
-          const message = payload.new as {
-            session_id?: string;
-            sender_id?: string;
-            sender_role?: string;
-          } | null;
-
-          if (!message?.session_id || !message.sender_id) return;
-          if (message.sender_id === user.id) return;
-          if (message.sender_role !== 'patient') return;
-
-          let session = sessionParticipantsCacheRef.current.get(message.session_id);
-          if (!session) {
-            const { data } = await supabase
-              .from('consultation_sessions')
-              .select('patient_id, doctor_id')
-              .eq('id', message.session_id)
-              .maybeSingle();
-            if (!data) return;
-            session = {
-              patient_id: data.patient_id ?? null,
-              doctor_id: data.doctor_id ?? null,
-            };
-            sessionParticipantsCacheRef.current.set(message.session_id, session);
-          }
-
-          if (session.doctor_id !== user.id) return;
-          refreshUnreadMessagesCount();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, refreshUnreadMessagesCount]);
 
   useEffect(() => {
     refreshUnreadMessagesCount();
@@ -1384,6 +1274,10 @@ const DoctorPortal = () => {
     enabled: !!user?.id,
   });
 
+  // Realtime notifications for messages and appointments
+  useRealtimeNotifications(user?.id, 'doctor', user?.email);
+  useAppointmentReminders(fetchedAppointments, user?.id);
+
   const handleDeclineRequest = async (appointmentOrId: string | any) => {
     const appointmentId = typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id;
     const appointment =
@@ -1740,107 +1634,6 @@ const DoctorPortal = () => {
       setIsRescheduling(false);
     }
   };
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const nextSnapshot = new Map<string, string>();
-    (fetchedAppointments || []).forEach((apt: any) => {
-      const key = String(apt.id || '');
-      if (!key) return;
-      nextSnapshot.set(
-        key,
-        `${String(apt.status || '')}|${String(apt.reschedule_request_status || '')}|${String(apt.date || '')}|${String(apt.time || '')}`,
-      );
-    });
-
-    const prevSnapshot = doctorAppointmentSnapshotRef.current;
-    if (prevSnapshot.size === 0) {
-      doctorAppointmentSnapshotRef.current = nextSnapshot;
-      return;
-    }
-
-    nextSnapshot.forEach((value, appointmentId) => {
-      const prevValue = prevSnapshot.get(appointmentId);
-      if (prevValue === value) return;
-
-      const apt = (fetchedAppointments || []).find((row: any) => String(row.id || '') === appointmentId);
-      const patientName = String((apt as any)?.patient_name || 'a patient');
-      const statusLabel = formatAppointmentStatusLabel(String((apt as any)?.status || ''));
-
-      if (!prevValue) {
-        void triggerNotificationAlert({
-          title: 'New appointment request',
-          body: `${patientName} booked an appointment.`,
-          tag: `doctor-appointment-new-${appointmentId}`,
-          urgent: true,
-        });
-        toast({
-          title: 'New appointment request',
-          description: `${patientName} booked an appointment.`,
-        });
-        return;
-      }
-
-      void triggerNotificationAlert({
-        title: 'Appointment update',
-        body: `${patientName}: ${statusLabel}.`,
-        tag: `doctor-appointment-update-${appointmentId}`,
-        urgent: true,
-      });
-      toast({
-        title: 'Appointment update',
-        description: `${patientName}: ${statusLabel}.`,
-      });
-    });
-
-    doctorAppointmentSnapshotRef.current = nextSnapshot;
-  }, [fetchedAppointments, user?.id]);
-
-  const checkDoctorFiveMinuteReminders = useCallback(() => {
-    if (!user?.id) return;
-
-    const nowMs = Date.now();
-    (fetchedAppointments || []).forEach((apt: any) => {
-      const status = String(apt.status || '').trim().toLowerCase();
-      if (!['confirmed', 'in_progress'].includes(status)) return;
-      const dateStr = String(apt.date || '');
-      const timeStr = String(apt.time || '');
-      if (!dateStr || !timeStr) return;
-
-      const appointmentMs = new Date(`${dateStr}T${timeStr}`).getTime();
-      if (Number.isNaN(appointmentMs)) return;
-      const diffMs = appointmentMs - nowMs;
-      if (diffMs <= 0 || diffMs > 5 * 60 * 1000) return;
-
-      const reminderKey = `${String(apt.id || '')}:${dateStr}:${timeStr}`;
-      if (doctorReminderSentRef.current.has(reminderKey)) return;
-      doctorReminderSentRef.current.add(reminderKey);
-
-      const patientName = String(apt.patient_name || 'Patient');
-      const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
-
-      void triggerNotificationAlert({
-        title: 'Appointment reminder',
-        body: `Upcoming consultation with ${patientName} in ${minutesLeft} minute(s).`,
-        tag: `doctor-reminder-${reminderKey}`,
-        urgent: true,
-      });
-      toast({
-        title: 'Appointment reminder',
-        description: `Upcoming consultation with ${patientName} in ${minutesLeft} minute(s).`,
-      });
-    });
-  }, [fetchedAppointments, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    checkDoctorFiveMinuteReminders();
-    const timer = window.setInterval(() => {
-      checkDoctorFiveMinuteReminders();
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [checkDoctorFiveMinuteReminders, user?.id]);
 
   // Calculate upcoming appointments (next 24 hours) and next appointment
   const now = new Date();

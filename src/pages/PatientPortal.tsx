@@ -53,8 +53,8 @@ import { useHealthRecords } from '@/hooks/useHealthRecords';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTrackUserPresence } from '@/hooks/useTrackUserPresence';
 import { useDoctorPresence } from '@/hooks/useDoctorPresence';
-import { useRealtimeMessageNotifications } from '@/hooks/useRealtimeMessageNotifications';
-import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
+import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
+import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
 import {
   triggerNotificationAlert,
@@ -341,136 +341,16 @@ const PatientPortal = () => {
   
   // Track patient presence
   useTrackUserPresence(user?.id, 'patient');
-  
+
   // Subscribe to doctor presence
   const { presenceMap: doctorPresenceMap } = useDoctorPresence();
-  useRealtimeMessageNotifications(user?.id, 'patient');
-  useRequestNotificationPermission();
 
-  const getMessageReadState = useCallback(() => {
-    if (!user?.id || typeof window === 'undefined') return {} as Record<string, string>;
-    const storageKey = `patient-messages-read-${user.id}`;
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      return Object.fromEntries(
-        Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string')
-      );
-    } catch {
-      return {};
-    }
-  }, [user?.id]);
-
-  const refreshUnreadMessagesCount = useCallback(async () => {
-    if (!user?.id) {
-      setUnreadMessagesCount(0);
-      return;
-    }
-
-    const { data: sessions, error: sessionError } = await supabase
-      .from('consultation_sessions')
-      .select('id')
-      .eq('patient_id', user.id);
-
-    if (sessionError || !sessions || sessions.length === 0) {
-      setUnreadMessagesCount(0);
-      return;
-    }
-
-    const sessionIds = sessions
-      .map((row) => row.id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-
-    if (sessionIds.length === 0) {
-      setUnreadMessagesCount(0);
-      return;
-    }
-
-    const readState = getMessageReadState();
-    const { data: messages, error: messageError } = await supabase
-      .from('consultation_messages')
-      .select('session_id, created_at, sender_role')
-      .in('session_id', sessionIds)
-      .eq('sender_role', 'doctor')
-      .order('created_at', { ascending: true });
-
-    if (messageError || !messages) {
-      setUnreadMessagesCount(0);
-      return;
-    }
-
-    const total = messages.reduce((count, row: any) => {
-      const sessionId = String(row.session_id || '');
-      const createdAt = String(row.created_at || '');
-      if (!sessionId || !createdAt) return count;
-      const lastReadAt = readState[sessionId];
-      if (lastReadAt && new Date(createdAt).getTime() <= new Date(lastReadAt).getTime()) return count;
-      return count + 1;
-    }, 0);
-
-    setUnreadMessagesCount(total);
-  }, [getMessageReadState, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const channel = supabase
-      .channel(`patient-unread-messages-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'consultation_messages' },
-        async (payload) => {
-          const message = payload.new as {
-            session_id?: string;
-            sender_id?: string;
-            sender_role?: string;
-          } | null;
-
-          if (!message?.session_id || !message.sender_id) return;
-          if (message.sender_id === user.id) return;
-          if (message.sender_role !== 'doctor') return;
-
-          let session = sessionParticipantsCacheRef.current.get(message.session_id);
-          if (!session) {
-            const { data } = await supabase
-              .from('consultation_sessions')
-              .select('patient_id, doctor_id')
-              .eq('id', message.session_id)
-              .maybeSingle();
-            if (!data) return;
-            session = {
-              patient_id: data.patient_id ?? null,
-              doctor_id: data.doctor_id ?? null,
-            };
-            sessionParticipantsCacheRef.current.set(message.session_id, session);
-          }
-
-          if (session.patient_id !== user.id) return;
-          refreshUnreadMessagesCount();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, refreshUnreadMessagesCount]);
-
-  useEffect(() => {
-    refreshUnreadMessagesCount();
-  }, [activeTab, messagesJumpToUnreadSignal, refreshUnreadMessagesCount]);
-
-  useEffect(() => {
-    if (activeTab !== 'messages') return;
-    const timer = window.setInterval(() => {
-      refreshUnreadMessagesCount();
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [activeTab, refreshUnreadMessagesCount]);
-  
   const { appointments, isLoading: appointmentsLoading, invalidateAppointments } = useAppointments();
+
+  // Realtime notifications for messages and appointments
+  useRealtimeNotifications(user?.id, 'patient', user?.email);
+  useAppointmentReminders(appointments || [], user?.id);
+
   const { data: patientWallet } = useQuery({
     queryKey: ['patient-wallet', user?.id],
     queryFn: () => PatientWalletService.getPatientWallet(user!.id),
@@ -513,123 +393,6 @@ const PatientPortal = () => {
   const { initializePayment } = usePaystackPayment();
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const nextSnapshot = new Map<string, string>();
-    (appointments || []).forEach((apt: any) => {
-      const key = String(apt.id || '');
-      if (!key) return;
-      nextSnapshot.set(
-        key,
-        `${String(apt.status || '')}|${String(apt.reschedule_request_status || '')}|${String(apt.date || '')}|${String(apt.time || '')}`,
-      );
-    });
-
-    const prevSnapshot = patientAppointmentSnapshotRef.current;
-    if (prevSnapshot.size === 0) {
-      patientAppointmentSnapshotRef.current = nextSnapshot;
-      return;
-    }
-
-    nextSnapshot.forEach((value, appointmentId) => {
-      const prevValue = prevSnapshot.get(appointmentId);
-      if (prevValue === value) return;
-
-      const apt = (appointments || []).find((row: any) => String(row.id || '') === appointmentId);
-      const doctorName = getDoctorNameById((apt as any)?.doctor_id, (apt as any)?.specialist_name) || 'your doctor';
-      const statusLabel = formatAppointmentStatusLabel(String((apt as any)?.status || ''));
-
-      if (!prevValue) {
-        void triggerNotificationAlert({
-          title: 'Appointment update',
-          body: `A new appointment with ${doctorName} was created.`,
-          tag: `patient-appointment-new-${appointmentId}`,
-          urgent: true,
-        });
-        toast({
-          title: 'Appointment update',
-          description: `A new appointment with ${doctorName} was created.`,
-        });
-        return;
-      }
-
-      void triggerNotificationAlert({
-        title: 'Appointment update',
-        body: `${doctorName}: ${statusLabel}.`,
-        tag: `patient-appointment-update-${appointmentId}`,
-        urgent: true,
-      });
-      toast({
-        title: 'Appointment update',
-        description: `${doctorName}: ${statusLabel}.`,
-      });
-    });
-
-    patientAppointmentSnapshotRef.current = nextSnapshot;
-  }, [appointments, user?.id]);
-
-  const checkPatientFiveMinuteReminders = useCallback(() => {
-    if (!user?.id) return;
-
-    const nowMs = Date.now();
-    (appointments || []).forEach((apt: any) => {
-      const status = String(apt.status || '').trim().toLowerCase();
-      if (!['confirmed', 'in_progress'].includes(status)) return;
-      const dateStr = String(apt.date || '');
-      const timeStr = String(apt.time || '');
-      if (!dateStr || !timeStr) return;
-
-      const appointmentMs = new Date(`${dateStr}T${timeStr}`).getTime();
-      if (Number.isNaN(appointmentMs)) return;
-      const diffMs = appointmentMs - nowMs;
-      if (diffMs <= 0 || diffMs > 5 * 60 * 1000) return;
-
-      const reminderKey = `${String(apt.id || '')}:${dateStr}:${timeStr}`;
-      if (patientReminderSentRef.current.has(reminderKey)) return;
-      patientReminderSentRef.current.add(reminderKey);
-
-      const doctorName = String((apt as any)?.specialist_name || 'your doctor');
-      const minutesLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
-
-      void triggerNotificationAlert({
-        title: 'Appointment reminder',
-        body: `Consultation with ${doctorName} in ${minutesLeft} minute(s).`,
-        tag: `patient-reminder-${reminderKey}`,
-        urgent: true,
-      });
-      toast({
-        title: 'Appointment reminder',
-        description: `Consultation with ${doctorName} in ${minutesLeft} minute(s).`,
-      });
-    });
-  }, [appointments, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    checkPatientFiveMinuteReminders();
-    const timer = window.setInterval(() => {
-      checkPatientFiveMinuteReminders();
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [checkPatientFiveMinuteReminders, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-
-    notifications
-      .filter((notification) => !notification.read && notification.type === 'appointment')
-      .forEach((notification) => {
-        if (patientNotificationAlertedIdsRef.current.has(notification.id)) return;
-        patientNotificationAlertedIdsRef.current.add(notification.id);
-        void triggerNotificationAlert({
-          title: 'Appointment reminder',
-          body: notification.message,
-          tag: `patient-notification-${notification.id}`,
-          urgent: true,
-        });
-      });
-  }, [notifications, user?.id]);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const pendingWalletWithdrawalsCount = useMemo(
     () => walletWithdrawalRequests.filter((row) => {
