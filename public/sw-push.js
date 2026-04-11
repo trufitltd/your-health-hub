@@ -16,6 +16,16 @@ self.addEventListener('push', (event) => {
   // Times are in milliseconds: 200ms vibrate, 100ms pause, 200ms vibrate, 100ms pause, 200ms vibrate
   const vibrationPattern = [200, 100, 200, 100, 200];
 
+  // Try to trigger vibration directly (if supported in service worker context)
+  try {
+    if (typeof self !== 'undefined' && 'navigator' in self && 'vibrate' in self.navigator) {
+      self.navigator.vibrate(vibrationPattern);
+    }
+  } catch (vibrationError) {
+    // Vibration API not available in service worker context, rely on notification vibrate option
+    console.log('Direct vibration not available in service worker, using notification vibrate option');
+  }
+
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
@@ -32,6 +42,23 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+
+  // Trigger vibration when notification is clicked (if vibration data is available)
+  if (event.notification.data && event.notification.data.vibration) {
+    try {
+      // Send vibration data to the main thread via postMessage
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: 'notification-vibration',
+            vibration: event.notification.data.vibration
+          });
+        });
+      });
+    } catch (error) {
+      console.log('Could not send vibration message to main thread');
+    }
+  }
 
   const targetUrl = (event.notification.data && event.notification.data.url)
     ? event.notification.data.url

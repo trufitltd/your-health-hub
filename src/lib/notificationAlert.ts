@@ -75,6 +75,8 @@ const triggerVibration = (urgent: boolean, intensity: NotificationAlertIntensity
   }
 };
 
+export { triggerVibration };
+
 export const triggerNotificationAlert = async ({
   title,
   body,
