@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useRequestNotificationPermission } from "@/hooks/useRequestNotificationPermission";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -58,6 +59,66 @@ const PwaManifestHandler = () => {
   }, [location.pathname]);
 
   return null;
+};
+
+const NotificationPromptBanner = () => {
+  const { permission, request } = useRequestNotificationPermission();
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed || permission !== 'default') return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        zIndex: 9999,
+        background: '#0f8f76',
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '10px 16px',
+        gap: '12px',
+        fontSize: '14px',
+      }}
+    >
+      <span>🔔 Enable notifications to get alerts for messages and appointments.</span>
+      <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+        <button
+          onClick={() => { request(); setDismissed(true); }}
+          style={{
+            background: '#fff',
+            color: '#0f8f76',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '6px 14px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontSize: '13px',
+          }}
+        >
+          Allow
+        </button>
+        <button
+          onClick={() => setDismissed(true)}
+          style={{
+            background: 'transparent',
+            color: '#fff',
+            border: '1px solid rgba(255,255,255,0.5)',
+            borderRadius: '6px',
+            padding: '6px 10px',
+            cursor: 'pointer',
+            fontSize: '13px',
+          }}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
 };
 
 // Global error handling for Paystack cross-origin issues
@@ -113,6 +174,7 @@ const App = () => (
         <LanguageProvider>
           <BrowserRouter>
             <PwaManifestHandler />
+            <NotificationPromptBanner />
             <Routes>
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />

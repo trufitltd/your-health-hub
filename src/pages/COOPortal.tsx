@@ -22,7 +22,6 @@ import {
   setNotificationAlertIntensity as persistNotificationAlertIntensity,
   type NotificationAlertIntensity,
 } from '@/lib/notificationAlert';
-import { useRequestNotificationPermission } from '@/hooks/useRequestNotificationPermission';
 import {
   Dialog,
   DialogContent,
@@ -116,8 +115,31 @@ const isFailedPayment = (status: string | null | undefined) => {
   return ['failed', 'error', 'abandoned', 'cancelled'].includes(normalized);
 };
 
+import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
+import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
+
 export default function COOPortal() {
   const { user, signOut } = useAuth();
+
+  const { data: appointments = [], isLoading: appointmentsLoading } = useQuery({
+    queryKey: ['coo-appointments-feed'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (error) throw error;
+      return (data || []) as AppointmentRow[];
+    },
+    enabled: !!user,
+    refetchInterval: 30000,
+  });
+
+  // Realtime notifications for COO
+  useRealtimeNotifications(user?.id, 'coo', user?.email);
+  useAppointmentReminders(appointments, user?.id);
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const { formatDateTime, formatCurrency } = useLocaleFormatter();
   const navigate = useNavigate();
@@ -169,33 +191,6 @@ export default function COOPortal() {
   const userEmail = (user?.email || '').toLowerCase();
   const metadataRole = String(user?.user_metadata?.role || '').toLowerCase();
   const isAllowed = !!user && (metadataRole === 'coo' || allowedEmails.includes(userEmail));
-
-  useRequestNotificationPermission();
-
-  useEffect(() => {
-    if (!isAllowed || !user?.id) return;
-    const channel = supabase
-      .channel(`coo-incoming-notify-${user.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'coo_messages' },
-        (payload) => {
-          const msg = payload.new as { sender_role?: string; sender_name?: string; content?: string; thread_id?: string } | null;
-          if (!msg || msg.sender_role === 'coo') return;
-          const sender = String(msg.sender_name || msg.sender_role || 'User').trim();
-          const body = String(msg.content || 'Sent you a message.').slice(0, 90);
-          void triggerNotificationAlert({
-            title: `New message from ${sender}`,
-            body,
-            tag: `coo-message-${msg.thread_id}`,
-            urgent: true,
-          });
-          toast({ title: `New message from ${sender}`, description: body });
-        },
-      )
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [isAllowed, user?.id]);
 
   useEffect(() => {
     setCooProfilePicture((user?.user_metadata?.avatar as string) || '');
@@ -249,20 +244,6 @@ export default function COOPortal() {
         .select('user_id', { count: 'exact', head: true });
       if (error) throw error;
       return count || 0;
-    },
-    enabled: isAllowed,
-  });
-
-  const { data: appointments = [] } = useQuery({
-    queryKey: ['coo-appointments'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('appointments')
-        .select('id, status, created_at, date, patient_id, doctor_id, rating, review_comment')
-        .order('created_at', { ascending: false })
-        .limit(2000);
-      if (error) throw error;
-      return (data || []) as AppointmentRow[];
     },
     enabled: isAllowed,
   });

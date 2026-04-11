@@ -102,15 +102,29 @@ export const triggerNotificationAlert = async ({
   if (typeof window !== 'undefined' && 'Notification' in window) {
     try {
       if (Notification.permission === 'granted') {
-        new Notification(title, {
+        const notificationOptions: NotificationOptions = {
           body,
           tag: dedupeTag,
           renotify: true,
           vibrate: getVibrationPattern(urgent, effectiveIntensity),
-        });
+          icon: '/icon-192.png', // Add icon for better visibility
+          badge: '/icon-192.png',
+        };
+
+        // Try to use service worker registration for better background support
+        if ('serviceWorker' in navigator) {
+          const registration = await navigator.serviceWorker.getRegistration();
+          if (registration) {
+            await registration.showNotification(title, notificationOptions);
+          } else {
+            new Notification(title, notificationOptions);
+          }
+        } else {
+          new Notification(title, notificationOptions);
+        }
       }
-    } catch {
-      // Ignore browser notification failures.
+    } catch (err) {
+      console.warn('Browser notification failed:', err);
     }
   }
 };
