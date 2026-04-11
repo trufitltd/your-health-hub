@@ -7,6 +7,8 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import { useEffect, useState } from "react";
 import { useRequestNotificationPermission } from "@/hooks/useRequestNotificationPermission";
+import { usePushSubscription } from "@/hooks/usePushSubscription";
+import { useAuth } from "@/contexts/AuthContext";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -63,7 +65,11 @@ const PwaManifestHandler = () => {
 
 const NotificationPromptBanner = () => {
   const { permission, request } = useRequestNotificationPermission();
+  const { user } = useAuth();
   const [dismissed, setDismissed] = useState(false);
+
+  // Subscribe to push once permission is granted
+  usePushSubscription(permission === 'granted' ? (user?.id ?? undefined) : undefined);
 
   if (dismissed || permission !== 'default') return null;
 

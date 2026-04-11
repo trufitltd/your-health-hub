@@ -16,8 +16,10 @@ export default defineConfig(({ mode }) => ({
     VitePWA({
       registerType: "autoUpdate",
       workbox: {
-        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // increase to 10MB
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         ...(mode === "development" ? { globPatterns: [] } : {}),
+        // Inject our custom push + notificationclick handlers
+        importScripts: ['sw-push.js'],
       },
       includeAssets: ["favicon.ico", "robots.txt", "icon-192.png", "icon-512.png"],
       manifest: {

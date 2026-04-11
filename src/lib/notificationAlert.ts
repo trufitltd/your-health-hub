@@ -6,6 +6,7 @@ type NotificationAlertInput = {
   title: string;
   body?: string;
   tag?: string;
+  url?: string;
   urgent?: boolean;
   intensity?: NotificationAlertIntensity;
 };
@@ -78,6 +79,7 @@ export const triggerNotificationAlert = async ({
   title,
   body,
   tag,
+  url,
   urgent = true,
   intensity,
 }: NotificationAlertInput) => {
@@ -107,8 +109,9 @@ export const triggerNotificationAlert = async ({
           tag: dedupeTag,
           renotify: true,
           vibrate: getVibrationPattern(urgent, effectiveIntensity),
-          icon: '/icon-192.png', // Add icon for better visibility
+          icon: '/icon-192.png',
           badge: '/icon-192.png',
+          data: { url: url ?? window.location.pathname },
         };
 
         // Try to use service worker registration for better background support
