@@ -12,6 +12,10 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  // Vibration pattern: [vibrate, pause, vibrate, pause, vibrate]
+  // Times are in milliseconds: 200ms vibrate, 100ms pause, 200ms vibrate, 100ms pause, 200ms vibrate
+  const vibrationPattern = [200, 100, 200, 100, 200];
+
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
@@ -19,7 +23,9 @@ self.addEventListener('push', (event) => {
       badge: '/icon-192.png',
       tag: data.tag || 'myedoctor-push',
       renotify: true,
-      data: { url: data.url || '/' },
+      // Vibration is included in notification options for devices that support it
+      vibrate: vibrationPattern,
+      data: { url: data.url || '/', vibration: vibrationPattern },
     })
   );
 });
