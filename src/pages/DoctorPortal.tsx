@@ -2432,8 +2432,16 @@ const DoctorPortal = () => {
     .join('')
     .toUpperCase();
 
+  const slugifyName = (name: string) => {
+    return name
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[^\w-]/g, '');
+  };
+
   const shareUrl = typeof window !== 'undefined' && user?.id
-    ? `${window.location.origin}/booking/${user.id}`
+    ? `${window.location.origin}/booking/${slugifyName(displayName)}-${user.id}`
     : '';
 
   const shareMessage = t('doctorPortal.shareMessage', 'Book an appointment with me on MyE-Doctor');
