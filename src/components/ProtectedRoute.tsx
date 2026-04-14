@@ -107,7 +107,7 @@ export function ProtectedRoute({
   }
 
   if (!user) {
-    return <Navigate to="/auth?mode=register" state={{ from: location }} replace />;
+    return <Navigate to="/auth" state={{ from: location }} replace />;
   }
 
   if (requiredRole) {
