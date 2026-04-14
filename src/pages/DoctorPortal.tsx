@@ -2436,6 +2436,8 @@ const DoctorPortal = () => {
     ? `${window.location.origin}/booking/${user.id}`
     : '';
 
+  const shareMessage = t('doctorPortal.shareMessage', 'Book an appointment with me on MyE-Doctor');
+
   const handleCopyShareUrl = useCallback(async () => {
     if (!shareUrl) return;
     try {
@@ -2452,6 +2454,42 @@ const DoctorPortal = () => {
       });
     }
   }, [shareUrl, t]);
+
+  const handleSocialShare = useCallback((platform: string) => {
+    if (!shareUrl) return;
+    const encodedUrl = encodeURIComponent(shareUrl);
+    const encodedMessage = encodeURIComponent(shareMessage);
+    let shareLink = '';
+
+    switch (platform) {
+      case 'whatsapp':
+        shareLink = `https://wa.me/?text=${encodedMessage}%20${encodedUrl}`;
+        break;
+      case 'telegram':
+        shareLink = `https://t.me/share/url?url=${encodedUrl}&text=${encodedMessage}`;
+        break;
+      case 'facebook':
+        shareLink = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
+        break;
+      case 'twitter':
+        shareLink = `https://twitter.com/intent/tweet?url=${encodedUrl}&text=${encodedMessage}`;
+        break;
+      case 'instagram':
+        // Instagram doesn't have a direct URL share, so copy to clipboard with message
+        navigator.clipboard.writeText(`${shareMessage}\n${shareUrl}`);
+        toast({
+          title: t('doctorPortal.shareLinkCopiedTitle', 'Copied to clipboard'),
+          description: t('doctorPortal.instagramShareHint', 'Open Instagram and paste in your bio or story.'),
+        });
+        return;
+      default:
+        return;
+    }
+
+    if (shareLink) {
+      window.open(shareLink, '_blank', 'noopener,noreferrer');
+    }
+  }, [shareUrl, shareMessage, t]);
 
   const handlePhotoUpload = async (file: File) => {
     if (!user) return;
@@ -3079,15 +3117,44 @@ const DoctorPortal = () => {
                     </p>
                     <div className="flex items-center gap-2">
                       <Input readOnly value={shareUrl} className="flex-1 text-xs" />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="whitespace-nowrap"
-                        onClick={handleCopyShareUrl}
-                      >
-                        <Link className="w-4 h-4 mr-2" />
-                        {t('doctorPortal.copyLink', 'Copy')}
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="whitespace-nowrap"
+                          >
+                            <Link className="w-4 h-4 mr-2" />
+                            {t('doctorPortal.share', 'Share')}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onClick={handleCopyShareUrl} className="cursor-pointer">
+                            <Link className="w-4 h-4 mr-2" />
+                            {t('doctorPortal.copyLink', 'Copy link')}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSocialShare('whatsapp')} className="cursor-pointer">
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            WhatsApp
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSocialShare('telegram')} className="cursor-pointer">
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Telegram
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSocialShare('facebook')} className="cursor-pointer">
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Facebook
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSocialShare('twitter')} className="cursor-pointer">
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Twitter
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSocialShare('instagram')} className="cursor-pointer">
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Instagram
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                 )}
