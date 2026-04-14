@@ -87,7 +87,43 @@ export default function SlotSelection() {
   const { user } = useAuth();
   const { t } = useLanguage();
   const { formatDate: formatLocaleDate, formatClockTime, formatCurrency } = useLocaleFormatter();
-  const state = location.state as LocationState;
+  const state = location.state as LocationState | null;
+  const queryDoctorId = new URLSearchParams(location.search).get('doctor') || undefined;
+  const selectedDoctorId = state?.doctorId || queryDoctorId;
+
+  const { data: doctorInfo } = useQuery({
+    queryKey: ['slot-selection-doctor-info', selectedDoctorId],
+    queryFn: async () => {
+      if (!selectedDoctorId) return null;
+      const [{ data: registrationData, error: registrationError }, { data: doctorData, error: doctorError }] = await Promise.all([
+        supabase
+          .from('doctor_registrations')
+          .select('full_name, specialty, profile_picture_url')
+          .eq('user_id', selectedDoctorId)
+          .maybeSingle(),
+        supabase
+          .from('doctors')
+          .select('name, specialty, avatar_url')
+          .eq('id', selectedDoctorId)
+          .maybeSingle(),
+      ]);
+
+      if (registrationError && doctorError) {
+        throw registrationError;
+      }
+
+      return {
+        full_name: registrationData?.full_name || doctorData?.name || '',
+        specialty: registrationData?.specialty || doctorData?.specialty || '',
+        profile_picture_url: registrationData?.profile_picture_url || doctorData?.avatar_url || undefined,
+      };
+    },
+    enabled: !!selectedDoctorId,
+  });
+
+  const doctorName = state?.doctorName || doctorInfo?.full_name || 'Doctor';
+  const doctorSpecialty = state?.specialty || doctorInfo?.specialty || '';
+  const doctorProfilePicture = state?.profilePicture || doctorInfo?.profile_picture_url;
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -114,7 +150,7 @@ export default function SlotSelection() {
   }, []);
 
   // Redirect if no doctor selected
-  if (!state?.doctorId) {
+  if (!selectedDoctorId) {
     return (
       <Layout>
         <div className="container mx-auto px-4 py-12">
@@ -156,20 +192,20 @@ export default function SlotSelection() {
   });
 
   const { data: doctorConsultationLanguages = [] } = useQuery({
-    queryKey: ['doctor-consultation-languages', state.doctorId],
+    queryKey: ['doctor-consultation-languages', selectedDoctorId],
     queryFn: async () => {
-      if (!state.doctorId) return [];
+      if (!selectedDoctorId) return [];
 
       const [{ data: doctorData, error: doctorError }, { data: registrationData, error: registrationError }] = await Promise.all([
         supabase
           .from('doctors')
           .select('preferred_consultation_languages')
-          .eq('id', state.doctorId)
+          .eq('id', selectedDoctorId)
           .maybeSingle(),
         supabase
           .from('doctor_registrations')
           .select('preferred_consultation_languages')
-          .eq('user_id', state.doctorId)
+          .eq('user_id', selectedDoctorId)
           .maybeSingle(),
       ]);
 
@@ -186,14 +222,14 @@ export default function SlotSelection() {
       const { data, error } = await supabase
         .from('doctors')
         .select('preferred_consultation_languages')
-        .eq('id', state.doctorId)
+        .eq('id', selectedDoctorId)
         .maybeSingle();
 
       if (error) return [];
 
       return toConsultationLanguageList(data?.preferred_consultation_languages);
     },
-    enabled: !!state.doctorId,
+    enabled: !!selectedDoctorId,
   });
 
   const consultationLanguageOptions = useMemo(() => {
@@ -289,12 +325,12 @@ export default function SlotSelection() {
 
   // Fetch doctor schedules and availability
   const { data: schedules = [], isLoading: schedulesLoading } = useQuery({
-    queryKey: ['doctor-schedules', state.doctorId],
+    queryKey: ['doctor-schedules', selectedDoctorId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('doctor_schedules')
         .select('*')
-        .eq('doctor_id', state.doctorId);
+        .eq('doctor_id', selectedDoctorId);
 
       if (error) {
         console.error('Error fetching schedules:', error);
@@ -303,18 +339,19 @@ export default function SlotSelection() {
 
       return data || [];
     },
+    enabled: !!selectedDoctorId,
   });
 
   // Fetch blocking appointments for selected doctor and date
   const { data: bookedAppointments = [] } = useQuery({
-    queryKey: ['booked-appointments', state.doctorId, selectedDate],
+    queryKey: ['booked-appointments', selectedDoctorId, selectedDate],
     queryFn: async () => {
-      if (!state.doctorId || !selectedDate) return [];
+      if (!selectedDoctorId || !selectedDate) return [];
 
       const { data, error } = await supabase
         .from('appointments')
         .select('time, duration_minutes, status, slot_locked_until')
-        .eq('doctor_id', state.doctorId)
+        .eq('doctor_id', selectedDoctorId)
         .eq('date', selectedDate);
 
       if (error) throw error;
@@ -322,7 +359,7 @@ export default function SlotSelection() {
       return (data || [])
         .map((apt) => apt as BookedAppointmentRow);
     },
-    enabled: !!state.doctorId && !!selectedDate,
+    enabled: !!selectedDoctorId && !!selectedDate,
   });
 
   // Get available dates (next 30 days)
@@ -422,7 +459,7 @@ export default function SlotSelection() {
     queryKey: [
       'price-preview-slot-selection',
       user?.id,
-      state.doctorId,
+      selectedDoctorId,
       selectedDuration,
       selectedConsultationType,
       selectedDate,
@@ -431,11 +468,11 @@ export default function SlotSelection() {
     ],
     queryFn: () =>
       AvailabilityService.calculatePricePreview({
-        doctorId: state.doctorId!,
+        doctorId: selectedDoctorId!,
         duration: selectedDuration,
         consultationType: selectedConsultationType,
       }),
-    enabled: !!user && !!state.doctorId && summaryReady,
+    enabled: !!user && !!selectedDoctorId && summaryReady,
     retry: false,
   });
 
@@ -564,7 +601,7 @@ export default function SlotSelection() {
 
     try {
       const booking = await BookingService.initiateBooking({
-        doctorId: state.doctorId,
+        doctorId: selectedDoctorId,
         preferredDate: selectedDate,
         preferredTime: selectedTime || undefined,
         duration: selectedDuration,
@@ -750,14 +787,14 @@ export default function SlotSelection() {
                 <CardContent className="p-6">
                   <div className="flex items-center gap-4">
                     <Avatar className="w-16 h-16">
-                      <AvatarImage src={state.profilePicture} />
+                      <AvatarImage src={doctorProfilePicture} />
                       <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                        {state.doctorName?.split(' ').map(n => n[0]).join('') || 'DR'}
+                        {doctorName.split(' ').map(n => n[0]).join('') || 'DR'}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
-                      <h1 className="text-2xl font-bold">{state.doctorName}</h1>
-                      <p className="text-muted-foreground">{formatSpecialtyLabel(state.specialty)}</p>
+                      <h1 className="text-2xl font-bold">{doctorName}</h1>
+                      <p className="text-muted-foreground">{formatSpecialtyLabel(doctorSpecialty)}</p>
                     </div>
                     <Badge className="bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
                   </div>
@@ -1084,7 +1121,7 @@ export default function SlotSelection() {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
                         <span className="text-muted-foreground">{t('slotSelection.summary.doctor', 'Doctor')}</span>
-                        <span className="font-medium">{state.doctorName}</span>
+                        <span className="font-medium">{doctorName}</span>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded-lg bg-background/50">
                         <span className="text-muted-foreground">{t('slotSelection.summary.date', 'Date')}</span>
