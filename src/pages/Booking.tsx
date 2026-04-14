@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -8,18 +8,27 @@ export default function BookingPage() {
   const { user, isLoading } = useAuth();
   const { t } = useLanguage();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { doctorId: doctorIdParam } = useParams<{ doctorId?: string }>();
+  const queryDoctorId = new URLSearchParams(location.search).get('doctor');
+  const doctorId = doctorIdParam || queryDoctorId || undefined;
 
   useEffect(() => {
     if (!isLoading) {
       if (!user) {
-        // Not authenticated: Redirect to login with return path
-        navigate('/auth?redirect=/booking');
+        const redirectPath = `${location.pathname}${location.search}`;
+        navigate(`/auth?redirect=${encodeURIComponent(redirectPath)}`);
+      } else if (doctorId) {
+        navigate('/slot-selection', {
+          state: {
+            doctorId,
+          },
+        });
       } else {
-        // Authenticated: Start booking from doctor discovery
         navigate('/doctor-discovery');
       }
     }
-  }, [user, isLoading, navigate]);
+  }, [user, isLoading, navigate, location.pathname, location.search, doctorId]);
 
   return (
     <Layout>
