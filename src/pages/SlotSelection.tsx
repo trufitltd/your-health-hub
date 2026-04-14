@@ -767,7 +767,7 @@ export default function SlotSelection() {
 
   return (
     <Layout>
-      <div className="min-h-screen bg-muted/30 py-8 md:py-12">
+      <div className="min-h-screen bg-muted/30 pt-28 pb-8 md:pt-32 md:pb-12">
         <div className="container mx-auto px-4">
           <div className="max-w-4xl mx-auto">
             {/* Header with doctor info */}
@@ -779,29 +779,31 @@ export default function SlotSelection() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => navigate(-1)}
-                className="mb-6"
+                onClick={() => navigate('/doctor-discovery')}
+                className="mb-6 w-full sm:w-auto"
               >
                 {t('slotSelection.back', '← Back')}
               </Button>
 
               <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
                 <CardContent className="p-6">
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                     <Avatar className="w-16 h-16">
                       <AvatarImage src={doctorProfilePicture} />
                       <AvatarFallback className="bg-primary/10 text-primary text-lg">
                         {doctorName.split(' ').map(n => n[0]).join('') || 'DR'}
                       </AvatarFallback>
                     </Avatar>
-                    <div className="flex-1">
-                      <h1 className="text-2xl font-bold">{doctorName}</h1>
-                      <p className="text-muted-foreground">{formatSpecialtyLabel(doctorSpecialty)}</p>
-                      {doctorBio && (
-                        <p className="text-sm text-foreground mt-2 line-clamp-2">{doctorBio}</p>
-                      )}
+                    <div className="flex-1 space-y-2">
+                      <h1 className="text-xl font-bold sm:text-2xl">{doctorName}</h1>
+                      <div className="space-y-1">
+                        <p className="text-sm text-muted-foreground sm:text-base">{formatSpecialtyLabel(doctorSpecialty)}</p>
+                        {doctorBio && (
+                          <p className="text-sm text-foreground mt-1 line-clamp-3 break-words">{doctorBio}</p>
+                        )}
+                      </div>
                     </div>
-                    <Badge className="bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
+                    <Badge className="self-start sm:self-center bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
                   </div>
                 </CardContent>
               </Card>
