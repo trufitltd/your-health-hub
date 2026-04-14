@@ -98,12 +98,12 @@ export default function SlotSelection() {
       const [{ data: registrationData, error: registrationError }, { data: doctorData, error: doctorError }] = await Promise.all([
         supabase
           .from('doctor_registrations')
-          .select('full_name, specialty, profile_picture_url')
+          .select('full_name, specialty, profile_picture_url, bio')
           .eq('user_id', selectedDoctorId)
           .maybeSingle(),
         supabase
           .from('doctors')
-          .select('name, specialty, avatar_url')
+          .select('name, specialty, avatar_url, bio')
           .eq('id', selectedDoctorId)
           .maybeSingle(),
       ]);
@@ -116,6 +116,7 @@ export default function SlotSelection() {
         full_name: registrationData?.full_name || doctorData?.name || '',
         specialty: registrationData?.specialty || doctorData?.specialty || '',
         profile_picture_url: registrationData?.profile_picture_url || doctorData?.avatar_url || undefined,
+        bio: registrationData?.bio || doctorData?.bio || '',
       };
     },
     enabled: !!selectedDoctorId,
@@ -124,6 +125,7 @@ export default function SlotSelection() {
   const doctorName = state?.doctorName || doctorInfo?.full_name || 'Doctor';
   const doctorSpecialty = state?.specialty || doctorInfo?.specialty || '';
   const doctorProfilePicture = state?.profilePicture || doctorInfo?.profile_picture_url;
+  const doctorBio = doctorInfo?.bio || '';
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -795,6 +797,9 @@ export default function SlotSelection() {
                     <div className="flex-1">
                       <h1 className="text-2xl font-bold">{doctorName}</h1>
                       <p className="text-muted-foreground">{formatSpecialtyLabel(doctorSpecialty)}</p>
+                      {doctorBio && (
+                        <p className="text-sm text-foreground mt-2 line-clamp-2">{doctorBio}</p>
+                      )}
                     </div>
                     <Badge className="bg-primary text-primary-foreground">{t('slotSelection.available', 'Available')}</Badge>
                   </div>

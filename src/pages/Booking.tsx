@@ -11,7 +11,23 @@ export default function BookingPage() {
   const location = useLocation();
   const { doctorId: doctorIdParam } = useParams<{ doctorId?: string }>();
   const queryDoctorId = new URLSearchParams(location.search).get('doctor');
-  const doctorId = doctorIdParam || queryDoctorId || undefined;
+  
+  // Extract actual doctor ID from format like "john-doe-uuid" by taking the last part after the last dash
+  const extractDoctorId = (param: string | undefined): string | undefined => {
+    if (!param) return undefined;
+    // Match UUID pattern at the end of the string
+    const uuidMatch = param.match(/([a-f0-9-]{36})$/);
+    if (uuidMatch) {
+      return uuidMatch[1];
+    }
+    // Fallback: if it's already a UUID format
+    if (param.match(/^[a-f0-9-]{36}$/)) {
+      return param;
+    }
+    return param;
+  };
+
+  const doctorId = extractDoctorId(doctorIdParam) || queryDoctorId || undefined;
 
   useEffect(() => {
     if (!isLoading) {
