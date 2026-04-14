@@ -213,7 +213,7 @@ const App = () => (
               <Route path="/slot-selection" element={<SlotSelection />} />
               <Route path="/services" element={<Services />} />
               <Route path="/specialists" element={<Specialists />} />
-              <Route path="/booking" element={<Booking />} />
+              <Route path="/booking/:doctorId?" element={<Booking />} />
               <Route path="/contact" element={<Contact />} />
               <Route path="/install" element={<Install />} />
               <Route path="/consultation/:appointmentId" element={<Consultation />} />

@@ -1207,6 +1207,12 @@ export default function AuthPage() {
           return;
         }
 
+        const redirectPath = searchParams.get('redirect');
+        if (redirectPath && userRole === 'patient') {
+          navigate(redirectPath);
+          return;
+        }
+
         // Redirect based on role
         navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
       }

@@ -737,7 +737,7 @@ export default function SpecialistsPage() {
                 </div>
 
                 <div className="flex items-center justify-end pt-4 border-t border-border">
-                  <Link to={`/booking?doctor=${doctor.id}`}>
+                  <Link to={`/booking/${doctor.id}`}>
                     <Button variant="gradient" size="sm">
                       <Video className="w-4 h-4" />
                       {t('common.bookNow', 'Book Now')}

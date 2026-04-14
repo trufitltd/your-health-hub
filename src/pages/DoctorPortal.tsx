@@ -2432,6 +2432,27 @@ const DoctorPortal = () => {
     .join('')
     .toUpperCase();
 
+  const shareUrl = typeof window !== 'undefined' && user?.id
+    ? `${window.location.origin}/booking/${user.id}`
+    : '';
+
+  const handleCopyShareUrl = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast({
+        title: t('doctorPortal.shareLinkCopiedTitle', 'Share link copied'),
+        description: t('doctorPortal.shareLinkCopiedDescription', 'Your booking URL is ready to send.'),
+      });
+    } catch (err) {
+      toast({
+        title: t('doctorPortal.shareLinkCopyFailedTitle', 'Copy failed'),
+        description: t('doctorPortal.shareLinkCopyFailedDescription', 'Unable to copy the link. Please try again.'),
+        variant: 'destructive',
+      });
+    }
+  }, [shareUrl, t]);
+
   const handlePhotoUpload = async (file: File) => {
     if (!user) return;
     setIsUploadingPhoto(true);
@@ -3050,6 +3071,26 @@ const DoctorPortal = () => {
                     </div>
                   </div>
                 </div>
+
+                {shareUrl && (
+                  <div className="mb-4 p-3 rounded-lg border border-border bg-muted/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                      {t('doctorPortal.shareBookingLinkLabel', 'Your booking link')}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Input readOnly value={shareUrl} className="flex-1 text-xs" />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="whitespace-nowrap"
+                        onClick={handleCopyShareUrl}
+                      >
+                        <Link className="w-4 h-4 mr-2" />
+                        {t('doctorPortal.copyLink', 'Copy')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
                   {[
