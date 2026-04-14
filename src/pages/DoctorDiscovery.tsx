@@ -891,7 +891,7 @@ export default function DoctorDiscovery() {
   const handleBookNow = (doctor: Doctor) => {
     if (!user) {
       toast({ title: 'Please sign in', description: 'You must be signed in to book appointments.' });
-      navigate('/auth');
+      navigate(`/auth?redirect=/booking/${doctor.user_id}`);
       return;
     }
     if (!doctor.is_active) {
@@ -901,16 +901,8 @@ export default function DoctorDiscovery() {
       });
       return;
     }
-    // Navigate to slot selection page
-    navigate('/slot-selection', {
-      state: {
-        doctorId: doctor.user_id,
-        doctorName: doctor.full_name,
-        specialty: doctor.specialty,
-        profilePicture: doctor.profile_picture_url,
-        consultationLanguage: filters.consultationLanguage || undefined,
-      }
-    });
+
+    navigate(`/booking/${doctor.user_id}`);
   };
 
   const renderStars = (rating: number, count: number = 5) => {
