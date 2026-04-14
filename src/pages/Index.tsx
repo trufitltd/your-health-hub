@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Calendar, Video, Shield, Clock, Star, Users, Heart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout';
@@ -8,6 +8,7 @@ import { FloatingLanguageSelector } from "@/components/LanguageSelector";
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
+import { useAuth } from '@/hooks/useAuth';
 import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
 import heroDoctor3 from '@/assets/myedoctor_hero3.jpeg';
@@ -17,6 +18,17 @@ import heroDoctor5 from '@/assets/myedoctor_hero5.jpeg';
 const Index = () => {
   const { t } = useLanguage();
   const { formatNumber } = useLocaleFormatter();
+  const { user, role, isLoading } = useAuth();
+  const navigate = useNavigate();
+
+  // Redirect authenticated users to their portals
+  useEffect(() => {
+    if (!isLoading && user && role) {
+      const portalPath = role === 'doctor' ? '/doctor-portal' : '/patient-portal';
+      navigate(portalPath, { replace: true });
+    }
+  }, [user, role, isLoading, navigate]);
+
   const features = [
     {
       icon: Video,
@@ -85,6 +97,20 @@ const Index = () => {
     }
     return template.replace(/1,?000/g, formatNumber(1000));
   })();
+
+  // Show loading while checking authentication
+  if (isLoading) {
+    return (
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
