@@ -125,16 +125,16 @@ export default function CompleteRegistration() {
       // Pre-fill patient fields from existing row or metadata
       if (metadataRole === 'patient') {
         const p = patientData as PatientRow | null;
-        setFullName(p?.full_name || String(user.user_metadata?.full_name || user.user_metadata?.name || ''));
-        setPhoneNumber(p?.phone_number || String(user.user_metadata?.phone_number || ''));
-        setGender(p?.gender || String(user.user_metadata?.gender || ''));
-        setAge(p?.age ? String(p.age) : String(user.user_metadata?.age || ''));
-        setCity(p?.city || String(user.user_metadata?.city || ''));
-        setPatientState(p?.state || String(user.user_metadata?.state || ''));
-        setCountry(p?.country || String(user.user_metadata?.country || ''));
-        setMaritalStatus(p?.marital_status || String(user.user_metadata?.marital_status || ''));
-        setEmergencyContactName(p?.emergency_contact_name || String(user.user_metadata?.emergency_contact_name || ''));
-        setEmergencyContactPhone(p?.emergency_contact_phone || String(user.user_metadata?.emergency_contact_phone || ''));
+        setFullName(p?.full_name || '');
+        setPhoneNumber(p?.phone_number || '');
+        setGender(p?.gender || '');
+        setAge(p?.age ? String(p.age) : '');
+        setCity(p?.city || '');
+        setPatientState(p?.state || '');
+        setCountry(p?.country || '');
+        setMaritalStatus(p?.marital_status || '');
+        setEmergencyContactName(p?.emergency_contact_name || '');
+        setEmergencyContactPhone(p?.emergency_contact_phone || '');
         setIdentificationType(p?.identification_type || '');
         setIdentificationNumber(p?.identification_number || '');
       }
@@ -275,6 +275,11 @@ export default function CompleteRegistration() {
       toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
       return;
     }
+    const parsedAge = Number(age);
+    if (!Number.isFinite(parsedAge) || parsedAge <= 0) {
+      toast({ title: 'Invalid age', description: 'Please enter a valid age greater than zero.' });
+      return;
+    }
     if (!consentAgreed) {
       toast({ title: 'Consent required', description: 'Please agree to the patient consent to continue.' });
       return;
@@ -293,10 +298,10 @@ export default function CompleteRegistration() {
 
       const payload = {
         user_id: user.id,
-        full_name: fullName.trim() || patientRow?.full_name || String(user.user_metadata?.full_name || user.user_metadata?.name || 'Patient'),
+        full_name: fullName.trim(),
         gender,
-        age: parseInt(age),
-        phone_number: phoneNumber || patientRow?.phone_number || user.phone || 'N/A',
+        age: Math.floor(parsedAge),
+        phone_number: phoneNumber.trim(),
         email: patientRow?.email || user.email || null,
         city,
         state: patientState,
