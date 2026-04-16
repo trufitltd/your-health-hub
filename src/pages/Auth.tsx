@@ -664,37 +664,6 @@ export default function AuthPage() {
       if (mode === 'register') {
         // Validate email for all users
         const normalizedEmail = String(email || '').trim();
-        const normalizedFullName = role === 'doctor' ? String(name || '').trim() : '';
-        if (role === 'doctor') {
-          if (!normalizedFullName) {
-            toast({ title: 'Full name required', description: 'Please enter your full name.' });
-            setIsLoading(false);
-            return;
-          }
-          const normalizedNameForCompare = normalizedFullName.toLowerCase();
-          const normalizedEmailForCompare = normalizedEmail.toLowerCase();
-          const normalizedEmailLocalPart = normalizedEmailForCompare.split('@')[0] || '';
-          if (
-            normalizedNameForCompare.includes('@')
-            || normalizedNameForCompare === normalizedEmailForCompare
-            || normalizedNameForCompare === normalizedEmailLocalPart
-          ) {
-            toast({
-              title: 'Enter your real full name',
-              description: 'Full name cannot be your email. Please enter your first and last name.',
-            });
-            setIsLoading(false);
-            return;
-          }
-          if (normalizedFullName.split(/\s+/).filter(Boolean).length < 2) {
-            toast({
-              title: 'Full name required',
-              description: 'Please enter at least first name and last name.',
-            });
-            setIsLoading(false);
-            return;
-          }
-        }
         if (!normalizedEmail) {
           toast({ title: 'Email required', description: 'Please enter your email address.' });
           setIsLoading(false);
@@ -746,17 +715,6 @@ export default function AuthPage() {
           return;
         }
 
-        const cleanedLocalPhone = role === 'doctor' ? phoneLocalNumber.replace(/\D/g, '').replace(/^0+/, '') : '';
-        const normalizedPhone = role === 'doctor' ? `${selectedPhoneDialCode}${cleanedLocalPhone}` : '';
-        if (role === 'doctor') {
-          const phoneDigits = normalizedPhone.replace(/\D/g, '');
-          if (!cleanedLocalPhone || phoneDigits.length < 8) {
-            toast({ title: 'Phone number required', description: 'Please enter a valid phone number.' });
-            setIsLoading(false);
-            return;
-          }
-        }
-
         // Validate doctor signup status
         if (role === 'doctor') {
           const doctorSignupStatus = await getDoctorSignupStatus();
@@ -778,10 +736,7 @@ export default function AuthPage() {
           options: {
             emailRedirectTo: `${window.location.origin}/auth?mode=login&verified=1`,
             data: {
-              full_name: role === 'doctor' ? normalizedFullName : undefined,
-              name: role === 'doctor' ? normalizedFullName : undefined,
               role,
-              phone_number: role === 'doctor' ? normalizedPhone : undefined,
             },
           },
         });
