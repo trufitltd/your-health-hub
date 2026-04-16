@@ -234,21 +234,11 @@ export default function AuthPage() {
   const [rateLimitBlockedUntil, setRateLimitBlockedUntil] = useState<number | null>(null);
   const [isCheckingDoctorSignup, setIsCheckingDoctorSignup] = useState(false);
   const [doctorSignupBlockedMessage, setDoctorSignupBlockedMessage] = useState('');
+  const [isCheckingPatientSignup, setIsCheckingPatientSignup] = useState(false);
+  const [patientSignupBlockedMessage, setPatientSignupBlockedMessage] = useState('');
   const handledSignupRedirectRef = useRef(false);
   const navigate = useNavigate();
 
-  // Patient registration fields
-  const [gender, setGender] = useState('');
-  const [age, setAge] = useState('');
-  const [city, setCity] = useState('');
-  const [state, setState] = useState('');
-  const [country, setCountry] = useState('');
-  const [maritalStatus, setMaritalStatus] = useState('');
-  const [emergencyContactName, setEmergencyContactName] = useState('');
-  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
-  const [identificationType, setIdentificationType] = useState('');
-  const [identificationNumber, setIdentificationNumber] = useState('');
-  const [consentAgreed, setConsentAgreed] = useState(false);
   // Doctor registration fields
   const [hospitalAffiliation, setHospitalAffiliation] = useState('');
   const [specialty, setSpecialty] = useState('');
@@ -300,6 +290,7 @@ export default function AuthPage() {
   const parsedConsultationRate = parseConsultationRate(consultationRate);
   const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
   const selectedPhoneDialCode = selectedPhoneCountry?.dialCode || '+234';
+  const activeSignupBlockedMessage = role === 'doctor' ? doctorSignupBlockedMessage : patientSignupBlockedMessage;
 
   const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
   const RATE_LIMIT_STORAGE_KEY = 'authRateLimitBlockedUntil';
@@ -312,6 +303,16 @@ export default function AuthPage() {
       setRateLimitBlockedUntil(parsed);
     }
   }, []);
+
+  useEffect(() => {
+    if (mode !== 'register') return;
+    (async () => {
+      const status = await getPatientSignupStatus();
+      if (!status.open) {
+        setPatientSignupBlockedMessage(status.message);
+      }
+    })();
+  }, [mode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -440,10 +441,40 @@ export default function AuthPage() {
     };
   };
 
+  const getPatientSignupStatus = async () => {
+    const fallbackMessage = 'Patient sign up has been closed for this round and will resume soon. Please keep checking the site.';
+    const { data, error } = await supabase.rpc('get_patient_signup_status');
+    if (error) {
+      console.warn('Patient signup status lookup failed:', error);
+      return { open: true, message: fallbackMessage };
+    }
+    const row = Array.isArray(data) ? data[0] : null;
+    return {
+      open: row?.patient_signup_open !== false,
+      message: String(row?.patient_signup_closed_message || '').trim() || fallbackMessage,
+    };
+  };
+
   const handleRoleSelection = async (nextRole: UserRole) => {
-    if (nextRole !== 'doctor') {
-      setRole('patient');
-      setDoctorSignupBlockedMessage('');
+    if (nextRole === 'patient') {
+      setIsCheckingPatientSignup(true);
+      try {
+        const patientSignupStatus = await getPatientSignupStatus();
+        if (!patientSignupStatus.open) {
+          setPatientSignupBlockedMessage(patientSignupStatus.message);
+          setDoctorSignupBlockedMessage('');
+          toast({
+            title: 'Patient sign up is currently closed',
+            description: patientSignupStatus.message,
+            variant: 'destructive',
+          });
+          return;
+        }
+        setPatientSignupBlockedMessage('');
+        setRole('patient');
+      } finally {
+        setIsCheckingPatientSignup(false);
+      }
       return;
     }
 
@@ -451,8 +482,9 @@ export default function AuthPage() {
     try {
       const doctorSignupStatus = await getDoctorSignupStatus();
       if (!doctorSignupStatus.open) {
-        setRole('patient');
+        setRole('doctor');
         setDoctorSignupBlockedMessage(doctorSignupStatus.message);
+        setPatientSignupBlockedMessage('');
         toast({
           title: 'Doctor sign up is currently closed',
           description: doctorSignupStatus.message,
@@ -632,34 +664,36 @@ export default function AuthPage() {
       if (mode === 'register') {
         // Validate email for all users
         const normalizedEmail = String(email || '').trim();
-        const normalizedFullName = String(name || '').trim();
-        if (!normalizedFullName) {
-          toast({ title: 'Full name required', description: 'Please enter your full name.' });
-          setIsLoading(false);
-          return;
-        }
-        const normalizedNameForCompare = normalizedFullName.toLowerCase();
-        const normalizedEmailForCompare = normalizedEmail.toLowerCase();
-        const normalizedEmailLocalPart = normalizedEmailForCompare.split('@')[0] || '';
-        if (
-          normalizedNameForCompare.includes('@')
-          || normalizedNameForCompare === normalizedEmailForCompare
-          || normalizedNameForCompare === normalizedEmailLocalPart
-        ) {
-          toast({
-            title: 'Enter your real full name',
-            description: 'Full name cannot be your email. Please enter your first and last name.',
-          });
-          setIsLoading(false);
-          return;
-        }
-        if (normalizedFullName.split(/\s+/).filter(Boolean).length < 2) {
-          toast({
-            title: 'Full name required',
-            description: 'Please enter at least first name and last name.',
-          });
-          setIsLoading(false);
-          return;
+        const normalizedFullName = role === 'doctor' ? String(name || '').trim() : '';
+        if (role === 'doctor') {
+          if (!normalizedFullName) {
+            toast({ title: 'Full name required', description: 'Please enter your full name.' });
+            setIsLoading(false);
+            return;
+          }
+          const normalizedNameForCompare = normalizedFullName.toLowerCase();
+          const normalizedEmailForCompare = normalizedEmail.toLowerCase();
+          const normalizedEmailLocalPart = normalizedEmailForCompare.split('@')[0] || '';
+          if (
+            normalizedNameForCompare.includes('@')
+            || normalizedNameForCompare === normalizedEmailForCompare
+            || normalizedNameForCompare === normalizedEmailLocalPart
+          ) {
+            toast({
+              title: 'Enter your real full name',
+              description: 'Full name cannot be your email. Please enter your first and last name.',
+            });
+            setIsLoading(false);
+            return;
+          }
+          if (normalizedFullName.split(/\s+/).filter(Boolean).length < 2) {
+            toast({
+              title: 'Full name required',
+              description: 'Please enter at least first name and last name.',
+            });
+            setIsLoading(false);
+            return;
+          }
         }
         if (!normalizedEmail) {
           toast({ title: 'Email required', description: 'Please enter your email address.' });
@@ -712,52 +746,18 @@ export default function AuthPage() {
           return;
         }
 
-        const cleanedLocalPhone = phoneLocalNumber.replace(/\D/g, '').replace(/^0+/, '');
-        const normalizedPhone = `${selectedPhoneDialCode}${cleanedLocalPhone}`;
-        const phoneDigits = normalizedPhone.replace(/\D/g, '');
-        if (!cleanedLocalPhone || phoneDigits.length < 8) {
-          toast({ title: 'Phone number required', description: 'Please enter a valid phone number.' });
-          setIsLoading(false);
-          return;
-        }
-
-        const normalizedGender = String(gender || '').trim();
-        const normalizedAge = Number(String(age || '').trim());
-        const normalizedCity = String(city || '').trim();
-        const normalizedState = String(state || '').trim();
-        const normalizedCountry = String(country || '').trim();
-        const normalizedMaritalStatus = String(maritalStatus || '').trim();
-        const normalizedEmergencyContactName = String(emergencyContactName || '').trim();
-        const normalizedEmergencyContactPhone = String(emergencyContactPhone || '').trim();
-        const normalizedIdentificationType = String(identificationType || '').trim();
-        const normalizedIdentificationNumber = String(identificationNumber || '').trim();
-
-        // Validate patient registration fields if role is patient
-        if (role === 'patient') {
-          if (
-            !normalizedGender
-            || !Number.isFinite(normalizedAge)
-            || normalizedAge <= 0
-            || !normalizedCity
-            || !normalizedState
-            || !normalizedCountry
-            || !normalizedMaritalStatus
-            || !normalizedEmergencyContactName
-            || !normalizedEmergencyContactPhone
-            || !normalizedIdentificationType
-            || !normalizedIdentificationNumber
-          ) {
-            toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
-            setIsLoading(false);
-            return;
-          }
-          if (!consentAgreed) {
-            toast({ title: 'Consent required', description: 'Please agree to the patient consent to continue.' });
+        const cleanedLocalPhone = role === 'doctor' ? phoneLocalNumber.replace(/\D/g, '').replace(/^0+/, '') : '';
+        const normalizedPhone = role === 'doctor' ? `${selectedPhoneDialCode}${cleanedLocalPhone}` : '';
+        if (role === 'doctor') {
+          const phoneDigits = normalizedPhone.replace(/\D/g, '');
+          if (!cleanedLocalPhone || phoneDigits.length < 8) {
+            toast({ title: 'Phone number required', description: 'Please enter a valid phone number.' });
             setIsLoading(false);
             return;
           }
         }
-        // Validate doctor registration fields if role is doctor
+
+        // Validate doctor signup status
         if (role === 'doctor') {
           const doctorSignupStatus = await getDoctorSignupStatus();
           if (!doctorSignupStatus.open) {
@@ -769,62 +769,7 @@ export default function AuthPage() {
             setIsLoading(false);
             return;
           }
-
-          if (!gender || !age || !city || !state || !country || !maritalStatus || 
-              !hospitalAffiliation || !specialty || !doctorIdType || !doctorIdNumber || !doctorExperience) {
-            toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
-            setIsLoading(false);
-            return;
-          }
-          if (consultationLanguages.length === 0) {
-            toast({
-              title: t('auth.toast.consultationLanguagesRequiredTitle', 'Consultation languages required'),
-              description: t('auth.toast.consultationLanguagesRequiredDescription', 'Please select at least one consultation language.')
-            });
-            setIsLoading(false);
-            return;
-          }
-          if (specialty === 'others' && !otherSpecialty) {
-            toast({ title: 'Specialty required', description: 'Please specify your specialty.' });
-            setIsLoading(false);
-            return;
-          }
-
-          const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
-          const requiresSpecialistRate = !isGeneralPracticeSpecialty(resolvedSpecialty || '');
-          const isGpSpecialty = isGeneralPracticeSpecialty(resolvedSpecialty || '');
-          const parsedRate = parseConsultationRate(consultationRate);
-
-          if (requiresSpecialistRate && (!parsedRate || parsedRate < MIN_SPECIALIST_RATE_NGN)) {
-            toast({
-              title: 'Consultation rate required',
-              description: `Specialist consultation rate must be at least NGN ${MIN_SPECIALIST_RATE_NGN.toLocaleString()}.`,
-            });
-            setIsLoading(false);
-            return;
-          }
-
-          if (isGpSpecialty && (!parsedRate || parsedRate <= 0)) {
-            toast({
-              title: 'Consultation rate required',
-              description: 'General Practitioner consultation rate is required and must be greater than zero.',
-            });
-            setIsLoading(false);
-            return;
-          }
-
-          if (!doctorConsentAgreed) {
-            toast({ title: 'Consent required', description: 'Please agree to the doctor consent and revenue sharing terms.' });
-            setIsLoading(false);
-            return;
-          }
         }
-
-        const signupResolvedSpecialty = role === 'doctor' ? (specialty === 'others' ? otherSpecialty : specialty) : '';
-        const signupParsedRate = role === 'doctor' ? parseConsultationRate(consultationRate) : null;
-        const signupRatePerConsultation = role === 'doctor'
-          ? signupParsedRate
-          : null;
 
         // Sign up with Supabase using email - keep metadata minimal to debug 500 error
         const { data, error } = await supabase.auth.signUp({
@@ -833,39 +778,10 @@ export default function AuthPage() {
           options: {
             emailRedirectTo: `${window.location.origin}/auth?mode=login&verified=1`,
             data: {
-              full_name: normalizedFullName,
-              name: normalizedFullName,
+              full_name: role === 'doctor' ? normalizedFullName : undefined,
+              name: role === 'doctor' ? normalizedFullName : undefined,
               role,
-              phone_number: normalizedPhone,
-              gender: normalizedGender || undefined,
-              age: Number.isFinite(normalizedAge) ? String(Math.floor(normalizedAge)) : undefined,
-              city: normalizedCity || undefined,
-              state: normalizedState || undefined,
-              country: normalizedCountry || undefined,
-              marital_status: normalizedMaritalStatus || undefined,
-              emergency_contact_name: normalizedEmergencyContactName || undefined,
-              emergency_contact_phone: normalizedEmergencyContactPhone || undefined,
-              identification_type: role === 'doctor' ? (doctorIdType || 'nin') : (normalizedIdentificationType || undefined),
-              identification_number:
-                role === 'doctor'
-                  ? (doctorIdNumber || String(Date.now()))
-                  : (normalizedIdentificationNumber || undefined),
-              hospital_affiliation: role === 'doctor' ? (hospitalAffiliation || 'Pending update') : undefined,
-              specialty:
-                role === 'doctor'
-                  ? ((specialty === 'others' ? otherSpecialty : specialty) || 'general_practitioner')
-                  : undefined,
-              doctor_id_type: role === 'doctor' ? (doctorIdType || 'nin') : undefined,
-              doctor_id_number: role === 'doctor' ? (doctorIdNumber || String(Date.now())) : undefined,
-              doctor_experience: role === 'doctor' ? (doctorExperience || 'Pending update') : undefined,
-              rate_per_consultation:
-                role === 'doctor'
-                  ? (signupRatePerConsultation || undefined)
-                  : undefined,
-              preferred_consultation_languages:
-                role === 'doctor'
-                  ? (consultationLanguages.length ? consultationLanguages : ['english'])
-                  : undefined,
+              phone_number: role === 'doctor' ? normalizedPhone : undefined,
             },
           },
         });
@@ -925,46 +841,14 @@ export default function AuthPage() {
 
         const canWriteRegistrationImmediately = !!data.session;
 
-        // Immediately save doctor registration data only when a valid session exists.
+        // Immediately save doctor registration stub (email only) when session exists.
         if (role === 'doctor' && data.user?.id && canWriteRegistrationImmediately) {
           try {
-            const resolvedSpecialty = specialty === 'others' ? otherSpecialty : specialty;
-            const parsedRate = parseConsultationRate(consultationRate);
-            const { data: existingDoctorRegistration } = await supabase
-              .from('doctor_registrations')
-              .select('profile_picture_url, medical_license_url, experience')
-              .eq('user_id', data.user.id)
-              .maybeSingle();
-
-            const doctorPayload = {
-              user_id: data.user.id,
-              full_name: normalizedFullName,
-              gender,
-              age: parseInt(age),
-              phone_number: normalizedPhone,
-              email,
-              city,
-              state,
-              country,
-              marital_status: maritalStatus,
-              hospital_affiliation: hospitalAffiliation,
-              specialty: resolvedSpecialty,
-              preferred_consultation_languages: consultationLanguages,
-              experience: doctorExperience || existingDoctorRegistration?.experience || 'Pending update',
-              rate_per_consultation: parsedRate || null,
-              profile_picture_url: existingDoctorRegistration?.profile_picture_url || null,
-              medical_license_url: existingDoctorRegistration?.medical_license_url || '',
-              identification_type: doctorIdType,
-              identification_number: doctorIdNumber,
-              verification_status: 'pending'
-            };
-
-            await supabase
-              .from('doctor_registrations')
-              .upsert([doctorPayload], { onConflict: 'user_id' });
+            await supabase.from('doctor_registrations')
+              .upsert([{ user_id: data.user.id, email, verification_status: 'pending' }], { onConflict: 'user_id' });
             await createDefaultSchedule(data.user.id);
           } catch (err) {
-            console.error('Failed to save doctor registration:', err);
+            console.error('Failed to save doctor registration stub:', err);
           }
         }
 
@@ -973,31 +857,13 @@ export default function AuthPage() {
           try {
             const patientPayload = {
               user_id: data.user.id,
-              full_name: normalizedFullName,
-              gender: normalizedGender,
-              age: Math.floor(normalizedAge),
-              phone_number: normalizedPhone,
               email: normalizedEmail,
-              profile_picture_url: null,
-              city: normalizedCity,
-              state: normalizedState,
-              country: normalizedCountry,
-              marital_status: normalizedMaritalStatus,
-              emergency_contact_name: normalizedEmergencyContactName,
-              emergency_contact_phone: normalizedEmergencyContactPhone,
-              identification_type: normalizedIdentificationType,
-              identification_number: normalizedIdentificationNumber,
             };
-
-            // Direct upsert to avoid RPC complexity
             const { error: patientUpsertError } = await supabase
               .from('patient_registrations')
               .upsert([patientPayload], { onConflict: 'user_id' });
-
             if (patientUpsertError) {
               console.error('Patient upsert error on signup:', patientUpsertError);
-            } else {
-              console.log('Patient registration created/updated on signup for user:', data.user.id);
             }
           } catch (err) {
             console.error('Failed to upsert patient registration on signup:', err);
@@ -1007,28 +873,7 @@ export default function AuthPage() {
         // Store registration data for after verification
         const registrationData = {
           role,
-          name: normalizedFullName,
           email,
-          phoneNumber: normalizedPhone,
-          gender,
-          age,
-          city,
-          state,
-          country,
-          maritalStatus,
-          emergencyContactName,
-          emergencyContactPhone,
-          identificationType,
-          identificationNumber,
-          hospitalAffiliation,
-          specialty,
-          otherSpecialty,
-          consultationLanguages,
-          doctorExperience,
-          consultationRate,
-          doctorConsentAgreed,
-          doctorIdType,
-          doctorIdNumber,
           userId: data.user?.id
         };
         setPendingUserData(registrationData);
@@ -1276,13 +1121,13 @@ export default function AuthPage() {
                     onClick={() => {
                       void handleRoleSelection(r);
                     }}
-                    disabled={isCheckingDoctorSignup && r === 'doctor'}
+                    disabled={(isCheckingDoctorSignup && r === 'doctor') || (isCheckingPatientSignup && r === 'patient')}
                     className={cn(
                       'flex-1 p-4 rounded-xl border-2 transition-all duration-200',
                       role === r
                         ? 'border-primary bg-primary-light'
                         : 'border-border hover:border-primary/50',
-                      isCheckingDoctorSignup && r === 'doctor' ? 'opacity-60 cursor-not-allowed' : ''
+                      (isCheckingDoctorSignup && r === 'doctor') || (isCheckingPatientSignup && r === 'patient') ? 'opacity-60 cursor-not-allowed' : ''
                     )}
                   >
                     <p className="font-semibold capitalize">
@@ -1296,9 +1141,9 @@ export default function AuthPage() {
                   </button>
                 ))}
               </div>
-              {!!doctorSignupBlockedMessage && (
+              {!!activeSignupBlockedMessage && (
                 <p className="mt-3 text-sm text-destructive">
-                  {doctorSignupBlockedMessage}
+                  {activeSignupBlockedMessage}
                 </p>
               )}
             </div>
@@ -1379,24 +1224,6 @@ export default function AuthPage() {
               </div>
             ) : (
               <>
-                {mode === 'register' && (
-                  <div>
-                    <Label htmlFor="name">{t('common.fullName', 'Full Name')}</Label>
-                    <div className="relative mt-1.5">
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                      <Input
-                        id="name"
-                        type="text"
-                        placeholder={t('auth.fields.fullNamePlaceholder', 'Enter your full name')}
-                        className="pl-10 h-12"
-                        required
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-
                 <div>
                   <Label htmlFor="email">{mode === 'login' ? t('auth.fields.emailAddress', 'Email Address') : `${t('auth.fields.emailAddress', 'Email Address')} *`}</Label>
                   <div className="relative mt-1.5">
@@ -1407,43 +1234,12 @@ export default function AuthPage() {
                       placeholder={mode === 'login' ? t('auth.fields.emailPlaceholderLogin', 'Enter your email') : t('auth.fields.emailPlaceholderRegister', 'Enter your email address')}
                       className="pl-10 h-12"
                       required={mode !== 'login' || mode === 'login'}
+                      disabled={mode === 'register' && !!activeSignupBlockedMessage}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                     />
                   </div>
                 </div>
-
-                {mode !== 'login' && (
-                  <div>
-                    <Label htmlFor="phoneLocalNumber">{mode === 'register' ? `${t('auth.fields.phoneNumber', 'Phone Number')} *` : t('auth.fields.phoneNumber', 'Phone Number')}</Label>
-                    <div className="mt-1.5 grid grid-cols-[170px_1fr] gap-2">
-                      <Select value={phoneCountryIso} onValueChange={setPhoneCountryIso}>
-                        <SelectTrigger className="h-12">
-                          <SelectValue placeholder={t('auth.fields.countryCode', 'Code')} />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-80">
-                          {COUNTRY_PHONE_CODES.map((countryCode) => (
-                            <SelectItem key={countryCode.iso} value={countryCode.iso}>
-                              {`${countryCode.name} (${countryCode.dialCode})`}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <div className="relative">
-                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <Input
-                          id="phoneLocalNumber"
-                          type="tel"
-                          placeholder={t('auth.fields.phoneLocalPlaceholder', 'Enter phone number')}
-                          className="pl-10 h-12"
-                          required={mode === 'register'}
-                          value={phoneLocalNumber}
-                          onChange={(e) => setPhoneLocalNumber(e.target.value.replace(/[^\d]/g, ''))}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 <div>
                   <Label htmlFor="password">{t('auth.fields.password', 'Password')}</Label>
@@ -1455,6 +1251,7 @@ export default function AuthPage() {
                       placeholder={mode === 'register' ? t('auth.fields.passwordPlaceholderRegister', 'Create a password') : t('auth.fields.passwordPlaceholderLogin', 'Enter your password')}
                       className="pl-10 pr-10 h-12"
                       required
+                      disabled={mode === 'register' && !!activeSignupBlockedMessage}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                     />
@@ -1468,460 +1265,6 @@ export default function AuthPage() {
                   </div>
                 </div>
 
-                {/* Patient Registration Fields */}
-                {mode === 'register' && role === 'patient' && (
-                  <div className="space-y-4 pt-4 border-t border-border">
-                    <h3 className="text-lg font-semibold">{t('auth.sections.patientInfo', 'Patient Information')}</h3>
-                    
-                    {/* Gender & Age */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <Label>{t('auth.fields.gender', 'Gender')} *</Label>
-                        <Select value={gender} onValueChange={setGender}>
-                          <SelectTrigger className="h-12">
-                            <SelectValue placeholder={t('auth.fields.selectGender', 'Select gender')} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="male">{t('auth.values.gender.male', 'Male')}</SelectItem>
-                            <SelectItem value="female">{t('auth.values.gender.female', 'Female')}</SelectItem>
-                            <SelectItem value="other">{t('auth.values.gender.other', 'Other')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <input
-                          className="sr-only"
-                          tabIndex={-1}
-                          aria-hidden="true"
-                          value={gender}
-                          onChange={() => {}}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="age">{t('common.age', 'Age')} *</Label>
-                        <Input
-                          id="age"
-                          type="number"
-                          placeholder={t('common.age', 'Age')}
-                          className="h-12"
-                          min={1}
-                          required
-                          value={age}
-                          onChange={(e) => setAge(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Location */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <Label htmlFor="city">{t('auth.fields.city', 'City')} *</Label>
-                        <Input
-                          id="city"
-                          placeholder={t('auth.fields.city', 'City')}
-                          className="h-12"
-                          required
-                          value={city}
-                          onChange={(e) => setCity(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="state">{t('auth.fields.state', 'State')} *</Label>
-                        <Input
-                          id="state"
-                          placeholder={t('auth.fields.state', 'State')}
-                          className="h-12"
-                          required
-                          value={state}
-                          onChange={(e) => setState(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="country">{t('auth.fields.country', 'Country')} *</Label>
-                        <Input
-                          id="country"
-                          placeholder={t('auth.fields.country', 'Country')}
-                          className="h-12"
-                          required
-                          value={country}
-                          onChange={(e) => setCountry(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Marital Status */}
-                    <div>
-                      <Label>{t('auth.fields.maritalStatus', 'Marital Status')} *</Label>
-                      <Select value={maritalStatus} onValueChange={setMaritalStatus}>
-                        <SelectTrigger className="h-12">
-                          <SelectValue placeholder={t('auth.fields.selectMaritalStatus', 'Select marital status')} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="single">{t('auth.values.marital.single', 'Single')}</SelectItem>
-                          <SelectItem value="married">{t('auth.values.marital.married', 'Married')}</SelectItem>
-                          <SelectItem value="divorced">{t('auth.values.marital.divorced', 'Divorced')}</SelectItem>
-                          <SelectItem value="widowed">{t('auth.values.marital.widowed', 'Widowed')}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <input
-                        className="sr-only"
-                        tabIndex={-1}
-                        aria-hidden="true"
-                        value={maritalStatus}
-                        onChange={() => {}}
-                        required
-                      />
-                    </div>
-
-                    {/* Emergency Contact */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <Label htmlFor="emergencyContactName">{t('auth.fields.emergencyContactName', 'Emergency Contact Name')} *</Label>
-                        <Input
-                          id="emergencyContactName"
-                          placeholder={t('auth.fields.contactName', 'Contact name')}
-                          className="h-12"
-                          required
-                          value={emergencyContactName}
-                          onChange={(e) => setEmergencyContactName(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="emergencyContactPhone">{t('auth.fields.emergencyContactPhone', 'Emergency Contact Phone')} *</Label>
-                        <Input
-                          id="emergencyContactPhone"
-                          type="tel"
-                          placeholder={t('auth.fields.contactPhone', 'Contact phone')}
-                          className="h-12"
-                          required
-                          value={emergencyContactPhone}
-                          onChange={(e) => setEmergencyContactPhone(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Identification */}
-                    <div className="space-y-4">
-                      <div>
-                        <Label>{t('auth.fields.identificationType', 'Identification Type')} *</Label>
-                        <Select value={identificationType} onValueChange={setIdentificationType}>
-                          <SelectTrigger className="h-12">
-                            <SelectValue placeholder={t('auth.fields.selectIdType', 'Select ID type')} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="nin">{t('auth.values.id.nin', 'National Identification Number (NIN)')}</SelectItem>
-                            <SelectItem value="student_id">{t('auth.values.id.studentId', 'Student ID Card')}</SelectItem>
-                            <SelectItem value="passport">{t('auth.values.id.passport', 'International Passport')}</SelectItem>
-                            <SelectItem value="drivers_license">{t('auth.values.id.driversLicense', "National Driver's License")}</SelectItem>
-                            <SelectItem value="voters_card">{t('auth.values.id.votersCard', "Voter's Card")}</SelectItem>
-                            <SelectItem value="hospital_id">{t('auth.values.id.hospitalCard', 'Hospital / HMO ID Card')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <input
-                          className="sr-only"
-                          tabIndex={-1}
-                          aria-hidden="true"
-                          value={identificationType}
-                          onChange={() => {}}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="identificationNumber">{t('auth.fields.identificationNumber', 'Identification Number')} *</Label>
-                        <Input
-                          id="identificationNumber"
-                          placeholder={t('auth.fields.idNumberPlaceholder', 'Enter ID number')}
-                          className="h-12"
-                          required
-                          value={identificationNumber}
-                          onChange={(e) => setIdentificationNumber(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Patient Consent */}
-                    <div className="p-4 border border-border rounded-lg bg-muted/30">
-                      <label className="flex items-start gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={consentAgreed}
-                          onChange={(e) => setConsentAgreed(e.target.checked)}
-                          className="mt-1 rounded border-border"
-                          required
-                        />
-                        <span className="text-sm">
-                          <strong>{t('auth.consent.patientTitle', 'Patient Consent:')}</strong>{' '}
-                          {t(
-                            'auth.consent.patientBody',
-                            "I agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions."
-                          )}
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                {/* Doctor Registration Fields */}
-                {mode === 'register' && role === 'doctor' && (
-                  <div className="space-y-4 pt-4 border-t border-border">
-                    <h3 className="text-lg font-semibold">{t('auth.sections.doctorInfo', 'Doctor Information')}</h3>
-
-                    {/* Gender & Age */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <Label>{t('auth.fields.gender', 'Gender')} *</Label>
-                        <Select value={gender} onValueChange={setGender}>
-                          <SelectTrigger className="h-12">
-                            <SelectValue placeholder={t('auth.fields.selectGender', 'Select gender')} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="male">{t('auth.values.gender.male', 'Male')}</SelectItem>
-                            <SelectItem value="female">{t('auth.values.gender.female', 'Female')}</SelectItem>
-                            <SelectItem value="other">{t('auth.values.gender.other', 'Other')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label htmlFor="age">{t('common.age', 'Age')} *</Label>
-                        <Input
-                          id="age"
-                          type="number"
-                          placeholder={t('common.age', 'Age')}
-                          className="h-12"
-                          required
-                          value={age}
-                          onChange={(e) => setAge(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Location */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <Label htmlFor="city">{t('auth.fields.city', 'City')} *</Label>
-                        <Input
-                          id="city"
-                          placeholder={t('auth.fields.city', 'City')}
-                          className="h-12"
-                          required
-                          value={city}
-                          onChange={(e) => setCity(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="state">{t('auth.fields.state', 'State')} *</Label>
-                        <Input
-                          id="state"
-                          placeholder={t('auth.fields.state', 'State')}
-                          className="h-12"
-                          required
-                          value={state}
-                          onChange={(e) => setState(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="country">{t('auth.fields.country', 'Country')} *</Label>
-                        <Input
-                          id="country"
-                          placeholder={t('auth.fields.country', 'Country')}
-                          className="h-12"
-                          required
-                          value={country}
-                          onChange={(e) => setCountry(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Marital Status */}
-                    <div>
-                      <Label>{t('auth.fields.maritalStatus', 'Marital Status')} *</Label>
-                      <Select value={maritalStatus} onValueChange={setMaritalStatus}>
-                        <SelectTrigger className="h-12">
-                          <SelectValue placeholder={t('auth.fields.selectMaritalStatus', 'Select marital status')} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="single">{t('auth.values.marital.single', 'Single')}</SelectItem>
-                          <SelectItem value="married">{t('auth.values.marital.married', 'Married')}</SelectItem>
-                          <SelectItem value="divorced">{t('auth.values.marital.divorced', 'Divorced')}</SelectItem>
-                          <SelectItem value="widowed">{t('auth.values.marital.widowed', 'Widowed')}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Hospital Affiliation */}
-                    <div>
-                      <Label htmlFor="hospitalAffiliation">{t('auth.fields.hospitalAffiliations', 'Hospital Affiliation(s)')} *</Label>
-                      <Input
-                        id="hospitalAffiliation"
-                        placeholder={t('auth.fields.hospitalAffiliationsPlaceholder', 'Enter hospital affiliations')}
-                        className="h-12"
-                        required
-                        value={hospitalAffiliation}
-                        onChange={(e) => setHospitalAffiliation(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Specialty */}
-                    <div>
-                      <Label>{t('common.specialty', 'Specialty')} *</Label>
-                      <Select value={specialty} onValueChange={setSpecialty}>
-                        <SelectTrigger className="h-12">
-                          <SelectValue placeholder={t('auth.fields.selectSpecialty', 'Select your specialty')} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="general_practitioner">{t('auth.values.specialty.general_practitioner', 'General Practitioner')}</SelectItem>
-                          <SelectItem value="pediatrics">{t('auth.values.specialty.pediatrics', 'Pediatrics')}</SelectItem>
-                          <SelectItem value="obstetrics_gynecology">{t('auth.values.specialty.obstetrics_gynecology', 'Obstetrics & Gynecology')}</SelectItem>
-                          <SelectItem value="psychiatry">{t('auth.values.specialty.psychiatry', 'Psychiatry / Mental Health')}</SelectItem>
-                          <SelectItem value="dermatology">{t('auth.values.specialty.dermatology', 'Dermatology')}</SelectItem>
-                          <SelectItem value="endocrinology">{t('auth.values.specialty.endocrinology', 'Endocrinology')}</SelectItem>
-                          <SelectItem value="rheumatology">{t('auth.values.specialty.rheumatology', 'Rheumatology')}</SelectItem>
-                          <SelectItem value="cardiology">{t('auth.values.specialty.cardiology', 'Cardiology')}</SelectItem>
-                          <SelectItem value="oncology">{t('auth.values.specialty.oncology', 'Oncology')}</SelectItem>
-                          <SelectItem value="infectious_diseases">{t('auth.values.specialty.infectious_diseases', 'Infectious Diseases')}</SelectItem>
-                          <SelectItem value="family_medicine">{t('auth.values.specialty.family_medicine', 'Family Medicine')}</SelectItem>
-                          <SelectItem value="urology">{t('auth.values.specialty.urology', 'Urology')}</SelectItem>
-                          <SelectItem value="orthopedics">{t('auth.values.specialty.orthopedics', 'Orthopedics')}</SelectItem>
-                          <SelectItem value="ent">{t('auth.values.specialty.ent', 'ENT (Ear, Nose & Throat)')}</SelectItem>
-                          <SelectItem value="ophthalmology">{t('auth.values.specialty.ophthalmology', 'Ophthalmology')}</SelectItem>
-                          <SelectItem value="neurology">{t('auth.values.specialty.neurology', 'Neurology')}</SelectItem>
-                          <SelectItem value="radiology">{t('auth.values.specialty.radiology', 'Radiology')}</SelectItem>
-                          <SelectItem value="others">{t('auth.values.specialty.others', 'Others (Please specify)')}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Other Specialty */}
-                    {specialty === 'others' && (
-                      <div>
-                        <Label htmlFor="otherSpecialty">{t('auth.fields.specifySpecialty', 'Please specify your specialty')} *</Label>
-                        <Input
-                          id="otherSpecialty"
-                          placeholder={t('auth.fields.specialtyPlaceholder', 'Enter your specialty')}
-                          className="h-12"
-                          required
-                          value={otherSpecialty}
-                          onChange={(e) => setOtherSpecialty(e.target.value)}
-                        />
-                      </div>
-                    )}
-
-                    {/* Consultation Rate (shown directly under specialty selection) */}
-                    {(specialistRequiresRate || generalPractitionerSelected) && (
-                      <div className="space-y-2">
-                        <Label htmlFor="consultationRate">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')} *</Label>
-                        <Input
-                          id="consultationRate"
-                          type="text"
-                          inputMode="decimal"
-                          placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
-                          className="h-12"
-                          required
-                          value={consultationRate}
-                          onChange={(e) => setConsultationRate(e.target.value.replace(/[^0-9.,]/g, ''))}
-                        />
-                        {specialistRequiresRate ? (
-                          <p className="text-xs text-muted-foreground">
-                            Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
-                            Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
-                            {parsedConsultationRate && (
-                              <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
-                            )}
-                          </p>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Revenue sharing: You receive 60% and MyE-Doctor receives 40%.
-                            {parsedConsultationRate && (
-                              <> You keep {formatCurrency(parsedConsultationRate * 0.6)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4)}.</>
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Experience */}
-                    <div>
-                      <Label htmlFor="doctorExperience">{t('auth.fields.yearsOfExperience', 'Years of Experience')} *</Label>
-                      <Input
-                        id="doctorExperience"
-                        type="number"
-                        min="0"
-                        placeholder={t('auth.fields.yearsExample', 'e.g. 7')}
-                        className="h-12"
-                        required
-                        value={doctorExperience}
-                        onChange={(e) => setDoctorExperience(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Consultation Languages */}
-                    <div className="space-y-2">
-                      <Label>{t('auth.fields.consultationLanguages', 'Preferred Consultation Languages')} *</Label>
-                      <p className="text-xs text-muted-foreground">
-                        {t('auth.fields.consultationLanguagesHint', 'Select all languages you can use to consult patients.')}
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-lg border border-border p-3 max-h-56 overflow-y-auto">
-                        {consultationLanguageOptions.map((language) => (
-                          <label key={language.value} className="flex items-center gap-2 text-sm cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={consultationLanguages.includes(language.value)}
-                              onChange={() => toggleConsultationLanguage(language.value)}
-                              className="rounded border-border"
-                            />
-                            <span>{language.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Identification */}
-                    <div className="space-y-4">
-                      <div>
-                        <Label>{t('auth.fields.meansOfIdentification', 'Means of Identification')} *</Label>
-                        <Select value={doctorIdType} onValueChange={setDoctorIdType}>
-                          <SelectTrigger className="h-12">
-                            <SelectValue placeholder={t('auth.fields.selectIdType', 'Select ID type')} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="nin">{t('auth.values.id.nin', 'National Identification Number (NIN)')}</SelectItem>
-                            <SelectItem value="passport">{t('auth.values.id.passport', 'International Passport')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label htmlFor="doctorIdNumber">{t('auth.fields.identificationNumber', 'Identification Number')} *</Label>
-                        <Input
-                          id="doctorIdNumber"
-                          placeholder={t('auth.fields.idNumberPlaceholder', 'Enter ID number')}
-                          className="h-12"
-                          required
-                          value={doctorIdNumber}
-                          onChange={(e) => setDoctorIdNumber(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Doctor Consent */}
-                    <div className="p-4 border border-border rounded-lg bg-muted/30">
-                      <label className="flex items-start gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={doctorConsentAgreed}
-                          onChange={(e) => setDoctorConsentAgreed(e.target.checked)}
-                          className="mt-1 rounded border-border"
-                          required
-                        />
-                        <span className="text-sm">
-                          <strong>{t('auth.consent.doctorTitle', 'Doctor Consent & Agreement:')}</strong>{' '}
-                          {t(
-                            'auth.consent.doctorBody',
-                            "I agree to provide virtual medical consultations through My E-Doctor in accordance with applicable laws and professional standards. I commit to maintaining patient confidentiality and securely handling all health information. I acknowledge the limitations of telemedicine and will exercise appropriate clinical judgment while delivering care through this platform. I further confirm that I have read, understood, and agree to MyE-Doctor's Terms and Conditions."
-                          )}
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                )}
               </>
             )}
 
