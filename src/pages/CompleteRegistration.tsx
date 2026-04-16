@@ -54,6 +54,16 @@ type PatientRow = {
 
 const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
 
+const isPlaceholderValue = (value: string | null | undefined, placeholders: string[]) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return true;
+  return placeholders.some((placeholder) => normalized === placeholder);
+};
+
+const sanitizePatientTextPrefill = (value: string | null | undefined, placeholders: string[]) => (
+  isPlaceholderValue(value, placeholders) ? '' : String(value || '').trim()
+);
+
 export default function CompleteRegistration() {
   const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
@@ -125,18 +135,32 @@ export default function CompleteRegistration() {
       // Pre-fill patient fields from existing row or metadata
       if (metadataRole === 'patient') {
         const p = patientData as PatientRow | null;
-        setFullName(p?.full_name || '');
-        setPhoneNumber(p?.phone_number || '');
-        setGender(p?.gender || '');
-        setAge(p?.age ? String(p.age) : '');
-        setCity(p?.city || '');
-        setPatientState(p?.state || '');
-        setCountry(p?.country || '');
-        setMaritalStatus(p?.marital_status || '');
-        setEmergencyContactName(p?.emergency_contact_name || '');
-        setEmergencyContactPhone(p?.emergency_contact_phone || '');
-        setIdentificationType(p?.identification_type || '');
-        setIdentificationNumber(p?.identification_number || '');
+        const safeFullName = sanitizePatientTextPrefill(p?.full_name, ['user']);
+        const safePhoneNumber = sanitizePatientTextPrefill(p?.phone_number, ['n/a', 'na']);
+        const safeGender = sanitizePatientTextPrefill(p?.gender, []);
+        const safeAge = Number(p?.age || 0) === 18 ? '' : (p?.age ? String(p.age) : '');
+        const safeCity = sanitizePatientTextPrefill(p?.city, ['unknown']);
+        const safeState = sanitizePatientTextPrefill(p?.state, ['unknown']);
+        const safeCountry = sanitizePatientTextPrefill(p?.country, ['unknown']);
+        const safeMaritalStatus = sanitizePatientTextPrefill(p?.marital_status, []);
+        const safeEmergencyContactName = sanitizePatientTextPrefill(p?.emergency_contact_name, ['not provided', 'not-provided']);
+        const safeEmergencyContactPhone = sanitizePatientTextPrefill(p?.emergency_contact_phone, ['n/a', 'na']);
+        const safeIdentificationType = sanitizePatientTextPrefill(p?.identification_type, []);
+        const safeIdentificationNumberRaw = sanitizePatientTextPrefill(p?.identification_number, []);
+        const safeIdentificationNumber = safeIdentificationNumberRaw === user.id ? '' : safeIdentificationNumberRaw;
+
+        setFullName(safeFullName);
+        setPhoneNumber(safePhoneNumber);
+        setGender(safeGender);
+        setAge(safeAge);
+        setCity(safeCity);
+        setPatientState(safeState);
+        setCountry(safeCountry);
+        setMaritalStatus(safeMaritalStatus);
+        setEmergencyContactName(safeEmergencyContactName);
+        setEmergencyContactPhone(safeEmergencyContactPhone);
+        setIdentificationType(safeIdentificationType);
+        setIdentificationNumber(safeIdentificationNumber);
       }
 
       setLoading(false);
