@@ -502,18 +502,27 @@ export default function AuthPage() {
 
   const ensurePatientRegistrationFallback = async (user: any) => {
     if (!user?.id) return;
+
+    const { data: existingPatient } = await supabase
+      .from('patient_registrations')
+      .select('id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (existingPatient?.id) return;
+
     const fullName = getMetadataFullName(user);
     const gender = getMetadataString(user, 'gender', 'other');
     const age = getMetadataInt(user, 'age', 18);
-    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'N/A');
-    const city = getMetadataString(user, 'city', 'Unknown');
-    const state = getMetadataString(user, 'state', 'Unknown');
-    const country = getMetadataString(user, 'country', 'Unknown');
+    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'not provided');
+    const city = getMetadataString(user, 'city', 'not provided');
+    const state = getMetadataString(user, 'state', 'not provided');
+    const country = getMetadataString(user, 'country', 'not provided');
     const maritalStatus = getMetadataString(user, 'marital_status', 'single');
-    const emergencyContactName = getMetadataString(user, 'emergency_contact_name', 'Not Provided');
+    const emergencyContactName = getMetadataString(user, 'emergency_contact_name', 'not provided');
     const emergencyContactPhone = getMetadataString(user, 'emergency_contact_phone', phoneNumber);
     const identificationType = getMetadataString(user, 'identification_type', 'hospital_id');
-    const identificationNumber = getMetadataString(user, 'identification_number', String(user.id));
+    const identificationNumber = getMetadataString(user, 'identification_number', user.id);
     const { error } = await supabase
       .from('patient_registrations')
       .upsert(
@@ -554,14 +563,14 @@ export default function AuthPage() {
     const fullName = getMetadataFullName(user);
     const gender = getMetadataString(user, 'gender', 'other');
     const age = getMetadataInt(user, 'age', 18);
-    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'N/A');
-    const city = getMetadataString(user, 'city', 'Unknown');
-    const state = getMetadataString(user, 'state', 'Unknown');
-    const country = getMetadataString(user, 'country', 'Unknown');
+    const phoneNumber = getMetadataString(user, 'phone_number', user.phone || 'not provided');
+    const city = getMetadataString(user, 'city', 'not provided');
+    const state = getMetadataString(user, 'state', 'not provided');
+    const country = getMetadataString(user, 'country', 'not provided');
     const maritalStatus = getMetadataString(user, 'marital_status', 'single');
-    const hospitalAffiliation = getMetadataString(user, 'hospital_affiliation', 'Pending update');
+    const hospitalAffiliation = getMetadataString(user, 'hospital_affiliation', 'not provided');
     const specialty = getMetadataString(user, 'specialty', 'general_practitioner');
-    const experience = getMetadataString(user, 'doctor_experience', 'Pending update');
+    const experience = getMetadataString(user, 'doctor_experience', 'not provided');
     const doctorIdType = getMetadataString(user, 'doctor_id_type', 'nin');
     const doctorIdNumber = getMetadataString(user, 'doctor_id_number', String(user.id).slice(0, 16));
     const metadataRateRaw = getMetadataString(user, 'rate_per_consultation', '');
