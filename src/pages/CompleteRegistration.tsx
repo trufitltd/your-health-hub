@@ -114,19 +114,16 @@ const DOCTOR_SPECIALTY_NORMALIZED_MAP = new Map(
   DOCTOR_SPECIALTY_OPTIONS.map((specialty) => [normalizeSpecialtyValue(specialty), specialty] as const)
 );
 
-const isPlaceholderValue = (value: string | null | undefined, placeholders: string[]) => {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return true;
-  return placeholders.some((placeholder) => normalized === placeholder);
+const clearPlaceholder = (value: string | null | undefined) => {
+  const v = String(value || '').trim();
+  const lowerV = v.toLowerCase();
+  const placeholders = [
+    'unknown', 'not provided', 'not-provided', 'n/a', 'na', 
+    'pending update', '(pending update)', 'user', 'other', 
+    'single', 'hospital_id', 'nin'
+  ];
+  return placeholders.includes(lowerV) ? '' : v;
 };
-
-const sanitizePatientTextPrefill = (value: string | null | undefined, placeholders: string[]) => (
-  isPlaceholderValue(value, placeholders) ? '' : String(value || '').trim()
-);
-
-const sanitizeDoctorTextPrefill = (value: string | null | undefined, placeholders: string[]) => (
-  isPlaceholderValue(value, placeholders) ? '' : String(value || '').trim()
-);
 
 export default function CompleteRegistration() {
   const { user, isLoading: authLoading } = useAuth();
@@ -217,18 +214,18 @@ export default function CompleteRegistration() {
       // Pre-fill patient fields from existing row or metadata
       if (metadataRole === 'patient') {
         const p = patientData as PatientRow | null;
-        const safeFullName = sanitizePatientTextPrefill(p?.full_name, ['user']);
-        const safePhoneNumber = sanitizePatientTextPrefill(p?.phone_number, ['n/a', 'na']);
-        const safeGender = sanitizePatientTextPrefill(p?.gender, []);
+        const safeFullName = clearPlaceholder(p?.full_name);
+        const safePhoneNumber = clearPlaceholder(p?.phone_number);
+        const safeGender = clearPlaceholder(p?.gender);
         const safeAge = Number(p?.age || 0) === 18 ? '' : (p?.age ? String(p.age) : '');
-        const safeCity = sanitizePatientTextPrefill(p?.city, ['unknown']);
-        const safeState = sanitizePatientTextPrefill(p?.state, ['unknown']);
-        const safeCountry = sanitizePatientTextPrefill(p?.country, ['unknown']);
-        const safeMaritalStatus = sanitizePatientTextPrefill(p?.marital_status, []);
-        const safeEmergencyContactName = sanitizePatientTextPrefill(p?.emergency_contact_name, ['not provided', 'not-provided']);
-        const safeEmergencyContactPhone = sanitizePatientTextPrefill(p?.emergency_contact_phone, ['n/a', 'na']);
-        const safeIdentificationType = sanitizePatientTextPrefill(p?.identification_type, []);
-        const safeIdentificationNumberRaw = sanitizePatientTextPrefill(p?.identification_number, []);
+        const safeCity = clearPlaceholder(p?.city);
+        const safeState = clearPlaceholder(p?.state);
+        const safeCountry = clearPlaceholder(p?.country);
+        const safeMaritalStatus = clearPlaceholder(p?.marital_status);
+        const safeEmergencyContactName = clearPlaceholder(p?.emergency_contact_name);
+        const safeEmergencyContactPhone = clearPlaceholder(p?.emergency_contact_phone);
+        const safeIdentificationType = clearPlaceholder(p?.identification_type);
+        const safeIdentificationNumberRaw = clearPlaceholder(p?.identification_number);
         const safeIdentificationNumber = safeIdentificationNumberRaw === user.id ? '' : safeIdentificationNumberRaw;
 
         setFullName(safeFullName);
@@ -246,25 +243,25 @@ export default function CompleteRegistration() {
       }
       if (metadataRole === 'doctor') {
         const d = doctorData as DoctorRow | null;
-        const safeFullName = sanitizeDoctorTextPrefill(d?.full_name, ['user']);
-        const safePhoneNumber = sanitizeDoctorTextPrefill(d?.phone_number, ['n/a', 'na']);
-        const safeGender = sanitizeDoctorTextPrefill(d?.gender, []);
+        const safeFullName = clearPlaceholder(d?.full_name);
+        const safePhoneNumber = clearPlaceholder(d?.phone_number);
+        const safeGender = clearPlaceholder(d?.gender);
         const safeAge = Number(d?.age || 0) === 18 ? '' : (d?.age ? String(d.age) : '');
-        const safeCity = sanitizeDoctorTextPrefill(d?.city, ['unknown']);
-        const safeState = sanitizeDoctorTextPrefill(d?.state, ['unknown']);
-        const safeCountry = sanitizeDoctorTextPrefill(d?.country, ['unknown']);
-        const safeMaritalStatus = sanitizeDoctorTextPrefill(d?.marital_status, ['unknown', 'not provided', 'not-provided']);
-        const safeHospitalAffiliation = sanitizeDoctorTextPrefill(d?.hospital_affiliation, ['unknown', 'not provided', 'not-provided', 'n/a', 'na', 'pending update', '(pending update)']);
-        const safeSpecialty = sanitizeDoctorTextPrefill(d?.specialty, ['unknown', 'n/a', 'na']);
+        const safeCity = clearPlaceholder(d?.city);
+        const safeState = clearPlaceholder(d?.state);
+        const safeCountry = clearPlaceholder(d?.country);
+        const safeMaritalStatus = clearPlaceholder(d?.marital_status);
+        const safeHospitalAffiliation = clearPlaceholder(d?.hospital_affiliation);
+        const safeSpecialty = clearPlaceholder(d?.specialty);
         const safeRate = d?.rate_per_consultation && Number(d.rate_per_consultation) !== 5000 ? String(d.rate_per_consultation) : '';
-        const safeExperience = sanitizeDoctorTextPrefill(d?.experience, ['unknown', 'n/a', 'na', 'pending update', '(pending update)']);
+        const safeExperience = clearPlaceholder(d?.experience);
         const safeConsultationLanguages = Array.isArray(d?.preferred_consultation_languages)
           ? d.preferred_consultation_languages
             .map((lang) => String(lang || '').trim().toLowerCase())
             .filter((lang) => CONSULTATION_LANGUAGE_OPTIONS.some((option) => option.value === lang))
           : [];
-        const safeIdentificationType = sanitizeDoctorTextPrefill(d?.identification_type, ['unknown']);
-        const safeIdentificationNumberRaw = sanitizeDoctorTextPrefill(d?.identification_number, []);
+        const safeIdentificationType = clearPlaceholder(d?.identification_type);
+        const safeIdentificationNumberRaw = clearPlaceholder(d?.identification_number);
         const safeIdentificationNumber = (
           safeIdentificationNumberRaw === user.id
           || (safeIdentificationNumberRaw.length >= 8 && user.id.startsWith(safeIdentificationNumberRaw))

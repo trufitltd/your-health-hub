@@ -27,6 +27,17 @@ interface PatientRegistrationData {
   identificationNumber: string;
 }
 
+const clearPlaceholder = (value: string | null | undefined) => {
+  const v = String(value || '').trim();
+  const lowerV = v.toLowerCase();
+  const placeholders = [
+    'unknown', 'not provided', 'not-provided', 'n/a', 'na', 
+    'pending update', '(pending update)', 'user', 'other', 
+    'single', 'hospital_id', 'nin'
+  ];
+  return placeholders.includes(lowerV) ? '' : v;
+};
+
 export const PatientRegistration: React.FC = () => {
   const { data: existingRegistration, isLoading } = usePatientRegistration();
   const queryClient = useQueryClient();
@@ -55,19 +66,19 @@ export const PatientRegistration: React.FC = () => {
       if (existingRegistration) {
         // Load existing registration data
         setFormData({
-          fullName: existingRegistration.full_name,
-          gender: existingRegistration.gender,
-          age: existingRegistration.age,
-          phoneNumber: existingRegistration.phone_number,
+          fullName: clearPlaceholder(existingRegistration.full_name),
+          gender: clearPlaceholder(existingRegistration.gender),
+          age: existingRegistration.age === 18 ? 0 : existingRegistration.age,
+          phoneNumber: clearPlaceholder(existingRegistration.phone_number),
           email: existingRegistration.email || '',
-          city: existingRegistration.city,
-          state: existingRegistration.state,
-          country: existingRegistration.country,
-          maritalStatus: existingRegistration.marital_status,
-          emergencyContactName: existingRegistration.emergency_contact_name,
-          emergencyContactPhone: existingRegistration.emergency_contact_phone,
-          identificationType: existingRegistration.identification_type,
-          identificationNumber: existingRegistration.identification_number
+          city: clearPlaceholder(existingRegistration.city),
+          state: clearPlaceholder(existingRegistration.state),
+          country: clearPlaceholder(existingRegistration.country),
+          maritalStatus: clearPlaceholder(existingRegistration.marital_status),
+          emergencyContactName: clearPlaceholder(existingRegistration.emergency_contact_name),
+          emergencyContactPhone: clearPlaceholder(existingRegistration.emergency_contact_phone),
+          identificationType: clearPlaceholder(existingRegistration.identification_type),
+          identificationNumber: existingRegistration.identification_number === user.id ? '' : clearPlaceholder(existingRegistration.identification_number)
         });
       } else if (user?.user_metadata?.full_name) {
         // Load from user metadata if no registration exists

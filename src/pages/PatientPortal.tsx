@@ -100,6 +100,17 @@ const createWithdrawalIdempotencyKey = () => {
   return `wallet-withdrawal:${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 };
 
+const clearPlaceholder = (value: string | null | undefined) => {
+  const v = String(value || '').trim();
+  const lowerV = v.toLowerCase();
+  const placeholders = [
+    'unknown', 'not provided', 'not-provided', 'n/a', 'na', 
+    'pending update', '(pending update)', 'user', 'other', 
+    'single', 'hospital_id', 'nin'
+  ];
+  return placeholders.includes(lowerV) ? '' : v;
+};
+
 const APPOINTMENT_STATUS_CALENDAR_STYLES = {
   pending_payment: {
     dot: '#d97706',
@@ -499,20 +510,20 @@ const PatientPortal = () => {
   useEffect(() => {
     if (patientRegistration) {
       setProfileFormData({
-        fullName: patientRegistration.full_name || '',
+        fullName: clearPlaceholder(patientRegistration.full_name),
         email: patientRegistration.email || '',
-        phone: patientRegistration.phone_number || '',
-        age: patientRegistration.age?.toString() || '',
-        city: patientRegistration.city || '',
-        state: patientRegistration.state || '',
-        country: patientRegistration.country || '',
-        bloodType: patientRegistration.blood_type || '',
+        phone: clearPlaceholder(patientRegistration.phone_number),
+        age: patientRegistration.age === 18 ? '' : (patientRegistration.age?.toString() || ''),
+        city: clearPlaceholder(patientRegistration.city),
+        state: clearPlaceholder(patientRegistration.state),
+        country: clearPlaceholder(patientRegistration.country),
+        bloodType: clearPlaceholder(patientRegistration.blood_type),
         preferredLanguage: isSupportedAppLanguage((patientRegistration as { preferred_language?: unknown })?.preferred_language)
           ? ((patientRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
           : language,
       });
     }
-  }, [patientRegistration]);
+  }, [patientRegistration, language]);
   const navigate = useNavigate();
   const contactThreadReadStorageKey = user?.id ? `patient-contact-thread-read-${user.id}` : null;
 
@@ -5070,7 +5081,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                           <Input 
-                            value={profileFormData.fullName || patientRegistration?.full_name || ''}
+                            value={profileFormData.fullName}
                             onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
                             className="mt-1" 
                           />
@@ -5078,7 +5089,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                           <Input 
-                            value={profileFormData.email || patientRegistration?.email || ''}
+                            value={profileFormData.email}
                             onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
                             className="mt-1" 
                           />
@@ -5086,7 +5097,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                           <Input 
-                            value={profileFormData.phone || patientRegistration?.phone_number || ''}
+                            value={profileFormData.phone}
                             onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
                             className="mt-1" 
                           />
@@ -5095,7 +5106,7 @@ const PatientPortal = () => {
                           <label className="text-sm font-medium">{t('common.age', 'Age')}</label>
                           <Input 
                             type="number"
-                            value={profileFormData.age || patientRegistration?.age?.toString() || ''}
+                            value={profileFormData.age}
                             onChange={(e) => setProfileFormData({...profileFormData, age: e.target.value})}
                             className="mt-1" 
                           />
@@ -5103,7 +5114,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('auth.fields.city', 'City')}</label>
                           <Input
-                            value={profileFormData.city || patientRegistration?.city || ''}
+                            value={profileFormData.city}
                             onChange={(e) => setProfileFormData({...profileFormData, city: e.target.value})}
                             className="mt-1"
                           />
@@ -5111,7 +5122,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('auth.fields.state', 'State')}</label>
                           <Input
-                            value={profileFormData.state || patientRegistration?.state || ''}
+                            value={profileFormData.state}
                             onChange={(e) => setProfileFormData({...profileFormData, state: e.target.value})}
                             className="mt-1"
                           />
@@ -5119,7 +5130,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('auth.fields.country', 'Country')}</label>
                           <Input
-                            value={profileFormData.country || patientRegistration?.country || ''}
+                            value={profileFormData.country}
                             onChange={(e) => setProfileFormData({...profileFormData, country: e.target.value})}
                             className="mt-1"
                           />
@@ -5127,7 +5138,7 @@ const PatientPortal = () => {
                         <div>
                           <label className="text-sm font-medium">{t('common.bloodType', 'Blood Type')}</label>
                           <Input 
-                            value={profileFormData.bloodType || patientRegistration?.blood_type || ''}
+                            value={profileFormData.bloodType}
                             onChange={(e) => setProfileFormData({...profileFormData, bloodType: e.target.value})}
                             placeholder={t('common.bloodTypeExample', 'e.g., A+, O-, B+')}
                             className="mt-1" 
