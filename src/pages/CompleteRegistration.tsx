@@ -26,6 +26,8 @@ type DoctorRow = {
   hospital_affiliation: string | null;
   specialty: string | null;
   experience: string | null;
+  rate_per_consultation: number | null;
+  preferred_consultation_languages: string[] | null;
   profile_picture_url: string | null;
   medical_license_url: string | null;
   identification_type: string | null;
@@ -53,6 +55,64 @@ type PatientRow = {
 };
 
 const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
+const normalizeSpecialtyValue = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const DOCTOR_SPECIALTY_OPTIONS = [
+  'General Practice',
+  'Cardiology',
+  'Dermatology',
+  'Endocrinology',
+  'Family Medicine',
+  'Gastroenterology',
+  'General Surgery',
+  'Hematology',
+  'Internal Medicine',
+  'Nephrology',
+  'Neurology',
+  'Neurosurgery',
+  'Obstetrics and Gynecology',
+  'Oncology',
+  'Ophthalmology',
+  'Orthopedics',
+  'Otolaryngology (ENT)',
+  'Pediatrics',
+  'Psychiatry',
+  'Pulmonology',
+  'Radiology',
+  'Rheumatology',
+  'Urology',
+] as const;
+
+const DOCTOR_SPECIALTY_OTHER_VALUE = '__other__';
+const GENERAL_PRACTITIONER_SPECIALTY_KEYS = new Set([
+  'general practice',
+  'general practitioner',
+  'general medicine',
+  'gp',
+]);
+const CONSULTATION_LANGUAGE_OPTIONS = [
+  { value: 'english', label: 'English' },
+  { value: 'hausa', label: 'Hausa' },
+  { value: 'igbo', label: 'Igbo' },
+  { value: 'yoruba', label: 'Yoruba' },
+  { value: 'arabic', label: 'Arabic' },
+  { value: 'swahili', label: 'Swahili' },
+  { value: 'fulfulde', label: 'Fulfulde' },
+  { value: 'tiv', label: 'Tiv' },
+  { value: 'pidgin_english', label: 'Pidgin English' },
+  { value: 'french', label: 'French' },
+  { value: 'spanish', label: 'Spanish' },
+  { value: 'portuguese', label: 'Portuguese' },
+] as const;
+
+const DOCTOR_SPECIALTY_NORMALIZED_MAP = new Map(
+  DOCTOR_SPECIALTY_OPTIONS.map((specialty) => [normalizeSpecialtyValue(specialty), specialty] as const)
+);
 
 const isPlaceholderValue = (value: string | null | undefined, placeholders: string[]) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -61,6 +121,10 @@ const isPlaceholderValue = (value: string | null | undefined, placeholders: stri
 };
 
 const sanitizePatientTextPrefill = (value: string | null | undefined, placeholders: string[]) => (
+  isPlaceholderValue(value, placeholders) ? '' : String(value || '').trim()
+);
+
+const sanitizeDoctorTextPrefill = (value: string | null | undefined, placeholders: string[]) => (
   isPlaceholderValue(value, placeholders) ? '' : String(value || '').trim()
 );
 
@@ -76,6 +140,24 @@ export default function CompleteRegistration() {
 
   const [profileFile, setProfileFile] = useState<File | null>(null);
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
+
+  // Doctor profile fields
+  const [doctorFullName, setDoctorFullName] = useState('');
+  const [doctorPhoneNumber, setDoctorPhoneNumber] = useState('');
+  const [doctorGender, setDoctorGender] = useState('');
+  const [doctorAge, setDoctorAge] = useState('');
+  const [doctorCity, setDoctorCity] = useState('');
+  const [doctorState, setDoctorState] = useState('');
+  const [doctorCountry, setDoctorCountry] = useState('');
+  const [doctorMaritalStatus, setDoctorMaritalStatus] = useState('');
+  const [doctorHospitalAffiliation, setDoctorHospitalAffiliation] = useState('');
+  const [doctorSpecialtySelection, setDoctorSpecialtySelection] = useState('');
+  const [doctorSpecialtyOther, setDoctorSpecialtyOther] = useState('');
+  const [doctorConsultationRate, setDoctorConsultationRate] = useState('');
+  const [doctorExperience, setDoctorExperience] = useState('');
+  const [doctorConsultationLanguages, setDoctorConsultationLanguages] = useState<string[]>([]);
+  const [doctorIdentificationType, setDoctorIdentificationType] = useState('');
+  const [doctorIdentificationNumber, setDoctorIdentificationNumber] = useState('');
 
   // Patient profile fields
   const [fullName, setFullName] = useState('');
@@ -162,6 +244,68 @@ export default function CompleteRegistration() {
         setIdentificationType(safeIdentificationType);
         setIdentificationNumber(safeIdentificationNumber);
       }
+      if (metadataRole === 'doctor') {
+        const d = doctorData as DoctorRow | null;
+        const safeFullName = sanitizeDoctorTextPrefill(d?.full_name, ['user']);
+        const safePhoneNumber = sanitizeDoctorTextPrefill(d?.phone_number, ['n/a', 'na']);
+        const safeGender = sanitizeDoctorTextPrefill(d?.gender, []);
+        const safeAge = Number(d?.age || 0) === 18 ? '' : (d?.age ? String(d.age) : '');
+        const safeCity = sanitizeDoctorTextPrefill(d?.city, ['unknown']);
+        const safeState = sanitizeDoctorTextPrefill(d?.state, ['unknown']);
+        const safeCountry = sanitizeDoctorTextPrefill(d?.country, ['unknown']);
+        const safeMaritalStatus = sanitizeDoctorTextPrefill(d?.marital_status, ['unknown', 'not provided', 'not-provided']);
+        const safeHospitalAffiliation = sanitizeDoctorTextPrefill(d?.hospital_affiliation, ['unknown', 'not provided', 'not-provided', 'n/a', 'na', 'pending update', '(pending update)']);
+        const safeSpecialty = sanitizeDoctorTextPrefill(d?.specialty, ['unknown', 'n/a', 'na']);
+        const safeRate = d?.rate_per_consultation && Number(d.rate_per_consultation) !== 5000 ? String(d.rate_per_consultation) : '';
+        const safeExperience = sanitizeDoctorTextPrefill(d?.experience, ['unknown', 'n/a', 'na', 'pending update', '(pending update)']);
+        const safeConsultationLanguages = Array.isArray(d?.preferred_consultation_languages)
+          ? d.preferred_consultation_languages
+            .map((lang) => String(lang || '').trim().toLowerCase())
+            .filter((lang) => CONSULTATION_LANGUAGE_OPTIONS.some((option) => option.value === lang))
+          : [];
+        const safeIdentificationType = sanitizeDoctorTextPrefill(d?.identification_type, ['unknown']);
+        const safeIdentificationNumberRaw = sanitizeDoctorTextPrefill(d?.identification_number, []);
+        const safeIdentificationNumber = (
+          safeIdentificationNumberRaw === user.id
+          || (safeIdentificationNumberRaw.length >= 8 && user.id.startsWith(safeIdentificationNumberRaw))
+        ) ? '' : safeIdentificationNumberRaw;
+
+        const normalizedSpecialty = normalizeSpecialtyValue(safeSpecialty);
+        const isGenericOtherToken = normalizedSpecialty === 'other' || normalizedSpecialty === 'others' || normalizedSpecialty === DOCTOR_SPECIALTY_OTHER_VALUE;
+        const mappedSpecialty = normalizedSpecialty
+          ? (
+            GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizedSpecialty)
+              ? 'General Practice'
+              : DOCTOR_SPECIALTY_NORMALIZED_MAP.get(normalizedSpecialty)
+          )
+          : '';
+
+        setDoctorFullName(safeFullName);
+        setDoctorPhoneNumber(safePhoneNumber);
+        setDoctorGender(safeGender);
+        setDoctorAge(safeAge);
+        setDoctorCity(safeCity);
+        setDoctorState(safeState);
+        setDoctorCountry(safeCountry);
+        setDoctorMaritalStatus(safeMaritalStatus);
+        setDoctorHospitalAffiliation(safeHospitalAffiliation);
+        setDoctorConsultationRate(safeRate);
+        setDoctorExperience(safeExperience);
+        setDoctorConsultationLanguages(safeConsultationLanguages);
+        setDoctorIdentificationType(safeIdentificationType);
+        setDoctorIdentificationNumber(safeIdentificationNumber);
+
+        if (!safeSpecialty || isGenericOtherToken) {
+          setDoctorSpecialtySelection('General Practice');
+          setDoctorSpecialtyOther('');
+        } else if (mappedSpecialty) {
+          setDoctorSpecialtySelection(mappedSpecialty);
+          setDoctorSpecialtyOther('');
+        } else {
+          setDoctorSpecialtySelection(DOCTOR_SPECIALTY_OTHER_VALUE);
+          setDoctorSpecialtyOther(safeSpecialty);
+        }
+      }
 
       setLoading(false);
     };
@@ -170,25 +314,44 @@ export default function CompleteRegistration() {
   }, [authLoading, navigate, user]);
 
   const needsDoctorLicense = role === 'doctor' && !isFilled(doctorRow?.medical_license_url);
+  const resolvedDoctorSpecialty = (
+    doctorSpecialtySelection === DOCTOR_SPECIALTY_OTHER_VALUE
+      ? doctorSpecialtyOther
+      : doctorSpecialtySelection
+  ).trim();
+  const selectedDoctorIsGeneralPractice = GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizeSpecialtyValue(resolvedDoctorSpecialty));
+
+  const toggleConsultationLanguage = (language: string) => {
+    setDoctorConsultationLanguages((previous) => (
+      previous.includes(language)
+        ? previous.filter((value) => value !== language)
+        : [...previous, language]
+    ));
+  };
 
   const handleSubmit = async () => {
     if (!user) return;
 
     if (role === 'doctor') {
+      const parsedConsultationRate = Number(doctorConsultationRate);
+      const isGeneralPracticeDoctor = GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizeSpecialtyValue(resolvedDoctorSpecialty));
+
       const requiredDoctorFields = {
-        fullName: String(doctorRow?.full_name || '').trim(),
-        phoneNumber: String(doctorRow?.phone_number || '').trim(),
-        gender: String(doctorRow?.gender || '').trim(),
-        age: Number(doctorRow?.age || 0),
-        city: String(doctorRow?.city || '').trim(),
-        state: String(doctorRow?.state || '').trim(),
-        country: String(doctorRow?.country || '').trim(),
-        maritalStatus: String(doctorRow?.marital_status || '').trim(),
-        hospitalAffiliation: String(doctorRow?.hospital_affiliation || '').trim(),
-        specialty: String(doctorRow?.specialty || '').trim(),
-        experience: String(doctorRow?.experience || '').trim(),
-        identificationType: String(doctorRow?.identification_type || '').trim(),
-        identificationNumber: String(doctorRow?.identification_number || '').trim(),
+        fullName: doctorFullName.trim(),
+        phoneNumber: doctorPhoneNumber.trim(),
+        gender: doctorGender.trim(),
+        age: Number(doctorAge),
+        city: doctorCity.trim(),
+        state: doctorState.trim(),
+        country: doctorCountry.trim(),
+        maritalStatus: doctorMaritalStatus.trim(),
+        hospitalAffiliation: doctorHospitalAffiliation.trim(),
+        specialty: resolvedDoctorSpecialty,
+        ratePerConsultation: parsedConsultationRate,
+        experience: doctorExperience.trim(),
+        consultationLanguages: doctorConsultationLanguages,
+        identificationType: doctorIdentificationType.trim(),
+        identificationNumber: doctorIdentificationNumber.trim(),
       };
 
       if (
@@ -203,13 +366,24 @@ export default function CompleteRegistration() {
         || !requiredDoctorFields.maritalStatus
         || !requiredDoctorFields.hospitalAffiliation
         || !requiredDoctorFields.specialty
+        || !Number.isFinite(requiredDoctorFields.ratePerConsultation)
+        || requiredDoctorFields.ratePerConsultation <= 0
         || !requiredDoctorFields.experience
+        || requiredDoctorFields.consultationLanguages.length === 0
         || !requiredDoctorFields.identificationType
         || !requiredDoctorFields.identificationNumber
       ) {
         toast({
           title: 'Missing information',
           description: 'All doctor registration fields are required. Please return to sign up and complete every field.',
+        });
+        return;
+      }
+
+      if (!isGeneralPracticeDoctor && requiredDoctorFields.ratePerConsultation < 10000) {
+        toast({
+          title: 'Invalid consultation rate',
+          description: 'Minimum specialist rate is NGN 10,000.',
         });
         return;
       }
@@ -255,7 +429,9 @@ export default function CompleteRegistration() {
           marital_status: requiredDoctorFields.maritalStatus,
           hospital_affiliation: requiredDoctorFields.hospitalAffiliation,
           specialty: requiredDoctorFields.specialty,
+          rate_per_consultation: requiredDoctorFields.ratePerConsultation,
           experience: requiredDoctorFields.experience,
+          preferred_consultation_languages: requiredDoctorFields.consultationLanguages,
           profile_picture_url: profileUrl,
           medical_license_url: licenseUrl,
           identification_type: requiredDoctorFields.identificationType,
@@ -381,10 +557,169 @@ export default function CompleteRegistration() {
 
           {/* Doctor: medical license */}
           {role === 'doctor' && (
-            <div className="space-y-2">
-              <Label htmlFor="licenseFile">Medical License (Required)</Label>
-              <Input id="licenseFile" type="file" accept="image/*,.pdf" onChange={(e) => setLicenseFile(e.target.files?.[0] || null)} />
-              <p className="text-xs text-muted-foreground flex items-center gap-1"><FileText className="w-3 h-3" /> {licenseFile?.name || 'No file selected'}</p>
+            <div className="space-y-4 pt-2 border-t border-border">
+              <h3 className="text-base font-semibold">Doctor Information</h3>
+
+              <div>
+                <Label htmlFor="doctorFullName">Full Name *</Label>
+                <Input id="doctorFullName" type="text" placeholder="Enter your full name" className="h-12 mt-1.5" value={doctorFullName} onChange={(e) => setDoctorFullName(e.target.value)} required />
+              </div>
+
+              <div>
+                <Label htmlFor="doctorPhoneNumber">Phone Number *</Label>
+                <Input id="doctorPhoneNumber" type="tel" placeholder="Enter phone number" className="h-12 mt-1.5" value={doctorPhoneNumber} onChange={(e) => setDoctorPhoneNumber(e.target.value)} required />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Gender *</Label>
+                  <Select value={doctorGender} onValueChange={setDoctorGender}>
+                    <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select gender" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="male">Male</SelectItem>
+                      <SelectItem value="female">Female</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="doctorAge">Age *</Label>
+                  <Input id="doctorAge" type="number" placeholder="Age" className="h-12 mt-1.5" min={1} value={doctorAge} onChange={(e) => setDoctorAge(e.target.value)} required />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <Label htmlFor="doctorCity">City *</Label>
+                  <Input id="doctorCity" placeholder="City" className="h-12 mt-1.5" value={doctorCity} onChange={(e) => setDoctorCity(e.target.value)} required />
+                </div>
+                <div>
+                  <Label htmlFor="doctorState">State *</Label>
+                  <Input id="doctorState" placeholder="State" className="h-12 mt-1.5" value={doctorState} onChange={(e) => setDoctorState(e.target.value)} required />
+                </div>
+                <div>
+                  <Label htmlFor="doctorCountry">Country *</Label>
+                  <Input id="doctorCountry" placeholder="Country" className="h-12 mt-1.5" value={doctorCountry} onChange={(e) => setDoctorCountry(e.target.value)} required />
+                </div>
+              </div>
+
+              <div>
+                <Label>Marital Status *</Label>
+                <Select value={doctorMaritalStatus} onValueChange={setDoctorMaritalStatus}>
+                  <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select marital status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="single">Single</SelectItem>
+                    <SelectItem value="married">Married</SelectItem>
+                    <SelectItem value="divorced">Divorced</SelectItem>
+                    <SelectItem value="widowed">Widowed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="doctorHospitalAffiliation">Hospital Affiliation *</Label>
+                <Input id="doctorHospitalAffiliation" placeholder="Hospital affiliation" className="h-12 mt-1.5" value={doctorHospitalAffiliation} onChange={(e) => setDoctorHospitalAffiliation(e.target.value)} required />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Specialty *</Label>
+                  <Select value={doctorSpecialtySelection} onValueChange={setDoctorSpecialtySelection}>
+                    <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select specialty" /></SelectTrigger>
+                    <SelectContent>
+                      {DOCTOR_SPECIALTY_OPTIONS.map((specialty) => (
+                        <SelectItem key={specialty} value={specialty}>
+                          {specialty}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={DOCTOR_SPECIALTY_OTHER_VALUE}>Others</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="doctorExperience">Experience (Years) *</Label>
+                  <Input id="doctorExperience" placeholder="e.g. 5" className="h-12 mt-1.5" value={doctorExperience} onChange={(e) => setDoctorExperience(e.target.value)} required />
+                </div>
+              </div>
+              {doctorSpecialtySelection === DOCTOR_SPECIALTY_OTHER_VALUE && (
+                <div>
+                  <Label htmlFor="doctorSpecialtyOther">Specify Specialty *</Label>
+                  <Input
+                    id="doctorSpecialtyOther"
+                    placeholder="Enter your specialty"
+                    className="h-12 mt-1.5"
+                    value={doctorSpecialtyOther}
+                    onChange={(e) => setDoctorSpecialtyOther(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+              <div>
+                <Label htmlFor="doctorConsultationRate">Consultation Rate (NGN) *</Label>
+                <Input
+                  id="doctorConsultationRate"
+                  type="number"
+                  min={1}
+                  step="1"
+                  placeholder="Enter consultation rate"
+                  className="h-12 mt-1.5"
+                  value={doctorConsultationRate}
+                  onChange={(e) => setDoctorConsultationRate(e.target.value)}
+                  required
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {selectedDoctorIsGeneralPractice
+                    ? 'Revenue sharing: You receive 60% and MyE-Doctor receives 40%.'
+                    : 'Minimum specialist rate: NGN 10,000. Revenue sharing: You receive 70% and MyE-Doctor receives 30%.'}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">Preferred Consultation Language(s) *</Label>
+                <p className="text-xs text-muted-foreground">Select all languages you can use to consult patients.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {CONSULTATION_LANGUAGE_OPTIONS.map((language) => (
+                    <label
+                      key={language.value}
+                      className="flex items-center gap-2 text-sm rounded-md border border-border px-3 py-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={doctorConsultationLanguages.includes(language.value)}
+                        onChange={() => toggleConsultationLanguage(language.value)}
+                      />
+                      <span>{language.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <Label>Identification Type *</Label>
+                  <Select value={doctorIdentificationType} onValueChange={setDoctorIdentificationType}>
+                    <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select ID type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="nin">National Identification Number (NIN)</SelectItem>
+                      <SelectItem value="student_id">Student ID Card</SelectItem>
+                      <SelectItem value="passport">International Passport</SelectItem>
+                      <SelectItem value="drivers_license">National Driver&apos;s License</SelectItem>
+                      <SelectItem value="voters_card">Voter&apos;s Card</SelectItem>
+                      <SelectItem value="hospital_id">Hospital / HMO ID Card</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="doctorIdentificationNumber">Identification Number *</Label>
+                  <Input id="doctorIdentificationNumber" placeholder="Enter ID number" className="h-12 mt-1.5" value={doctorIdentificationNumber} onChange={(e) => setDoctorIdentificationNumber(e.target.value)} required />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="licenseFile">Medical License (Required)</Label>
+                <Input id="licenseFile" type="file" accept="image/*,.pdf" onChange={(e) => setLicenseFile(e.target.files?.[0] || null)} />
+                <p className="text-xs text-muted-foreground flex items-center gap-1"><FileText className="w-3 h-3" /> {licenseFile?.name || 'No file selected'}</p>
+              </div>
             </div>
           )}
 
