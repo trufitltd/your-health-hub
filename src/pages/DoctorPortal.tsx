@@ -135,6 +135,17 @@ const isGeneralPracticeSpecialty = (value: string | null | undefined) => {
   return normalized === 'general practitioner' || normalized === 'general practice' || normalized === 'gp';
 };
 
+const clearPlaceholder = (value: string | null | undefined) => {
+  const v = String(value || '').trim();
+  const lowerV = v.toLowerCase();
+  const placeholders = [
+    'unknown', 'not provided', 'not-provided', 'n/a', 'na', 
+    'pending update', '(pending update)', 'user', 'other', 
+    'single', 'hospital_id', 'nin'
+  ];
+  return placeholders.includes(lowerV) ? '' : v;
+};
+
 const APP_LANGUAGE_OPTION_MAP: Record<AppLanguage, { key: string; fallback: string }> = {
   en: { key: 'auth.values.languages.english', fallback: 'English' },
   ha: { key: 'auth.values.languages.hausa', fallback: 'Hausa' },
@@ -1108,20 +1119,20 @@ const DoctorPortal = () => {
       });
 
       setProfileFormData({
-        fullName: doctorRegistration.full_name || '',
+        fullName: clearPlaceholder(doctorRegistration.full_name),
         email: doctorRegistration.email || '',
-        phone: doctorRegistration.phone_number || '',
-        age: doctorRegistration.age?.toString() || '',
-        city: doctorRegistration.city || '',
-        state: doctorRegistration.state || '',
-        country: doctorRegistration.country || '',
-        specialty: doctorRegistration.specialty || '',
+        phone: clearPlaceholder(doctorRegistration.phone_number),
+        age: doctorRegistration.age === 18 ? '' : (doctorRegistration.age?.toString() || ''),
+        city: clearPlaceholder(doctorRegistration.city),
+        state: clearPlaceholder(doctorRegistration.state),
+        country: clearPlaceholder(doctorRegistration.country),
+        specialty: clearPlaceholder(doctorRegistration.specialty),
         consultationRate:
           Number((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation) > 0
             ? String((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation)
             : '',
-        experience: doctorRegistration.experience || '',
-        bio: doctorRegistration.bio || '',
+        experience: clearPlaceholder(doctorRegistration.experience),
+        bio: clearPlaceholder(doctorRegistration.bio),
         preferredLanguage: isSupportedAppLanguage((doctorRegistration as { preferred_language?: unknown })?.preferred_language)
           ? ((doctorRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
           : language,
@@ -1142,7 +1153,7 @@ const DoctorPortal = () => {
         : [];
       setSelectedConsultationLanguages(existingConsultationLanguages);
     }
-  }, [doctorRegistration]);
+  }, [doctorRegistration, language]);
 
   useEffect(() => {
     if (!doctorRegistration) return;
@@ -4600,7 +4611,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('common.fullName', 'Full Name')}</label>
                               <Input 
-                                value={profileFormData.fullName || doctorRegistration?.full_name || ''} 
+                                value={profileFormData.fullName} 
                                 onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
                                 className="mt-1" 
                               />
@@ -4608,7 +4619,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
                               <Input 
-                                value={profileFormData.email || doctorRegistration?.email || ''} 
+                                value={profileFormData.email} 
                                 onChange={(e) => setProfileFormData({...profileFormData, email: e.target.value})}
                                 className="mt-1" 
                               />
@@ -4616,7 +4627,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('common.phone', 'Phone')}</label>
                               <Input 
-                                value={profileFormData.phone || doctorRegistration?.phone_number || ''} 
+                                value={profileFormData.phone} 
                                 onChange={(e) => setProfileFormData({...profileFormData, phone: e.target.value})}
                                 className="mt-1" 
                               />
@@ -4625,7 +4636,7 @@ const DoctorPortal = () => {
                               <label className="text-sm font-medium">{t('common.age', 'Age')}</label>
                               <Input
                                 type="number"
-                                value={profileFormData.age || doctorRegistration?.age?.toString() || ''}
+                                value={profileFormData.age}
                                 onChange={(e) => setProfileFormData({...profileFormData, age: e.target.value})}
                                 className="mt-1"
                               />
@@ -4633,7 +4644,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('auth.fields.city', 'City')}</label>
                               <Input
-                                value={profileFormData.city || doctorRegistration?.city || ''}
+                                value={profileFormData.city}
                                 onChange={(e) => setProfileFormData({...profileFormData, city: e.target.value})}
                                 className="mt-1"
                               />
@@ -4641,7 +4652,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('auth.fields.state', 'State')}</label>
                               <Input
-                                value={profileFormData.state || doctorRegistration?.state || ''}
+                                value={profileFormData.state}
                                 onChange={(e) => setProfileFormData({...profileFormData, state: e.target.value})}
                                 className="mt-1"
                               />
@@ -4649,7 +4660,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('auth.fields.country', 'Country')}</label>
                               <Input
-                                value={profileFormData.country || doctorRegistration?.country || ''}
+                                value={profileFormData.country}
                                 onChange={(e) => setProfileFormData({...profileFormData, country: e.target.value})}
                                 className="mt-1"
                               />
@@ -4657,7 +4668,7 @@ const DoctorPortal = () => {
                             <div>
                               <label className="text-sm font-medium">{t('common.specialty', 'Specialty')}</label>
                               <Input 
-                                value={profileFormData.specialty || doctorRegistration?.specialty || ''} 
+                                value={profileFormData.specialty} 
                                 onChange={(e) => setProfileFormData({...profileFormData, specialty: e.target.value})}
                                 className="mt-1" 
                               />
