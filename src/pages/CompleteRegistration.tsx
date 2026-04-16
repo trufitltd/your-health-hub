@@ -151,6 +151,45 @@ export default function CompleteRegistration() {
     if (!user) return;
 
     if (role === 'doctor') {
+      const requiredDoctorFields = {
+        fullName: String(doctorRow?.full_name || '').trim(),
+        phoneNumber: String(doctorRow?.phone_number || '').trim(),
+        gender: String(doctorRow?.gender || '').trim(),
+        age: Number(doctorRow?.age || 0),
+        city: String(doctorRow?.city || '').trim(),
+        state: String(doctorRow?.state || '').trim(),
+        country: String(doctorRow?.country || '').trim(),
+        maritalStatus: String(doctorRow?.marital_status || '').trim(),
+        hospitalAffiliation: String(doctorRow?.hospital_affiliation || '').trim(),
+        specialty: String(doctorRow?.specialty || '').trim(),
+        experience: String(doctorRow?.experience || '').trim(),
+        identificationType: String(doctorRow?.identification_type || '').trim(),
+        identificationNumber: String(doctorRow?.identification_number || '').trim(),
+      };
+
+      if (
+        !requiredDoctorFields.fullName
+        || !requiredDoctorFields.phoneNumber
+        || !requiredDoctorFields.gender
+        || !Number.isFinite(requiredDoctorFields.age)
+        || requiredDoctorFields.age <= 0
+        || !requiredDoctorFields.city
+        || !requiredDoctorFields.state
+        || !requiredDoctorFields.country
+        || !requiredDoctorFields.maritalStatus
+        || !requiredDoctorFields.hospitalAffiliation
+        || !requiredDoctorFields.specialty
+        || !requiredDoctorFields.experience
+        || !requiredDoctorFields.identificationType
+        || !requiredDoctorFields.identificationNumber
+      ) {
+        toast({
+          title: 'Missing information',
+          description: 'All doctor registration fields are required. Please return to sign up and complete every field.',
+        });
+        return;
+      }
+
       if (needsDoctorLicense && !licenseFile) {
         toast({ title: 'Medical license required', description: 'Please upload your medical license.' });
         return;
@@ -181,22 +220,22 @@ export default function CompleteRegistration() {
 
         const payload = {
           user_id: user.id,
-          full_name: doctorRow?.full_name || String(user.user_metadata?.full_name || user.user_metadata?.name || 'Doctor'),
-          gender: doctorRow?.gender || 'other',
-          age: doctorRow?.age || 18,
-          phone_number: doctorRow?.phone_number || user.phone || 'N/A',
+          full_name: requiredDoctorFields.fullName,
+          gender: requiredDoctorFields.gender,
+          age: requiredDoctorFields.age,
+          phone_number: requiredDoctorFields.phoneNumber,
           email: doctorRow?.email || user.email || null,
-          city: doctorRow?.city || 'Unknown',
-          state: doctorRow?.state || 'Unknown',
-          country: doctorRow?.country || 'Unknown',
-          marital_status: doctorRow?.marital_status || 'single',
-          hospital_affiliation: doctorRow?.hospital_affiliation || 'Pending update',
-          specialty: doctorRow?.specialty || 'general_practitioner',
-          experience: doctorRow?.experience || 'Pending update',
+          city: requiredDoctorFields.city,
+          state: requiredDoctorFields.state,
+          country: requiredDoctorFields.country,
+          marital_status: requiredDoctorFields.maritalStatus,
+          hospital_affiliation: requiredDoctorFields.hospitalAffiliation,
+          specialty: requiredDoctorFields.specialty,
+          experience: requiredDoctorFields.experience,
           profile_picture_url: profileUrl,
           medical_license_url: licenseUrl,
-          identification_type: (doctorRow?.identification_type === 'passport' ? 'passport' : 'nin'),
-          identification_number: doctorRow?.identification_number || user.id.slice(0, 16),
+          identification_type: requiredDoctorFields.identificationType,
+          identification_number: requiredDoctorFields.identificationNumber,
           verification_status: doctorRow?.verification_status || 'pending',
         };
 
@@ -220,8 +259,19 @@ export default function CompleteRegistration() {
       toast({ title: 'Full name required', description: 'Please enter at least first and last name.' });
       return;
     }
-    if (!gender || !age || !city || !patientState || !country || !maritalStatus ||
-        !emergencyContactName || !emergencyContactPhone || !identificationType || !identificationNumber) {
+    if (
+      !phoneNumber.trim()
+      || !gender.trim()
+      || !age.trim()
+      || !city.trim()
+      || !patientState.trim()
+      || !country.trim()
+      || !maritalStatus.trim()
+      || !emergencyContactName.trim()
+      || !emergencyContactPhone.trim()
+      || !identificationType.trim()
+      || !identificationNumber.trim()
+    ) {
       toast({ title: 'Missing information', description: 'Please fill in all required fields.' });
       return;
     }
@@ -412,7 +462,7 @@ export default function CompleteRegistration() {
                   />
                   <span className="text-sm">
                     <strong>Patient Consent:</strong>{' '}
-                    I agree to participate in a virtual consultation with My E-Doctor. I understand that my information will be kept confidential and securely used for medical care. I acknowledge the limitations of virtual consultations and agree to follow my healthcare provider's instructions.
+                    By proceeding, I consent to receive healthcare services via My e-Doctor through virtual consultation. I understand that telemedicine has limitations compared to in-person care and that my provider will rely on the information I provide. I agree that my personal and medical information will be securely stored and used for my care in accordance with confidentiality and data protection standards. I also consent that my anonymized (de-identified) health data may be used for research, audit, or educational purposes to improve healthcare services, without revealing my identity. I understand that I may decline this or withdraw at any time without affecting my care.
                   </span>
                 </label>
               </div>

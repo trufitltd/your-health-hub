@@ -134,7 +134,8 @@ const DOCTOR_DISCOVERY_MANAGED_URL_PARAMS = [
   'type',
   'specialty',
   'minRating',
-  'minExperience',
+  'state',
+  'experienceRange',
   'hospital',
   'consultationLanguage',
   'availability',
@@ -152,7 +153,8 @@ const areDoctorDiscoveryFiltersEqual = (
 ) => (
   left.specialty === right.specialty
   && left.minRating === right.minRating
-  && left.minExperience === right.minExperience
+  && left.state === right.state
+  && left.experienceRange === right.experienceRange
   && left.hospital === right.hospital
   && left.consultationLanguage === right.consultationLanguage
 );
@@ -209,7 +211,8 @@ export default function DoctorDiscovery() {
   const [filters, setFilters] = useState({
     specialty: '',
     minRating: 0,
-    minExperience: 0,
+    state: '',
+    experienceRange: '',
     hospital: '',
     consultationLanguage: '',
   });
@@ -699,6 +702,17 @@ export default function DoctorDiscovery() {
     return normalized === 'general practice' || normalized === 'general practitioner';
   };
 
+  const matchesExperienceRange = (experienceYears: number | null | undefined, selectedRange: string) => {
+    if (!selectedRange) return true;
+    const years = Number(experienceYears || 0);
+    if (!Number.isFinite(years)) return false;
+
+    if (selectedRange === '2-5') return years >= 2 && years < 5;
+    if (selectedRange === '5-10') return years >= 5 && years < 10;
+    if (selectedRange === '10+') return years >= 10;
+    return true;
+  };
+
   // Filter doctors based on search and filters
   const filteredDoctors = useMemo(() => {
     return doctorsWithPresence.filter(doctor => {
@@ -714,7 +728,8 @@ export default function DoctorDiscovery() {
 
       const matchesSpecialty = !filters.specialty || doctor.specialty.toLowerCase().includes(filters.specialty.toLowerCase());
       const matchesRating = !filters.minRating || (doctor.rating || 0) >= filters.minRating;
-      const matchesExperience = !filters.minExperience || (doctor.experience_years || 0) >= filters.minExperience;
+      const matchesState = !filters.state || doctor.state.toLowerCase() === filters.state.toLowerCase();
+      const matchesExperience = matchesExperienceRange(doctor.experience_years, filters.experienceRange);
       const matchesHospital = !filters.hospital || doctor.hospital_affiliation.toLowerCase().includes(filters.hospital.toLowerCase());
       const matchesLanguage = !filters.consultationLanguage
         || (doctor.preferred_consultation_languages || []).includes(filters.consultationLanguage);
@@ -724,6 +739,7 @@ export default function DoctorDiscovery() {
         && matchesDoctorType
         && matchesSpecialty
         && matchesRating
+        && matchesState
         && matchesExperience
         && matchesHospital
         && matchesLanguage
@@ -740,12 +756,17 @@ export default function DoctorDiscovery() {
     [...new Set(doctorsWithPresence.map(d => d.hospital_affiliation))].sort(), [doctorsWithPresence]
   );
 
+  const states = useMemo(() =>
+    [...new Set(doctorsWithPresence.map((doctor) => String(doctor.state || '').trim()).filter(Boolean))].sort(),
+  [doctorsWithPresence]);
+
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (doctorTypeFilter !== 'all') count += 1;
     if (filters.specialty) count += 1;
     if (filters.minRating > 0) count += 1;
-    if (filters.minExperience > 0) count += 1;
+    if (filters.state) count += 1;
+    if (filters.experienceRange) count += 1;
     if (filters.hospital) count += 1;
     if (filters.consultationLanguage) count += 1;
     if (availabilityMode !== 'none') count += 1;
@@ -756,7 +777,7 @@ export default function DoctorDiscovery() {
   const hasAnyActiveControls = hasActiveSearch || activeFilterCount > 0;
 
   const clearAllFilters = () => {
-    setFilters({ specialty: '', minRating: 0, minExperience: 0, hospital: '', consultationLanguage: '' });
+    setFilters({ specialty: '', minRating: 0, state: '', experienceRange: '', hospital: '', consultationLanguage: '' });
     setSearchQuery('');
     setDoctorTypeFilter('all');
     setAvailabilityMode('none');
@@ -1044,16 +1065,30 @@ export default function DoctorDiscovery() {
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Experience</label>
                       <select
-                        value={filters.minExperience}
-                        onChange={(e) => setFilters({ ...filters, minExperience: parseFloat(e.target.value) })}
+                        value={filters.experienceRange}
+                        onChange={(e) => setFilters({ ...filters, experienceRange: e.target.value })}
                         className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                       >
-                        <option value={0}>Any Experience</option>
-                        <option value={5}>{formatNumber(5)}+ Years</option>
-                        <option value={10}>{formatNumber(10)}+ Years</option>
-                        <option value={15}>{formatNumber(15)}+ Years</option>
+                        <option value="">Any Experience</option>
+                        <option value="2-5">2 - 5 Years</option>
+                        <option value="5-10">5 - 10 Years</option>
+                        <option value="10+">10+ Years</option>
                       </select>
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">State</label>
+                    <select
+                      value={filters.state}
+                      onChange={(e) => setFilters({ ...filters, state: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                    >
+                      <option value="">All States</option>
+                      {states.map((stateValue) => (
+                        <option key={stateValue} value={stateValue}>{stateValue}</option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
@@ -1197,14 +1232,25 @@ export default function DoctorDiscovery() {
                   </select>
 
                   <select
-                    value={filters.minExperience}
-                    onChange={(e) => setFilters({ ...filters, minExperience: parseFloat(e.target.value) })}
+                    value={filters.experienceRange}
+                    onChange={(e) => setFilters({ ...filters, experienceRange: e.target.value })}
                     className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
                   >
-                    <option value={0}>Any Experience</option>
-                    <option value={5}>{formatNumber(5)}+ Years</option>
-                    <option value={10}>{formatNumber(10)}+ Years</option>
-                    <option value={15}>{formatNumber(15)}+ Years</option>
+                    <option value="">Any Experience</option>
+                    <option value="2-5">2 - 5 Years</option>
+                    <option value="5-10">5 - 10 Years</option>
+                    <option value="10+">10+ Years</option>
+                  </select>
+
+                  <select
+                    value={filters.state}
+                    onChange={(e) => setFilters({ ...filters, state: e.target.value })}
+                    className="px-3 py-2 border rounded-lg bg-background hover:bg-muted transition-colors cursor-pointer text-sm"
+                  >
+                    <option value="">All States</option>
+                    {states.map((stateValue) => (
+                      <option key={stateValue} value={stateValue}>{stateValue}</option>
+                    ))}
                   </select>
 
                   <select
