@@ -13,6 +13,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 export function usePushSubscription(userId?: string) {
   useEffect(() => {
     if (!VAPID_PUBLIC_KEY) return;
+    if (!userId) return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     if (Notification.permission !== 'granted') return;
 

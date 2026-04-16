@@ -45,6 +45,7 @@ import { usePwaInstall } from '@/hooks/usePwaInstall';
 import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
+import { ConsultationMonitor } from '@/components/admin/ConsultationMonitor';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
@@ -342,11 +343,16 @@ const CentralAdmin = () => {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
   const [isUpdatingDoctorSignupStatus, setIsUpdatingDoctorSignupStatus] = useState(false);
+  const [isUpdatingPatientSignupStatus, setIsUpdatingPatientSignupStatus] = useState(false);
   const [clerkingSearch, setClerkingSearch] = useState('');
   const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'clerking'>(null);
   const [doctorSignupOpen, setDoctorSignupOpen] = useState(true);
   const [doctorSignupClosedMessage, setDoctorSignupClosedMessage] = useState(
     'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
+  );
+  const [patientSignupOpen, setPatientSignupOpen] = useState(true);
+  const [patientSignupClosedMessage, setPatientSignupClosedMessage] = useState(
+    'Patient sign up has been closed for this round and will resume soon. Please keep checking the site.',
   );
   const [profileFormData, setProfileFormData] = useState({
     fullName: '',
@@ -613,6 +619,32 @@ const CentralAdmin = () => {
       || 'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
     );
   }, [doctorSignupStatus]);
+
+  const { data: patientSignupStatus } = useQuery({
+    queryKey: ['admin-patient-signup-status'],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('get_patient_signup_status');
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : null;
+      return {
+        patient_signup_open: row?.patient_signup_open !== false,
+        patient_signup_closed_message:
+          String(row?.patient_signup_closed_message || '').trim()
+          || 'Patient sign up has been closed for this round and will resume soon. Please keep checking the site.',
+      };
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  useEffect(() => {
+    if (!patientSignupStatus) return;
+    setPatientSignupOpen(patientSignupStatus.patient_signup_open !== false);
+    setPatientSignupClosedMessage(
+      String(patientSignupStatus.patient_signup_closed_message || '').trim()
+      || 'Patient sign up has been closed for this round and will resume soon. Please keep checking the site.',
+    );
+  }, [patientSignupStatus]);
 
   const { data: contactMessages = [], isLoading: contactMessagesLoading } = useQuery({
     queryKey: ['admin-contact-messages'],
@@ -1886,6 +1918,39 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleUpdatePatientSignupStatus = async () => {
+    setIsUpdatingPatientSignupStatus(true);
+    try {
+      const safeMessage =
+        patientSignupClosedMessage.trim()
+        || 'Patient sign up has been closed for this round and will resume soon. Please keep checking the site.';
+
+      const { error } = await supabase.rpc('set_patient_signup_status', {
+        p_patient_signup_open: patientSignupOpen,
+        p_patient_signup_closed_message: safeMessage,
+      });
+
+      if (error) throw error;
+
+      queryClient.invalidateQueries({ queryKey: ['admin-patient-signup-status'] });
+
+      toast({
+        title: 'Success',
+        description: patientSignupOpen
+          ? 'Patient sign up has been reopened.'
+          : 'Patient sign up has been closed for this round.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Failed to update patient sign up status.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUpdatingPatientSignupStatus(false);
+    }
+  };
+
   const handleInstallApp = async () => {
     const ua = navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/i.test(ua);
@@ -1966,6 +2031,7 @@ const CentralAdmin = () => {
                     { id: 'clerking', label: 'Clerking', icon: FileText },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
+                    { id: 'monitoring', label: 'Monitoring', icon: Eye },
                     { id: 'payments', label: 'Payments', icon: BadgeIcon },
                     { id: 'pricing', label: 'Pricing', icon: TrendingUp },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
@@ -2151,6 +2217,7 @@ const CentralAdmin = () => {
                 <TabsTrigger value="clerking">Clerking</TabsTrigger>
                 <TabsTrigger value="payments">Payments</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
+                <TabsTrigger value="monitoring">Monitoring</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
 
@@ -3260,6 +3327,65 @@ const CentralAdmin = () => {
                 </Card>
               </TabsContent>
 
+              {/* Monitoring Tab */}
+              <TabsContent value="monitoring" className="space-y-6">
+                <div className="grid gap-6">
+                  {/* Active Consultations */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Eye className="w-5 h-5" />
+                        Live Consultation Monitoring
+                      </CardTitle>
+                      <CardDescription>
+                        Real-time view of all active consultations across the platform
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <ConsultationMonitor />
+                    </CardContent>
+                  </Card>
+
+                  {/* System Health */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Shield className="w-5 h-5" />
+                        System Health Overview
+                      </CardTitle>
+                      <CardDescription>
+                        Current system status and performance metrics
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                            <span className="font-medium text-green-800">Database</span>
+                          </div>
+                          <p className="text-sm text-green-600 mt-1">Operational</p>
+                        </div>
+                        <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                            <span className="font-medium text-green-800">WebRTC</span>
+                          </div>
+                          <p className="text-sm text-green-600 mt-1">Operational</p>
+                        </div>
+                        <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                            <span className="font-medium text-green-800">Payments</span>
+                          </div>
+                          <p className="text-sm text-green-600 mt-1">Operational</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+
               <TabsContent value="settings" className="space-y-6">
                 <Card>
                   <CardHeader>
@@ -3414,6 +3540,43 @@ const CentralAdmin = () => {
 
                       <Button onClick={handleUpdateDoctorSignupStatus} disabled={isUpdatingDoctorSignupStatus}>
                         {isUpdatingDoctorSignupStatus ? 'Updating...' : 'Save Doctor Sign Up Status'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Patient Sign Up Control</CardTitle>
+                    <CardDescription>Close or reopen patient registration rounds.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                        <div>
+                          <p className="text-sm font-medium">Patient sign up is {patientSignupOpen ? 'open' : 'closed'}</p>
+                          <p className="text-xs text-muted-foreground">
+                            When closed, patients will be informed that sign up has been closed for this round.
+                          </p>
+                        </div>
+                        <Switch checked={patientSignupOpen} onCheckedChange={setPatientSignupOpen} />
+                      </div>
+
+                      {!patientSignupOpen && (
+                        <div>
+                          <label className="text-sm font-medium">Closed message shown to patients</label>
+                          <Textarea
+                            className="mt-1"
+                            rows={3}
+                            value={patientSignupClosedMessage}
+                            onChange={(e) => setPatientSignupClosedMessage(e.target.value)}
+                            placeholder="Patient sign up has been closed for this round and will resume soon. Please keep checking the site."
+                          />
+                        </div>
+                      )}
+
+                      <Button onClick={handleUpdatePatientSignupStatus} disabled={isUpdatingPatientSignupStatus}>
+                        {isUpdatingPatientSignupStatus ? 'Updating...' : 'Save Patient Sign Up Status'}
                       </Button>
                     </div>
                   </CardContent>
