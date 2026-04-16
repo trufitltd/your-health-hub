@@ -582,9 +582,7 @@ export default function AuthPage() {
       hospital_affiliation: hospitalAffiliation,
       specialty,
       experience,
-      rate_per_consultation: isGeneralPracticeSpecialty(specialty || '')
-        ? (metadataParsedRate && metadataParsedRate > 0 ? metadataParsedRate : 5000)
-        : (metadataParsedRate && metadataParsedRate >= MIN_SPECIALIST_RATE_NGN ? metadataParsedRate : MIN_SPECIALIST_RATE_NGN),
+      rate_per_consultation: (metadataParsedRate && metadataParsedRate > 0) ? metadataParsedRate : null,
       profile_picture_url: profilePictureUrl,
       medical_license_url: medicalLicenseUrl || '',
       identification_type: doctorIdType === 'passport' ? 'passport' : 'nin',
