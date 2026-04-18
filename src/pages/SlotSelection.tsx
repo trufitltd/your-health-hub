@@ -145,11 +145,6 @@ export default function SlotSelection() {
   const { initializePayment } = usePaystackPayment();
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
-  
-  // DEBUG: Remove this after verifying your key
-  useEffect(() => {
-    console.log("Paystack Public Key (first 10 chars):", paystackPublicKey.substring(0, 10) + "...");
-  }, [paystackPublicKey]);
 
   // Scroll to top when page loads
   useEffect(() => {
