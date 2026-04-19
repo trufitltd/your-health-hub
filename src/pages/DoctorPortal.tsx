@@ -788,6 +788,9 @@ const DoctorPortal = () => {
     consultationRate: '',
     experience: '',
     bio: '',
+    bankAccountName: '',
+    bankAccountNumber: '',
+    bankName: '',
     preferredLanguage: language as AppLanguage,
   });
   const effectiveProfileSpecialty = (profileFormData.specialty || doctorRegistration?.specialty || '').trim();
@@ -1133,6 +1136,9 @@ const DoctorPortal = () => {
             : '',
         experience: clearPlaceholder(doctorRegistration.experience),
         bio: clearPlaceholder(doctorRegistration.bio),
+        bankAccountName: clearPlaceholder((doctorRegistration as any).bank_account_name),
+        bankAccountNumber: clearPlaceholder((doctorRegistration as any).bank_account_number),
+        bankName: clearPlaceholder((doctorRegistration as any).bank_name),
         preferredLanguage: isSupportedAppLanguage((doctorRegistration as { preferred_language?: unknown })?.preferred_language)
           ? ((doctorRegistration as { preferred_language?: unknown }).preferred_language as AppLanguage)
           : language,
@@ -2756,6 +2762,9 @@ const DoctorPortal = () => {
         specialty: profileFormData.specialty.trim(),
         experience: profileFormData.experience.trim(),
         bio: profileFormData.bio.trim(),
+        bank_account_name: profileFormData.bankAccountName.trim(),
+        bank_account_number: profileFormData.bankAccountNumber.trim(),
+        bank_name: profileFormData.bankName.trim(),
         ...legacyBioColumnPayload,
         bio_translations: bioTranslationsPayload,
         specialty_translations: specialtyTranslationsPayload,
@@ -4782,6 +4791,41 @@ const DoctorPortal = () => {
                               placeholder={t('doctorPortal.settings.bioPlaceholder', 'Tell patients about yourself, your experience, and approach to healthcare...')}
                               className="mt-1 min-h-[100px]" 
                             />
+                          </div>
+
+                          <div className="space-y-4 pt-4 border-t border-border">
+                            <h3 className="font-semibold text-lg">Bank Account Details</h3>
+                            <p className="text-xs text-muted-foreground -mt-2">These details are used for receiving your consultation payouts.</p>
+                            <div className="grid md:grid-cols-2 gap-4">
+                              <div className="md:col-span-2">
+                                <label className="text-sm font-medium">Bank Name</label>
+                                <Input
+                                  value={profileFormData.bankName}
+                                  onChange={(e) => setProfileFormData({ ...profileFormData, bankName: e.target.value })}
+                                  placeholder="e.g. Zenith Bank, Access Bank"
+                                  className="mt-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-sm font-medium">Account Name</label>
+                                <Input
+                                  value={profileFormData.bankAccountName}
+                                  onChange={(e) => setProfileFormData({ ...profileFormData, bankAccountName: e.target.value })}
+                                  placeholder="As it appears on your bank statement"
+                                  className="mt-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-sm font-medium">Account Number</label>
+                                <Input
+                                  value={profileFormData.bankAccountNumber}
+                                  onChange={(e) => setProfileFormData({ ...profileFormData, bankAccountNumber: e.target.value.replace(/\D/g, '') })}
+                                  placeholder="10-digit account number"
+                                  maxLength={10}
+                                  className="mt-1"
+                                />
+                              </div>
+                            </div>
                           </div>
 
                           <div className="space-y-4">
