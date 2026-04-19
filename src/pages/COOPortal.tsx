@@ -52,6 +52,9 @@ type DoctorRow = {
   verification_status: string | null;
   medical_license_url?: string | null;
   rate_per_consultation?: number | null;
+  bank_name?: string | null;
+  bank_account_name?: string | null;
+  bank_account_number?: string | null;
 };
 
 type PatientRow = {
@@ -249,18 +252,17 @@ export default function COOPortal() {
   });
 
   const { data: doctors = [] } = useQuery({
-    queryKey: ['coo-doctors'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('doctor_registrations')
-        .select('user_id, full_name, email, phone_number, city, state, verification_status, medical_license_url, rate_per_consultation')
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      return (data || []) as DoctorRow[];
-    },
-    enabled: isAllowed,
+   queryKey: ['coo-doctors'],
+   queryFn: async () => {
+     const { data, error } = await supabase
+       .from('doctor_registrations')
+       .select('user_id, full_name, email, phone_number, city, state, verification_status, medical_license_url, rate_per_consultation, bank_name, bank_account_name, bank_account_number')
+       .order('created_at', { ascending: false });
+     if (error) throw error;
+     return (data || []) as DoctorRow[];
+   },
+   enabled: isAllowed,
   });
-
   const { data: patients = [] } = useQuery({
     queryKey: ['coo-patients-directory'],
     queryFn: async () => {
@@ -1315,6 +1317,17 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
+                          {(doctor.bank_name || doctor.bank_account_number) && (
+                            <div className="mt-1 pt-1 border-t border-border/50">
+                              <p className="text-[10px] font-semibold text-primary uppercase tracking-wider">Bank Details</p>
+                              <p className="text-xs text-muted-foreground">
+                                {doctor.bank_name || 'N/A'} - {doctor.bank_account_number || 'N/A'}
+                              </p>
+                              {doctor.bank_account_name && (
+                                <p className="text-[10px] text-muted-foreground italic">({doctor.bank_account_name})</p>
+                              )}
+                            </div>
+                          )}
                           {presence?.online_at && (
                             <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
                           )}
@@ -1390,6 +1403,17 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
+                          {(doctor.bank_name || doctor.bank_account_number) && (
+                            <div className="mt-1 pt-1 border-t border-border/50">
+                              <p className="text-[10px] font-semibold text-primary uppercase tracking-wider">Bank Details</p>
+                              <p className="text-xs text-muted-foreground">
+                                {doctor.bank_name || 'N/A'} - {doctor.bank_account_number || 'N/A'}
+                              </p>
+                              {doctor.bank_account_name && (
+                                <p className="text-[10px] text-muted-foreground italic">({doctor.bank_account_name})</p>
+                              )}
+                            </div>
+                          )}
                           {presence?.online_at && (
                             <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
                           )}
@@ -1434,6 +1458,17 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">
                             Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                           </p>
+                          {(doctor.bank_name || doctor.bank_account_number) && (
+                            <div className="mt-1 pt-1 border-t border-border/50">
+                              <p className="text-[10px] font-semibold text-primary uppercase tracking-wider">Bank Details</p>
+                              <p className="text-xs text-muted-foreground">
+                                {doctor.bank_name || 'N/A'} - {doctor.bank_account_number || 'N/A'}
+                              </p>
+                              {doctor.bank_account_name && (
+                                <p className="text-[10px] text-muted-foreground italic">({doctor.bank_account_name})</p>
+                              )}
+                            </div>
+                          )}
                           {presence?.online_at && (
                             <p className="text-xs text-muted-foreground">Online since: {formatDateTime(presence.online_at)}</p>
                           )}
