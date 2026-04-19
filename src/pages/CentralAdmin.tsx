@@ -2919,6 +2919,9 @@ const CentralAdmin = () => {
                                     <p className="text-xs text-muted-foreground">
                                       {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
                                     </p>
+                                    {(doctor as any).bank_account_name && (
+                                      <p className="text-[10px] text-muted-foreground italic">({(doctor as any).bank_account_name})</p>
+                                    )}
                                   </div>
                                 )}
                                 {hasUnreadLicenseReupload(doctor) && (
@@ -3013,6 +3016,9 @@ const CentralAdmin = () => {
                                       <p className="text-xs text-muted-foreground">
                                         {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
                                       </p>
+                                      {(doctor as any).bank_account_name && (
+                                        <p className="text-[10px] text-muted-foreground italic">({(doctor as any).bank_account_name})</p>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -3126,6 +3132,9 @@ const CentralAdmin = () => {
                                         <p className="text-xs text-muted-foreground">
                                           {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
                                         </p>
+                                        {(doctor as any).bank_account_name && (
+                                          <p className="text-[10px] text-muted-foreground italic">({(doctor as any).bank_account_name})</p>
+                                        )}
                                       </div>
                                     )}
                                     {hasUnreadLicenseReupload(doctor) && (
