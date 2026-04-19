@@ -2913,6 +2913,14 @@ const CentralAdmin = () => {
                                 <p className="text-xs text-muted-foreground">
                                   Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                 </p>
+                                {(doctor.bank_name || (doctor as any).bank_account_number) && (
+                                  <div className="mt-1 pt-1 border-t border-border/50">
+                                    <p className="text-[10px] font-semibold text-success uppercase tracking-wider">Bank Details</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
+                                    </p>
+                                  </div>
+                                )}
                                 {hasUnreadLicenseReupload(doctor) && (
                                   <Badge className="mt-1 bg-destructive text-destructive-foreground">
                                     New License Re-upload
@@ -2999,6 +3007,14 @@ const CentralAdmin = () => {
                                   <p className="text-xs text-muted-foreground">
                                     Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
                                   </p>
+                                  {(doctor.bank_name || (doctor as any).bank_account_number) && (
+                                    <div className="mt-1 pt-1 border-t border-border/50">
+                                      <p className="text-[10px] font-semibold text-success uppercase tracking-wider">Bank Details</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
+                                      </p>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
@@ -3104,6 +3120,14 @@ const CentralAdmin = () => {
                                     <p className="text-xs text-muted-foreground">
                                       Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
                                     </p>
+                                    {(doctor.bank_name || (doctor as any).bank_account_number) && (
+                                      <div className="mt-1 pt-1 border-t border-border/50">
+                                        <p className="text-[10px] font-semibold text-success uppercase tracking-wider">Bank Details</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {(doctor as any).bank_name || 'N/A'} - {(doctor as any).bank_account_number || 'N/A'}
+                                        </p>
+                                      </div>
+                                    )}
                                     {hasUnreadLicenseReupload(doctor) && (
                                       <Badge className="mt-1 bg-destructive text-destructive-foreground">
                                         New License Re-upload
@@ -3667,6 +3691,25 @@ const CentralAdmin = () => {
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-muted-foreground text-xs mb-1">Country</p>
                     <p className="font-medium">{(selectedDoctor as any).country || notAvailableLabel}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bank Account Information */}
+              <div>
+                <h3 className="font-semibold mb-3">Bank Account Details</h3>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div className="p-3 rounded-lg bg-success/5 border border-success/10">
+                    <p className="text-muted-foreground text-xs mb-1">Bank Name</p>
+                    <p className="font-medium">{(selectedDoctor as any).bank_name || notAvailableLabel}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-success/5 border border-success/10">
+                    <p className="text-muted-foreground text-xs mb-1">Account Name</p>
+                    <p className="font-medium">{(selectedDoctor as any).bank_account_name || notAvailableLabel}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-success/5 border border-success/10">
+                    <p className="text-muted-foreground text-xs mb-1">Account Number</p>
+                    <p className="font-medium">{(selectedDoctor as any).bank_account_number || notAvailableLabel}</p>
                   </div>
                 </div>
               </div>
