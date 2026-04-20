@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings, Download } from 'lucide-react';
+import { Users, CalendarClock, Stethoscope, CreditCard, MessageSquare, Bell, Settings, Download, Gift } from 'lucide-react';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLocaleFormatter } from '@/lib/locale';
 import { COOMessagesTab } from '@/components/coo/COOMessagesTab';
@@ -238,6 +238,27 @@ export default function COOPortal() {
     }).subscribe();
     return () => { ch.unsubscribe(); };
   }, [isAllowed]);
+
+  const { data: promoStats = { used: 0, limit: 126, remaining: 126 } } = useQuery({
+    queryKey: ['coo-promo-stats'],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_promotion', true)
+        .eq('promotion_type', 'FIRST_126_FREE')
+        .neq('status', 'cancelled');
+
+      if (error) throw error;
+      return {
+        used: count || 0,
+        limit: 126,
+        remaining: Math.max(126 - (count || 0), 0)
+      };
+    },
+    enabled: isAllowed,
+    refetchInterval: 30000,
+  });
 
   const { data: patientCount = 0 } = useQuery({
     queryKey: ['coo-patient-count'],
@@ -708,7 +729,27 @@ export default function COOPortal() {
               </TabsList>
 
           <TabsContent value="dashboard" className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-4">
+              <Card className="border-purple-200 bg-purple-50/30">
+                <CardHeader className="pb-2">
+                  <CardDescription className="text-purple-700 font-medium">Free Consultation Promo</CardDescription>
+                  <CardTitle className="text-2xl text-purple-900">{promoStats.used} / {promoStats.limit}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex items-center justify-between text-[10px] uppercase font-bold text-purple-600 tracking-wider">
+                    <span>Used</span>
+                    <span>{promoStats.remaining} Left</span>
+                  </div>
+                  <div className="w-full bg-purple-100 h-1.5 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-purple-600 rounded-full transition-all duration-1000" 
+                      style={{ width: `${(promoStats.used / promoStats.limit) * 100}%` }}
+                    />
+                  </div>
+                  <Gift className="w-4 h-4 text-purple-600 mt-1" />
+                </CardContent>
+              </Card>
+
               <Card
                 role="button"
                 tabIndex={0}
