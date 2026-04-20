@@ -4,6 +4,7 @@ import { PricingService } from '../_shared/services/PricingService.ts';
 import { AvailabilityService } from '../_shared/services/AvailabilityService.ts';
 import { PaymentService } from '../_shared/services/PaymentService.ts';
 import { WalletService } from '../_shared/services/WalletService.ts';
+import { PromotionService } from '../_shared/services/PromotionService.ts';
 import { BookingService } from '../_shared/services/BookingService.ts';
 
 const corsHeaders = {
@@ -59,12 +60,14 @@ serve(async (req) => {
     const availabilityService = new AvailabilityService(serviceClient);
     const paymentService = new PaymentService(serviceClient);
     const walletService = new WalletService(serviceClient);
+    const promotionService = new PromotionService(serviceClient);
     const bookingService = new BookingService(
       serviceClient,
       pricingService,
       availabilityService,
       paymentService,
       walletService,
+      promotionService,
     );
 
     const result = await bookingService.initiateBooking({
