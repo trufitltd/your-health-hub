@@ -101,11 +101,11 @@ export const usePaystackPayment = () => {
     if (accessCode) {
       payload.access_code = accessCode;
     } else {
-      payload.email = email;
-      payload.amount = amountInKobo;
       payload.ref = reference;
       payload.reference = reference;
     }
+    payload.email = email;
+    payload.amount = amountInKobo;
 
     const metadata = sanitizeMetadata(config.metadata);
     if (metadata) {

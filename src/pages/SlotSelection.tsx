@@ -12,7 +12,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { generateTimeSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
-import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet, Gift, CheckCircle } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -136,11 +136,8 @@ export default function SlotSelection() {
   );
   const [isConfirming, setIsConfirming] = useState(false);
   const [finalPrice, setFinalPrice] = useState<number | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet'>(() => {
-    // Default to Paystack on both localhost and remote
-    // On remote, Paystack is disabled by default for security, but users can enable it via query string or localStorage
-    return 'paystack';
-  });
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'wallet' | 'promotion'>('paystack');
+
   const paystackFlowActiveRef = useRef(false);
   const { initializePayment } = usePaystackPayment();
 
@@ -483,10 +480,26 @@ export default function SlotSelection() {
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const autoHybridForWallet = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
-  const effectivePaymentMethod: 'paystack' | 'wallet' | 'hybrid' = useMemo(() => {
+  const effectivePaymentMethod: 'paystack' | 'wallet' | 'hybrid' | 'promotion' = useMemo(() => {
+    if (isPromotion && displayedPrice === 0) return 'promotion';
     if (paymentMethod === 'wallet' && autoHybridForWallet) return 'hybrid';
-    return paymentMethod;
-  }, [paymentMethod, autoHybridForWallet]);
+    return paymentMethod as 'paystack' | 'wallet';
+  }, [paymentMethod, autoHybridForWallet, isPromotion, displayedPrice]);
+
+  // Update payment method when promotion status changes
+  useEffect(() => {
+    console.log('[SlotSelection] Checking promotion status for payment method:', { isPromotion, displayedPrice, paymentMethod });
+    if (isPromotion && displayedPrice === 0) {
+      if (paymentMethod !== 'promotion') {
+        console.log('[SlotSelection] Setting payment method to promotion');
+        setPaymentMethod('promotion');
+      }
+    } else if (paymentMethod === 'promotion') {
+      console.log('[SlotSelection] Resetting payment method to paystack');
+      setPaymentMethod('paystack');
+    }
+  }, [isPromotion, displayedPrice, paymentMethod]);
+
   const walletAppliedForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
     ? Math.min(patientWalletBalance, displayedPrice)
     : 0;
@@ -588,8 +601,10 @@ export default function SlotSelection() {
       return;
     }
 
-    const paystackRequiredForSelection = effectivePaymentMethod === 'paystack'
-      || (effectivePaymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0));
+    const paystackRequiredForSelection = effectivePaymentMethod !== 'promotion' && (
+      effectivePaymentMethod === 'paystack'
+      || (effectivePaymentMethod === 'hybrid' && (displayedPrice === null || paystackDueForHybrid > 0))
+    );
 
     if (paystackRequiredForSelection && !paystackPublicKey) {
       toast({
@@ -613,7 +628,7 @@ export default function SlotSelection() {
         notes: selectedConsultationLanguage
           ? `[consultation_language:${selectedConsultationLanguage}]`
           : undefined,
-        paymentMethod: effectivePaymentMethod,
+        paymentMethod: effectivePaymentMethod === 'promotion' ? 'paystack' : effectivePaymentMethod,
       });
 
       setFinalPrice(booking.finalPrice);
@@ -623,12 +638,14 @@ export default function SlotSelection() {
         ?? (booking.paymentInitialization ? Number(booking.paymentInitialization.amountInKobo || 0) / 100 : 0),
       );
 
-      if (booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
+      if (effectivePaymentMethod === 'promotion' || booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
         paystackFlowActiveRef.current = false;
         setIsConfirming(false);
         toast({
           title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
-          description: walletChargedAmount > 0
+          description: effectivePaymentMethod === 'promotion' 
+            ? t('slotSelection.toast.promotionBookingSuccessDescription', 'Your free promotional consultation has been booked and is now pending doctor approval.')
+            : walletChargedAmount > 0
             ? `Wallet charged ${formatCurrency(walletChargedAmount)}. Your booking is now pending doctor approval.`
             : t(
               'slotSelection.toast.walletBookingSuccessDescription',
@@ -683,11 +700,8 @@ export default function SlotSelection() {
 
               for (let attempt = 0; attempt < 3; attempt += 1) {
                 try {
-                  const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
-                    body: { reference: paidReference },
-                  });
-                  if (confirmError) throw confirmError;
-
+                  const confirmData = await BookingService.confirmPayment(paidReference);
+                  
                   const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
                   if (parsed.error) throw new Error(parsed.error);
                   confirmResult = parsed;
@@ -1186,28 +1200,50 @@ export default function SlotSelection() {
                           {t('slotSelection.summary.paymentMethod', 'Payment Method')}
                         </p>
                         <div className="space-y-2 text-sm">
-                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
-                            <span>{t('slotSelection.summary.paystack', 'Paystack')}</span>
-                            <input
-                              type="radio"
-                              name="booking-payment-method"
-                              checked={paymentMethod === 'paystack'}
-                              onChange={() => setPaymentMethod('paystack')}
-                            />
-                          </label>
-                          <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer">
-                            <span>
-                              {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance)})
-                            </span>
-                            <input
-                              type="radio"
-                              name="booking-payment-method"
-                              checked={paymentMethod === 'wallet'}
-                              onChange={() => setPaymentMethod('wallet')}
-                            />
-                          </label>
+                          {isPromotion && displayedPrice === 0 ? (
+                            <div className="flex items-center justify-between rounded-md border border-success bg-success/5 px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <Gift className="w-4 h-4 text-success" />
+                                <span className="font-medium text-success">
+                                  {t('slotSelection.summary.promotionMethod', 'Promotion (Free)')}
+                                </span>
+                              </div>
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            </div>
+                          ) : (
+                            <>
+                              <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors">
+                                <div className="flex items-center gap-2">
+                                  <CreditCard className="w-4 h-4 text-muted-foreground" />
+                                  <span>{t('slotSelection.summary.paystack', 'Paystack')}</span>
+                                </div>
+                                <input
+                                  type="radio"
+                                  name="booking-payment-method"
+                                  checked={paymentMethod === 'paystack'}
+                                  onChange={() => setPaymentMethod('paystack')}
+                                  className="accent-primary"
+                                />
+                              </label>
+                              <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors">
+                                <div className="flex items-center gap-2">
+                                  <Wallet className="w-4 h-4 text-muted-foreground" />
+                                  <span>
+                                    {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance)})
+                                  </span>
+                                </div>
+                                <input
+                                  type="radio"
+                                  name="booking-payment-method"
+                                  checked={paymentMethod === 'wallet'}
+                                  onChange={() => setPaymentMethod('wallet')}
+                                  className="accent-primary"
+                                />
+                              </label>
+                            </>
+                          )}
                         </div>
-                        {paymentMethod === 'wallet' && displayedPrice !== null && (
+                        {paymentMethod === 'wallet' && displayedPrice !== null && displayedPrice > 0 && (
                           <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
                             {paystackDueForHybrid > 0 ? (
                               <>
@@ -1247,8 +1283,13 @@ export default function SlotSelection() {
                 disabled={!summaryReady || isConfirming}
                 className="gap-2"
               >
-                {effectivePaymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
-                {isPromotion
+                {effectivePaymentMethod === 'promotion' 
+                  ? <Gift className="w-4 h-4" /> 
+                  : effectivePaymentMethod === 'wallet' 
+                  ? <Wallet className="w-4 h-4" /> 
+                  : <CreditCard className="w-4 h-4" />
+                }
+                {effectivePaymentMethod === 'promotion'
                   ? t('slotSelection.bookForFree', 'Book for Free')
                   : isConfirming
                   ? t('slotSelection.processing', 'Processing...')
