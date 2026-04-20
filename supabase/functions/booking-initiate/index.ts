@@ -19,22 +19,20 @@ serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    if (!supabaseUrl || !serviceRoleKey) {
       throw new Error('Supabase env vars are not configured');
     }
 
-    const authHeader = req.headers.get('Authorization') || '';
-    const authedClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
 
-    const {
-      data: { user },
-      error: authError,
-    } = await authedClient.auth.getUser();
+    // Verify user via service role (works with both HS256 and ES256 JWTs)
+    const authHeader = req.headers.get('Authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const { data: { user }, error: authError } = token
+      ? await serviceClient.auth.getUser(token)
+      : { data: { user: null }, error: new Error('No token') };
 
     if (authError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -45,16 +43,7 @@ serve(async (req) => {
 
     const payload = await req.json();
 
-    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
-
-    const { data: profile, error: profileError } = await serviceClient
-      .from('profiles')
-      .select('email')
-      .eq('user_id', user.id)
-      .maybeSingle();
-    if (profileError) {
-      console.warn('[booking-initiate] profile lookup failed, falling back to auth email:', profileError.message);
-    }
+    const patientEmail = user.email || '';
 
     const pricingService = new PricingService(serviceClient);
     const availabilityService = new AvailabilityService(serviceClient);
@@ -72,7 +61,7 @@ serve(async (req) => {
 
     const result = await bookingService.initiateBooking({
       patientId: user.id,
-      patientEmail: profile?.email || user.email || '',
+      patientEmail,
       doctorId: payload.doctorId,
       preferredDate: payload.preferredDate,
       preferredTime: payload.preferredTime,
@@ -89,9 +78,11 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error('[booking-initiate] error', error);
+    const errorMessage = error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error);
     return new Response(
       JSON.stringify({
-        error: error instanceof Error ? error.message : 'Unknown booking error',
+        error: errorMessage,
+        details: error,
       }),
       {
         status: 400,

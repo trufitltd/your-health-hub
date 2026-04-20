@@ -212,6 +212,7 @@ export class BookingService {
   }
 
   private async moveAppointmentToApprovalReady(appointmentId: string, paymentReference?: string | null) {
+    console.log('[BookingService] moveAppointmentToApprovalReady started', { appointmentId, paymentReference });
     const updatePayload: Record<string, unknown> = {
       status: 'pending_approval',
       slot_locked_until: null,
@@ -225,16 +226,25 @@ export class BookingService {
       .update(updatePayload)
       .eq('id', appointmentId);
 
-    if (!confirmError) return;
+    if (!confirmError) {
+      console.log('[BookingService] moveAppointmentToApprovalReady success');
+      return;
+    }
+
+    console.warn('[BookingService] moveAppointmentToApprovalReady first attempt failed:', confirmError.message);
 
     const message = String(confirmError.message || '');
     const statusConstraintError =
       message.includes('appointments_status_marketplace_check')
-      || message.toLowerCase().includes('violates check constraint');
+      || message.toLowerCase().includes('violates check constraint')
+      || message.toLowerCase().includes('invalid status');
 
     if (!statusConstraintError) {
-      throw new Error(confirmError.message);
+      console.error('[BookingService] moveAppointmentToApprovalReady failed with non-constraint error:', confirmError);
+      throw new Error(`Failed to update appointment status: ${confirmError.message}`);
     }
+
+    console.log('[BookingService] Status constraint error detected, trying legacy "pending" status...');
 
     const legacyUpdatePayload: Record<string, unknown> = {
       ...updatePayload,
@@ -247,19 +257,29 @@ export class BookingService {
       .eq('id', appointmentId);
 
     if (legacyConfirmError) {
-      throw new Error(legacyConfirmError.message);
+      console.error('[BookingService] moveAppointmentToApprovalReady legacy attempt failed:', legacyConfirmError);
+      throw new Error(`Failed to update appointment status (legacy): ${legacyConfirmError.message}`);
     }
+    console.log('[BookingService] moveAppointmentToApprovalReady legacy success');
   }
 
   async initiateBooking(input: BookingInitiateInput): Promise<BookingInitiateResult> {
+    console.log('[BookingService] initiateBooking started', { patientId: input.patientId, doctorId: input.doctorId });
     if (!input.patientId) throw new Error('Missing patientId');
     if (!input.doctorId) throw new Error('Missing doctorId');
 
-    await this.availabilityService.cleanupExpiredPendingLocks(input.doctorId);
+    try {
+      console.log('[BookingService] Cleaning up expired locks...');
+      await this.availabilityService.cleanupExpiredPendingLocks(input.doctorId);
+    } catch (e) {
+      console.warn('[BookingService] cleanupExpiredPendingLocks failed:', e);
+    }
 
+    console.log('[BookingService] Fetching context and flags...');
     const doctor = await this.getDoctorContext(input.doctorId);
     const patient = await this.getPatientContext(input.patientId);
     const pricingFeatureFlags = await this.pricingService.getFeatureFlags();
+    console.log('[BookingService] Context fetched', { doctorName: doctor.doctorName, patientName: patient.patientName });
 
     const requestedDuration = pricingFeatureFlags.duration_pricing
       ? Math.max(5, Number(input.duration || DEFAULT_BOOKING_DURATION_MINUTES))
@@ -366,14 +386,6 @@ export class BookingService {
     if (amount === 0 && isPromotion) {
       try {
         await this.moveAppointmentToApprovalReady(appointment.id, `PROMO-${promotionType}-${Date.now()}`);
-        
-        // Add pending earning of 0 for tracking/stats
-        await this.walletService.addPendingEarning({
-          id: appointment.id,
-          doctor_id: appointment.doctor_id,
-          final_price: 0,
-          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
-        });
 
         return {
           appointmentId: appointment.id,
