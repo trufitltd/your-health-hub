@@ -18,22 +18,20 @@ serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    if (!supabaseUrl || !serviceRoleKey) {
       throw new Error('Supabase env vars are not configured');
     }
 
-    const authHeader = req.headers.get('Authorization') || '';
-    const authedClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
 
-    const {
-      data: { user },
-      error: authError,
-    } = await authedClient.auth.getUser();
+    // Verify user via service role (works with both HS256 and ES256 JWTs)
+    const authHeader = req.headers.get('Authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const { data: { user }, error: authError } = token
+      ? await serviceClient.auth.getUser(token)
+      : { data: { user: null }, error: new Error('No token') };
 
     if (authError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -51,7 +49,6 @@ serve(async (req) => {
       });
     }
 
-    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
     const paymentService = new PaymentService(serviceClient);
     const payment = await paymentService.getPaymentByReference(reference);
     if (!payment) {

@@ -71,8 +71,17 @@ export class WalletService {
     const feeRule = await this.getPlatformFeeRule(doctorType);
 
     const finalPrice = Number(appointment.final_price || 0);
-    if (finalPrice <= 0) {
-      throw new Error('Cannot add wallet earning from non-positive final price');
+    if (finalPrice < 0) {
+      throw new Error('Cannot add wallet earning from negative final price');
+    }
+
+    if (finalPrice === 0) {
+      console.log('[WalletService] Final price is zero, skipping wallet earning logic');
+      return {
+        doctorType,
+        platformFee: 0,
+        doctorEarning: 0,
+      };
     }
 
     const platformFee = feeRule

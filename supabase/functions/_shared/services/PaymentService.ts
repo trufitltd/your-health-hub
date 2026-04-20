@@ -13,11 +13,6 @@ export class PaymentService {
     return value;
   }
 
-  private getPaystackSplitCode() {
-    const value = Deno.env.get('PAYSTACK_SPLIT_CODE');
-    return String(value || '').trim();
-  }
-
   async createPaymentIntent(input: {
     appointmentId: string;
     patientId: string;
@@ -61,7 +56,6 @@ export class PaymentService {
     }
 
     const secretKey = this.getPaystackSecretKey();
-    const splitCode = this.getPaystackSplitCode();
     const initializePayload: Record<string, unknown> = {
       email: input.email,
       amount: amountInKobo,
@@ -69,9 +63,6 @@ export class PaymentService {
       currency: 'NGN',
       metadata,
     };
-    if (splitCode) {
-      initializePayload.split_code = splitCode;
-    }
 
     const initializeResponse = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',

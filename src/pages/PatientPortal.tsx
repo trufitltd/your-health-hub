@@ -65,6 +65,7 @@ import {
 import { SUPPORTED_LANGUAGES, type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { PatientWalletService } from '@/services/PatientWalletService';
 import { AvailabilityService } from '@/services/AvailabilityService';
+import { BookingService } from '@/services/BookingService';
 import { AppointmentRescheduleService } from '@/services/AppointmentRescheduleService';
 import {
   formatAppointmentStatusLabel,
@@ -3220,11 +3221,8 @@ const PatientPortal = () => {
 
             for (let attempt = 0; attempt < 3; attempt += 1) {
               try {
-                const { data: confirmData, error: confirmError } = await supabase.functions.invoke('booking-payment-confirm', {
-                  body: { reference: paidReference },
-                });
-                if (confirmError) throw confirmError;
-
+                const confirmData = await BookingService.confirmPayment(paidReference);
+                
                 const parsed = (confirmData || {}) as { error?: string; alreadyProcessed?: boolean };
                 if (parsed.error) throw new Error(parsed.error);
                 confirmResult = parsed;

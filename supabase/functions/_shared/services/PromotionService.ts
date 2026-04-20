@@ -27,50 +27,70 @@ export class PromotionService {
   }
 
   async checkEligibility(patientId: string, doctorId: string): Promise<PromotionEligibility> {
-    const promotionLimit = await this.getPromotionLimit();
+    try {
+      console.log('[PromotionService] Checking eligibility...', { patientId, doctorId });
+      const promotionLimit = await this.getPromotionLimit();
+      console.log('[PromotionService] Limit:', promotionLimit);
 
-    // 1. Check total promotion limit
-    const { count: totalCount, error: totalError } = await this.supabase
-      .from('appointments')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_promotion', true)
-      .eq('promotion_type', this.PROMOTION_TYPE)
-      .neq('status', 'cancelled');
+      // 1. Check total promotion limit
+      const { count: totalCount, error: totalError } = await this.supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_promotion', true)
+        .eq('promotion_type', this.PROMOTION_TYPE)
+        .neq('status', 'cancelled');
 
-    if (totalError) throw totalError;
-    if ((totalCount || 0) >= promotionLimit) {
-      return { eligible: false, reason: 'Promotion limit reached' };
+      if (totalError) {
+        console.error('[PromotionService] Total count query failed:', totalError);
+        return { eligible: false, reason: `Database error (total): ${totalError.message}` };
+      }
+      console.log('[PromotionService] Total used:', totalCount);
+      if ((totalCount || 0) >= promotionLimit) {
+        return { eligible: false, reason: 'Promotion limit reached' };
+      }
+
+      // 2. Check if patient already had a free consultation
+      const { count: patientCount, error: patientError } = await this.supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('patient_id', patientId)
+        .eq('is_promotion', true)
+        .eq('promotion_type', this.PROMOTION_TYPE)
+        .neq('status', 'cancelled');
+
+      if (patientError) {
+        console.error('[PromotionService] Patient check query failed:', patientError);
+        return { eligible: false, reason: `Database error (patient): ${patientError.message}` };
+      }
+      console.log('[PromotionService] Patient used before:', patientCount);
+      if ((patientCount || 0) > 0) {
+        return { eligible: false, reason: 'Patient already used free consultation' };
+      }
+
+      // 3. Check if doctor was already booked for a free consultation
+      const { count: doctorCount, error: doctorError } = await this.supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('doctor_id', doctorId)
+        .eq('is_promotion', true)
+        .eq('promotion_type', this.PROMOTION_TYPE)
+        .neq('status', 'cancelled');
+
+      if (doctorError) {
+        console.error('[PromotionService] Doctor check query failed:', doctorError);
+        return { eligible: false, reason: `Database error (doctor): ${doctorError.message}` };
+      }
+      console.log('[PromotionService] Doctor used before:', doctorCount);
+      if ((doctorCount || 0) > 0) {
+        return { eligible: false, reason: 'Doctor already booked for free consultation' };
+      }
+
+      console.log('[PromotionService] Eligible for promotion');
+      return { eligible: true, promotionType: this.PROMOTION_TYPE };
+    } catch (err) {
+      console.error('[PromotionService] Unexpected eligibility check error:', err);
+      return { eligible: false, reason: 'Internal error checking eligibility' };
     }
-
-    // 2. Check if patient already had a free consultation
-    const { count: patientCount, error: patientError } = await this.supabase
-      .from('appointments')
-      .select('*', { count: 'exact', head: true })
-      .eq('patient_id', patientId)
-      .eq('is_promotion', true)
-      .eq('promotion_type', this.PROMOTION_TYPE)
-      .neq('status', 'cancelled');
-
-    if (patientError) throw patientError;
-    if ((patientCount || 0) > 0) {
-      return { eligible: false, reason: 'Patient already used free consultation' };
-    }
-
-    // 3. Check if doctor was already booked for a free consultation
-    const { count: doctorCount, error: doctorError } = await this.supabase
-      .from('appointments')
-      .select('*', { count: 'exact', head: true })
-      .eq('doctor_id', doctorId)
-      .eq('is_promotion', true)
-      .eq('promotion_type', this.PROMOTION_TYPE)
-      .neq('status', 'cancelled');
-
-    if (doctorError) throw doctorError;
-    if ((doctorCount || 0) > 0) {
-      return { eligible: false, reason: 'Doctor already booked for free consultation' };
-    }
-
-    return { eligible: true, promotionType: this.PROMOTION_TYPE };
   }
 
   getPromotionType(): string {
