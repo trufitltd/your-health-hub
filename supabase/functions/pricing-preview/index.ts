@@ -13,34 +13,44 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      },
+    });
   }
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    if (!supabaseUrl || !serviceRoleKey) {
       throw new Error('Supabase env vars are not configured');
     }
 
     const authHeader = req.headers.get('Authorization') || '';
-    const authedClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
 
-    const {
-      data: { user },
-      error: authError,
-    } = await authedClient.auth.getUser();
+    // We will attempt to identify the user if a valid token is provided.
+    // If not, we proceed as a guest.
+    let patientId: string | undefined = undefined;
 
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const authedClient = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY')!, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data: { user }, error: authError } = await authedClient.auth.getUser();
+        if (!authError && user) {
+          patientId = user.id;
+        }
+      } catch (e) {
+        console.warn('[pricing-preview] JWT verification failed (non-critical):', e);
+      }
     }
 
     const payload = await req.json();
@@ -48,8 +58,12 @@ serve(async (req) => {
       throw new Error('Missing doctorId');
     }
 
-    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
+    // Allow patientId to be passed in the body (used when JWT auth is skipped)
+    if (!patientId && payload.patientId) {
+      patientId = String(payload.patientId);
+    }
 
+    const serviceClient = createClient(supabaseUrl, serviceRoleKey);
     const pricingService = new PricingService(serviceClient);
     const availabilityService = new AvailabilityService(serviceClient);
     const paymentService = new PaymentService(serviceClient);
@@ -66,10 +80,11 @@ serve(async (req) => {
 
     const result = await bookingService.previewPrice({
       doctorId: payload.doctorId,
-      patientId: user.id,
+      patientId: patientId,
       duration: payload.duration,
       consultationType: payload.consultationType,
     });
+
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
