@@ -61,7 +61,7 @@ export const AvailabilityService = {
     return durations;
   },
 
-  async calculatePricePreview(input: PricePreviewRequest): Promise<number> {
+  async calculatePricePreview(input: PricePreviewRequest): Promise<PricePreviewResponse> {
     const { data, error } = await supabase.functions.invoke('pricing-preview', {
       body: input,
     });
@@ -73,6 +73,6 @@ export const AvailabilityService = {
       throw new Error('Invalid pricing preview response');
     }
 
-    return result.finalPrice;
+    return result;
   },
 };

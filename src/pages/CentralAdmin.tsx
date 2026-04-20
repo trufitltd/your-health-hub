@@ -5,7 +5,7 @@ import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
   Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2, Send,
-  Badge as BadgeIcon, Settings
+  Badge as BadgeIcon, Settings, Gift
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -555,6 +555,86 @@ const CentralAdmin = () => {
     enabled: !!user && isAdmin,
   });
 
+  const { data: promoStats = { used: 0, limit: 126 } } = useQuery({
+    queryKey: ['admin-promo-stats'],
+    queryFn: async () => {
+      // 1. Fetch current limit
+      const { data: settings } = await supabase
+        .from('platform_settings')
+        .select('promotion_first_n_free_limit')
+        .maybeSingle();
+
+      const limit = settings?.promotion_first_n_free_limit ?? 126;
+
+      // 2. Fetch used count
+      const { count } = await supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_promotion', true)
+        .eq('promotion_type', 'FIRST_126_FREE')
+        .neq('status', 'cancelled');
+
+      return {
+        used: count || 0,
+        limit,
+        remaining: Math.max(limit - (count || 0), 0)
+      };
+    },
+    enabled: !!user && isAdmin,
+    refetchInterval: 30000,
+  });
+
+  const [newPromoLimit, setNewPromoLimit] = useState<string>('');
+  const [isUpdatingPromoLimit, setIsUpdatingPromoLimit] = useState(false);
+
+  const handleUpdatePromotionLimit = async () => {
+    const val = parseInt(newPromoLimit);
+    if (isNaN(val) || val < 0) {
+      toast({
+        title: 'Invalid limit',
+        description: 'Please enter a valid number.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsUpdatingPromoLimit(true);
+    try {
+      // 1. Get the current settings record
+      const { data: settings } = await supabase
+        .from('platform_settings')
+        .select('id')
+        .maybeSingle();
+
+      if (!settings?.id) {
+        throw new Error('Platform settings record not found. Please ensure the table has a default row.');
+      }
+
+      // 2. Update using that ID
+      const { error } = await supabase
+        .from('platform_settings')
+        .update({ promotion_first_n_free_limit: val })
+        .eq('id', settings.id);
+
+      if (error) throw error;
+      
+      toast({
+        title: 'Limit updated',
+        description: `Promotion limit is now set to ${val}.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin-promo-stats'] });
+      setNewPromoLimit('');
+    } catch (err: any) {
+      toast({
+        title: 'Update failed',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUpdatingPromoLimit(false);
+    }
+  };
+
   const { data: qaAppointments = [], isLoading: qaLoading } = useQuery({
     queryKey: ['admin-qa-appointments'],
     queryFn: async () => {
@@ -861,6 +941,9 @@ const CentralAdmin = () => {
     pendingVerification: doctorStatusCounts.pending,
     incompleteDoctors: doctorStatusCounts.incomplete,
     rejectedDoctors: doctorStatusCounts.rejected,
+    promoUsed: promoStats.used,
+    promoLimit: promoStats.limit,
+    promoRemaining: promoStats.remaining,
     totalConsultations: doctors.reduce((sum, d) => sum + (d.total_consultations || 0), 0),
     averageRating: doctors.length > 0
       ? (doctors.reduce((sum, d) => sum + (d.rating || 0), 0) / doctors.length).toFixed(2)
@@ -2172,8 +2255,8 @@ const CentralAdmin = () => {
                   { key: 'approved' as const, label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
                   { key: 'pending' as const, label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
                   { key: 'incomplete' as const, label: 'Incomplete Doctors', value: stats.incompleteDoctors, icon: AlertCircle, color: 'bg-destructive/10 text-destructive' },
-                ].map((stat, index) => (
-                  <motion.div
+                  { key: 'promo' as const, label: 'Free Used', value: `${stats.promoUsed}/${stats.promoLimit}`, icon: Gift, color: 'bg-purple-500/10 text-purple-600' },
+                  ].map((stat, index) => (                  <motion.div
                     key={stat.label}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -2345,6 +2428,77 @@ const CentralAdmin = () => {
                             transition={{ delay: 0.3, duration: 0.5 }}
                           />
                         </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Promotional Tracking */}
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="text-lg">Free Consultation Promotion</CardTitle>
+                          <CardDescription>Tracking first {stats.promoLimit} free slots</CardDescription>
+                        </div>
+                        <div className="p-2 rounded-full bg-purple-500/10 text-purple-600">
+                          <Gift className="w-5 h-5" />
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Slots Used</span>
+                          <span className="text-sm font-bold">{stats.promoUsed} / {stats.promoLimit}</span>
+                        </div>
+                        <div className="w-full bg-muted h-3 rounded-full overflow-hidden">
+                          <motion.div 
+                            className="h-full bg-purple-500"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(stats.promoUsed / stats.promoLimit) * 100}%` }}
+                            transition={{ delay: 0.5, duration: 0.8 }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                          <p className="text-xs text-muted-foreground mb-1">Remaining Slots</p>
+                          <p className="text-2xl font-bold text-purple-600">{stats.promoRemaining}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                          <p className="text-xs text-muted-foreground mb-1">Completion</p>
+                          <p className="text-2xl font-bold">{Math.round((stats.promoUsed / stats.promoLimit) * 100)}%</p>
+                        </div>
+                      </div>
+
+                      <div className="pt-4 border-t border-border/50">
+                        <p className="text-sm font-medium mb-3">Limit Management</p>
+                        <div className="flex gap-2">
+                          <Input
+                            type="number"
+                            placeholder="New total limit"
+                            value={newPromoLimit}
+                            onChange={(e) => setNewPromoLimit(e.target.value)}
+                            className="max-w-[150px]"
+                          />
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={handleUpdatePromotionLimit}
+                            disabled={isUpdatingPromoLimit || !newPromoLimit}
+                          >
+                            {isUpdatingPromoLimit ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                            Update Limit
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-purple-50 border border-purple-100">
+                        <p className="text-xs text-purple-800 leading-relaxed">
+                          Limited to one free consultation per patient and one per doctor. 
+                          The promotion automatically ends when all {stats.promoLimit} slots are filled.
+                        </p>
                       </div>
                     </CardContent>
                   </Card>

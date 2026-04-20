@@ -478,7 +478,8 @@ export default function SlotSelection() {
     retry: false,
   });
 
-  const displayedPrice = finalPrice ?? previewPrice ?? null;
+  const displayedPrice = finalPrice ?? previewPrice?.finalPrice ?? null;
+  const isPromotion = previewPrice?.isPromotion || false;
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
   const autoHybridForWallet = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
@@ -1153,13 +1154,33 @@ export default function SlotSelection() {
                       <div className="flex items-center justify-between p-3 rounded-lg bg-primary/10 border border-primary/20">
                         <span className="text-muted-foreground">{t('slotSelection.summary.consultationFee', 'Consultation Fee')}</span>
                         <span className="font-semibold text-primary">
-                          {displayedPrice !== null
-                            ? formatCurrency(displayedPrice)
-                            : isPreviewingPrice
-                            ? t('slotSelection.summary.calculating', 'Calculating...')
-                            : t('slotSelection.summary.unableToPreview', 'Unable to preview right now')}
+                          {isPromotion ? (
+                            <div className="flex flex-col items-end">
+                              <span className="text-xs line-through text-muted-foreground">
+                                {previewPrice?.base ? formatCurrency(previewPrice.base) : ''}
+                              </span>
+                              <span className="text-success font-bold uppercase tracking-wider">
+                                {t('slotSelection.summary.free', 'FREE')}
+                              </span>
+                            </div>
+                          ) : displayedPrice !== null ? (
+                            formatCurrency(displayedPrice)
+                          ) : isPreviewingPrice ? (
+                            t('slotSelection.summary.calculating', 'Calculating...')
+                          ) : (
+                            t('slotSelection.summary.unableToPreview', 'Unable to preview right now')
+                          )}
                         </span>
                       </div>
+
+                      {isPromotion && (
+                        <div className="mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-success/10 border border-success/20">
+                          <CheckCircle className="w-3.5 h-3.5 text-success" />
+                          <span className="text-xs font-medium text-success">
+                            {t('slotSelection.summary.promotionApplied', 'Free Consultation Applied!')}
+                          </span>
+                        </div>
+                      )}
                       <div className="rounded-lg border p-3 bg-background/50">
                         <p className="text-sm font-medium mb-2">
                           {t('slotSelection.summary.paymentMethod', 'Payment Method')}
@@ -1227,7 +1248,9 @@ export default function SlotSelection() {
                 className="gap-2"
               >
                 {effectivePaymentMethod === 'wallet' ? <Wallet className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
-                {isConfirming
+                {isPromotion
+                  ? t('slotSelection.bookForFree', 'Book for Free')
+                  : isConfirming
                   ? t('slotSelection.processing', 'Processing...')
                   : effectivePaymentMethod === 'wallet'
                   ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')

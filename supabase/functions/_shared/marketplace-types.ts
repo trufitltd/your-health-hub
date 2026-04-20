@@ -81,6 +81,7 @@ export interface BookingInitiateResult {
 
 export interface PricePreviewInput {
   doctorId: string;
+  patientId?: string;
   duration?: number;
   consultationType?: 'chat' | 'voice' | 'video';
 }
@@ -93,6 +94,8 @@ export interface PricePreviewResult {
   featureFlags: Record<FeatureFlagName, boolean>;
   durationMinutes: number;
   consultationType: 'chat' | 'voice' | 'video';
+  isPromotion?: boolean;
+  promotionType?: string;
 }
 
 export interface PaystackVerifyResult {

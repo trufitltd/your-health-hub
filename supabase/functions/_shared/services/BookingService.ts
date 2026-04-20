@@ -17,6 +17,7 @@ import { PricingService } from './PricingService.ts';
 import { AvailabilityService } from './AvailabilityService.ts';
 import { PaymentService } from './PaymentService.ts';
 import { WalletService } from './WalletService.ts';
+import { PromotionService } from './PromotionService.ts';
 
 type DoctorTierRow = {
   id: string;
@@ -53,6 +54,7 @@ export class BookingService {
     private readonly availabilityService: AvailabilityService,
     private readonly paymentService: PaymentService,
     private readonly walletService: WalletService,
+    private readonly promotionService: PromotionService,
   ) {}
 
   private async getDoctorContext(doctorId: string) {
@@ -126,6 +128,7 @@ export class BookingService {
 
   private async calculatePriceForDoctor(input: {
     doctorId: string;
+    patientId?: string;
     duration: number;
     consultationType?: 'chat' | 'voice' | 'video';
     doctorContext?: {
@@ -145,7 +148,27 @@ export class BookingService {
       tierName: doctor.tierName,
     });
 
-    return { doctor, consultationType, price };
+    // Handle Promotion
+    let finalPrice = price.finalPrice;
+    let isPromotion = false;
+    let promotionType: string | undefined = undefined;
+
+    if (input.patientId) {
+      const eligibility = await this.promotionService.checkEligibility(input.patientId, input.doctorId);
+      if (eligibility.eligible) {
+        finalPrice = 0;
+        isPromotion = true;
+        promotionType = eligibility.promotionType;
+      }
+    }
+
+    return { 
+      doctor, 
+      consultationType, 
+      price: { ...price, finalPrice },
+      isPromotion,
+      promotionType
+    };
   }
 
   async previewPrice(input: PricePreviewInput): Promise<PricePreviewResult> {
@@ -168,8 +191,9 @@ export class BookingService {
       ? input.consultationType
       : DEFAULT_CONSULTATION_TYPE;
 
-    const { consultationType, price } = await this.calculatePriceForDoctor({
+    const { consultationType, price, isPromotion, promotionType } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
+      patientId: input.patientId,
       duration: durationMinutes,
       consultationType: normalizedConsultationType,
     });
@@ -182,6 +206,8 @@ export class BookingService {
       featureFlags: price.featureFlags,
       durationMinutes,
       consultationType,
+      isPromotion,
+      promotionType,
     };
   }
 
@@ -271,8 +297,9 @@ export class BookingService {
       ? input.consultationType
       : DEFAULT_CONSULTATION_TYPE;
 
-    const { consultationType, price } = await this.calculatePriceForDoctor({
+    const { consultationType, price, isPromotion, promotionType } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
+      patientId: input.patientId,
       duration: slot.durationMinutes,
       consultationType: normalizedConsultationType,
       doctorContext: doctor,
@@ -302,6 +329,8 @@ export class BookingService {
       tier_id: doctor.tierId,
       tier_name: doctor.tierName,
       feature_flags: price.featureFlags,
+      is_promotion: isPromotion,
+      promotion_type: promotionType,
     };
 
     const { data: appointment, error: appointmentError } = await this.supabase
@@ -321,6 +350,8 @@ export class BookingService {
         slot_locked_until: lockUntil,
         consultation_type_id: consultationTypeRow?.id || null,
         duration_minutes: slot.durationMinutes,
+        is_promotion: isPromotion,
+        promotion_type: promotionType,
       })
       .select('*')
       .single();
@@ -330,6 +361,39 @@ export class BookingService {
     }
 
     const amount = Number(appointment.final_price || price.finalPrice);
+
+    // Handle zero-price promotional bookings
+    if (amount === 0 && isPromotion) {
+      try {
+        await this.moveAppointmentToApprovalReady(appointment.id, `PROMO-${promotionType}-${Date.now()}`);
+        
+        // Add pending earning of 0 for tracking/stats
+        await this.walletService.addPendingEarning({
+          id: appointment.id,
+          doctor_id: appointment.doctor_id,
+          final_price: 0,
+          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+        });
+
+        return {
+          appointmentId: appointment.id,
+          finalPrice: 0,
+          slot,
+          paymentInitialization: null,
+          paymentMethod: 'paystack', // Default
+          paidWithWallet: false,
+          walletChargedAmount: 0,
+          paystackAmountDue: 0,
+        };
+      } catch (promoConfirmError) {
+        await this.supabase
+          .from('appointments')
+          .update({ status: 'cancelled', slot_locked_until: null })
+          .eq('id', appointment.id);
+        throw new Error(`Failed to confirm promotional booking: ${promoConfirmError instanceof Error ? promoConfirmError.message : String(promoConfirmError)}`);
+      }
+    }
+
     const basePaymentMetadata = {
       appointment_date: slot.date,
       appointment_time: slot.time,
