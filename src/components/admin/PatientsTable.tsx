@@ -39,7 +39,7 @@ interface PatientWithStats {
 const isIncompletePatient = (p: { post_auth_prompt_completed?: boolean | null }) =>
   p.post_auth_prompt_completed !== true;
 
-export function PatientsTable() {
+export function PatientsTable({ filter = 'all' }: { filter?: 'all' | 'complete' | 'incomplete' }) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
@@ -123,18 +123,24 @@ export function PatientsTable() {
     refetchInterval: 30000,
   });
 
+  const filteredPatients = patients.filter((p) => {
+    if (filter === 'complete') return p.registration_complete;
+    if (filter === 'incomplete') return !p.registration_complete;
+    return true;
+  });
+
   if (isLoading) {
     return <div className="text-center py-8 text-muted-foreground">Loading patients...</div>;
   }
 
-  if (patients.length === 0) {
-    return <div className="text-center py-8 text-muted-foreground">No patients registered yet</div>;
+  if (filteredPatients.length === 0) {
+    return <div className="text-center py-8 text-muted-foreground">{filter === 'complete' ? 'No complete patient registrations.' : filter === 'incomplete' ? 'No incomplete patient registrations.' : 'No patients registered yet'}</div>;
   }
 
   return (
     <>
       <div className="space-y-4">
-        {patients.map((patient) => (
+        {filteredPatients.map((patient) => (
           <div
             key={patient.id}
             className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-all ${
