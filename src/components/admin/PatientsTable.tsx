@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Star, Trash2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
@@ -32,29 +33,24 @@ interface PatientWithStats {
   completed_appointments: number;
   pending_appointments: number;
   average_rating: number | null;
+  registration_complete: boolean;
 }
+
+const isIncompletePatient = (p: { post_auth_prompt_completed?: boolean | null }) =>
+  p.post_auth_prompt_completed !== true;
 
 export function PatientsTable() {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
+
   const deletePatient = useMutation({
     mutationFn: async (patientId: string) => {
-      console.log('Attempting to delete patient:', patientId);
       const { data, error } = await supabase.rpc('admin_delete_user', {
-        user_id_to_delete: patientId
+        user_id_to_delete: patientId,
       });
-      
-      console.log('Delete response:', { data, error });
-      
-      if (error) {
-        console.error('RPC error:', error);
-        throw error;
-      }
-      if (data && !data.success) {
-        console.error('Function returned error:', data.message);
-        throw new Error(data.message);
-      }
+      if (error) throw error;
+      if (data && !data.success) throw new Error(data.message);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-patients'] });
@@ -62,7 +58,6 @@ export function PatientsTable() {
       setDeletePatientId(null);
     },
     onError: (error: any) => {
-      console.error('Delete patient failed:', error);
       toast({ title: 'Error', description: error.message || 'Failed to remove patient', variant: 'destructive' });
     },
   });
@@ -77,38 +72,32 @@ export function PatientsTable() {
 
       if (error) throw error;
 
-      console.log('All patient data:', patientData?.map(p => ({ name: p.full_name, user_id: p.user_id })));
-
       const patientsWithStats = await Promise.all(
         (patientData || []).map(async (patient) => {
-          console.log(`Fetching appointments for patient ${patient.full_name} with user_id:`, patient.user_id);
-          
+          const complete = !isIncompletePatient(patient);
+
           const { data: appointments, error: aptError } = await supabase
             .from('appointments')
-            .select('status, rating, patient_id')
+            .select('status, rating')
             .eq('patient_id', patient.user_id);
 
           if (aptError) {
             console.error(`Error fetching appointments for ${patient.full_name}:`, aptError);
           }
 
-          console.log(`Patient ${patient.full_name} appointments:`, appointments);
-
-          const normalizedAppointments = (appointments || []).map((appointment) => ({
-            ...appointment,
-            status: normalizeAppointmentStatus(appointment.status),
+          const normalizedAppointments = (appointments || []).map((a) => ({
+            ...a,
+            status: normalizeAppointmentStatus(a.status),
           }));
           const total = appointments?.length || 0;
           const completed = normalizedAppointments.filter((a) => a.status === 'completed').length;
           const pending = normalizedAppointments.filter((a) =>
-            a.status === 'pending_payment' || a.status === 'pending_approval' || a.status === 'confirmed' || a.status === 'in_progress'
+            ['pending_payment', 'pending_approval', 'confirmed', 'in_progress'].includes(String(a.status || ''))
           ).length;
-          const ratings = appointments?.filter(a => a.rating && a.rating > 0).map(a => a.rating!) || [];
-          const avgRating = ratings.length > 0 
-            ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length 
+          const ratings = appointments?.filter((a) => a.rating && a.rating > 0).map((a) => a.rating!) || [];
+          const avgRating = ratings.length > 0
+            ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
             : null;
-
-          console.log(`Patient ${patient.full_name} stats:`, { total, completed, pending, ratings, avgRating });
 
           return {
             id: patient.user_id,
@@ -124,6 +113,7 @@ export function PatientsTable() {
             completed_appointments: completed,
             pending_appointments: pending,
             average_rating: avgRating,
+            registration_complete: complete,
           };
         })
       );
@@ -145,53 +135,75 @@ export function PatientsTable() {
     <>
       <div className="space-y-4">
         {patients.map((patient) => (
-          <div key={patient.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border hover:shadow-md transition-all">
+          <div
+            key={patient.id}
+            className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-all ${
+              patient.registration_complete
+                ? 'border-border hover:shadow-md'
+                : 'border-destructive/30 bg-destructive/5'
+            }`}
+          >
             <div className="flex items-center gap-4 mb-3 sm:mb-0">
               <Avatar className="w-12 h-12">
                 {patient.profile_picture_url && (
                   <img src={patient.profile_picture_url} alt={patient.full_name} className="w-full h-full object-cover" />
                 )}
                 <AvatarFallback className="bg-primary/10 text-primary">
-                  {patient.full_name?.split(' ').map(n => n[0]).join('') || 'P'}
+                  {patient.full_name?.split(' ').map((n) => n[0]).join('') || 'P'}
                 </AvatarFallback>
               </Avatar>
               <div>
-                <p className="font-semibold">{patient.full_name}</p>
-                <p className="text-sm text-muted-foreground">{patient.email}</p>
-                <p className="text-xs text-muted-foreground">{patient.phone_number}</p>
-                <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
-                <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
-                <p className="text-xs text-muted-foreground">Location: {patient.city || 'N/A'}, {patient.state || 'N/A'}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold">{patient.full_name}</p>
+                  {!patient.registration_complete && (
+                    <Badge className="bg-destructive/10 text-destructive border-destructive/20 text-[10px]">
+                      Incomplete Registration
+                    </Badge>
+                  )}
+                </div>
+                {patient.email && <p className="text-sm text-muted-foreground">{patient.email}</p>}
+                {patient.phone_number && patient.phone_number !== 'N/A' && (
+                  <p className="text-xs text-muted-foreground">{patient.phone_number}</p>
+                )}
+                {patient.registration_complete && (
+                  <>
+                    <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
+                    <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
+                    <p className="text-xs text-muted-foreground">Location: {patient.city || 'N/A'}, {patient.state || 'N/A'}</p>
+                  </>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="text-center p-2 rounded-lg bg-muted/50">
-                  <p className="text-xs text-muted-foreground">Total</p>
-                  <p className="text-lg font-bold">{patient.total_appointments}</p>
-                </div>
-                <div className="text-center p-2 rounded-lg bg-success/10">
-                  <p className="text-xs text-muted-foreground">Completed</p>
-                  <p className="text-lg font-bold text-success">{patient.completed_appointments}</p>
-                </div>
-                <div className="text-center p-2 rounded-lg bg-warning/10">
-                  <p className="text-xs text-muted-foreground">Pending</p>
-                  <p className="text-lg font-bold text-warning">{patient.pending_appointments}</p>
-                </div>
-                <div className="text-center p-2 rounded-lg bg-accent/10">
-                  <p className="text-xs text-muted-foreground">Avg Rating</p>
-                  <div className="flex items-center justify-center gap-1">
-                    {patient.average_rating ? (
-                      <>
-                        <Star className="w-4 h-4 text-warning fill-warning" />
-                        <p className="text-lg font-bold">{patient.average_rating.toFixed(1)}</p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">{t('specialists.defaults.notAvailable', 'N/A')}</p>
-                    )}
+              {patient.registration_complete && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="text-center p-2 rounded-lg bg-muted/50">
+                    <p className="text-xs text-muted-foreground">Total</p>
+                    <p className="text-lg font-bold">{patient.total_appointments}</p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-success/10">
+                    <p className="text-xs text-muted-foreground">Completed</p>
+                    <p className="text-lg font-bold text-success">{patient.completed_appointments}</p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-warning/10">
+                    <p className="text-xs text-muted-foreground">Pending</p>
+                    <p className="text-lg font-bold text-warning">{patient.pending_appointments}</p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-accent/10">
+                    <p className="text-xs text-muted-foreground">Avg Rating</p>
+                    <div className="flex items-center justify-center gap-1">
+                      {patient.average_rating ? (
+                        <>
+                          <Star className="w-4 h-4 text-warning fill-warning" />
+                          <p className="text-lg font-bold">{patient.average_rating.toFixed(1)}</p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">{t('specialists.defaults.notAvailable', 'N/A')}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
               <Button
                 size="icon"
                 variant="ghost"
