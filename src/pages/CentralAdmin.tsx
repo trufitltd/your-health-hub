@@ -316,6 +316,7 @@ const CentralAdmin = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'incomplete'>('all');
+  const [patientFilter, setPatientFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
@@ -544,7 +545,7 @@ const CentralAdmin = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patient_registrations')
-        .select('user_id, full_name, email, phone_number');
+        .select('user_id, full_name, email, phone_number, post_auth_prompt_completed');
       
       if (error) {
         console.error('Error fetching patients:', error);
@@ -938,6 +939,8 @@ const CentralAdmin = () => {
   const stats = {
     totalDoctors: doctors.length,
     totalPatients: patients.length,
+    completePatients: patients.filter((p: any) => p.post_auth_prompt_completed === true).length,
+    incompletePatients: patients.filter((p: any) => p.post_auth_prompt_completed !== true).length,
     approvedDoctors: doctorStatusCounts.approved,
     pendingVerification: doctorStatusCounts.pending,
     incompleteDoctors: doctorStatusCounts.incomplete,
@@ -1246,7 +1249,7 @@ const CentralAdmin = () => {
   };
 
   const handleOverviewStatClick = (
-    statKey: 'total_doctors' | 'total_patients' | 'approved' | 'pending' | 'incomplete'
+    statKey: 'total_doctors' | 'total_patients' | 'approved' | 'pending' | 'incomplete' | 'complete_patients' | 'incomplete_patients'
   ) => {
     if (statKey === 'total_doctors') {
       setSearchQuery('');
@@ -1256,6 +1259,19 @@ const CentralAdmin = () => {
     }
 
     if (statKey === 'total_patients') {
+      setPatientFilter('all');
+      setActiveTab('patients');
+      return;
+    }
+
+    if (statKey === 'complete_patients') {
+      setPatientFilter('complete');
+      setActiveTab('patients');
+      return;
+    }
+
+    if (statKey === 'incomplete_patients') {
+      setPatientFilter('incomplete');
       setActiveTab('patients');
       return;
     }
@@ -1399,7 +1415,7 @@ const CentralAdmin = () => {
   const handleDeleteAppointment = async (appointmentId: string) => {
     setIsProcessing(true);
     try {
-      const { error } = await supabase.from('appointments').delete().eq('id', appointmentId);
+      const { error } = await supabase.rpc('admin_delete_appointment', { p_appointment_id: appointmentId });
       if (error) throw error;
       toast({ title: 'Success', description: 'Appointment deleted.' });
       setDeleteAppointmentId(null);
@@ -2268,6 +2284,8 @@ const CentralAdmin = () => {
                 {[
                   { key: 'total_doctors' as const, label: 'Total Doctors', value: stats.totalDoctors, icon: Users, color: 'bg-primary/10 text-primary' },
                   { key: 'total_patients' as const, label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
+                  { key: 'complete_patients' as const, label: 'Complete Patients', value: stats.completePatients, icon: CheckCircle, color: 'bg-success/10 text-success' },
+                  { key: 'incomplete_patients' as const, label: 'Incomplete Patients', value: stats.incompletePatients, icon: AlertCircle, color: 'bg-orange-500/10 text-orange-500' },
                   { key: 'approved' as const, label: 'Approved', value: stats.approvedDoctors, icon: CheckCircle, color: 'bg-success/10 text-success' },
                   { key: 'pending' as const, label: 'Pending', value: stats.pendingVerification, icon: Clock, color: 'bg-warning/10 text-warning' },
                   { key: 'incomplete' as const, label: 'Incomplete Doctors', value: stats.incompleteDoctors, icon: AlertCircle, color: 'bg-destructive/10 text-destructive' },
@@ -3244,16 +3262,23 @@ const CentralAdmin = () => {
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <CardTitle>Patient Directory</CardTitle>
-                        <CardDescription>All registered patients and their appointment history</CardDescription>
+                        <CardDescription>
+                          {patientFilter === 'complete' ? 'Showing complete registrations only' : patientFilter === 'incomplete' ? 'Showing incomplete registrations only' : 'All registered patients and their appointment history'}
+                        </CardDescription>
                       </div>
-                      <Button variant="outline" size="sm" onClick={exportPatients} disabled={isExporting !== null}>
-                        {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                        Download CSV
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button variant={patientFilter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('all')}>All</Button>
+                        <Button variant={patientFilter === 'complete' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('complete')}>Complete</Button>
+                        <Button variant={patientFilter === 'incomplete' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('incomplete')}>Incomplete</Button>
+                        <Button variant="outline" size="sm" onClick={exportPatients} disabled={isExporting !== null}>
+                          {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                          Download CSV
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <PatientsTable />
+                    <PatientsTable filter={patientFilter} />
                   </CardContent>
                 </Card>
               </TabsContent>
