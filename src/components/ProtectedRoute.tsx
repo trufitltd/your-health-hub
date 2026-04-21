@@ -68,10 +68,7 @@ export function ProtectedRoute({
         const effectiveRole: AppRole = role || parseAppRole(user.user_metadata?.role);
 
         const doctorComplete = !!doctorRow && isFilled((doctorRow as any).medical_license_url);
-        const patientComplete = !!patientRow && (
-          isFilled((patientRow as any).profile_picture_url)
-          || Boolean((patientRow as any).post_auth_prompt_completed)
-        );
+        const patientComplete = !!patientRow && Boolean((patientRow as any).post_auth_prompt_completed);
         if (effectiveRole !== 'doctor' && effectiveRole !== 'patient') {
           setRedirectPath(null);
           return;
@@ -119,7 +116,7 @@ export function ProtectedRoute({
   }
 
   if (redirectPath && location.pathname !== '/complete-registration') {
-    return <Navigate to="/auth?mode=login" state={{ from: location }} replace />;
+    return <Navigate to={redirectPath} replace />;
   }
 
   return <>{children}</>;

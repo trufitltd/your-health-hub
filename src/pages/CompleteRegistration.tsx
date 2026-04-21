@@ -195,10 +195,7 @@ export default function CompleteRegistration() {
       setRole(metadataRole);
 
       const doctorComplete = !!doctorData && isFilled((doctorData as DoctorRow).medical_license_url);
-      const patientComplete = !!patientData && (
-        isFilled((patientData as PatientRow).profile_picture_url)
-        || Boolean((patientData as PatientRow).post_auth_prompt_completed)
-      );
+      const patientComplete = !!patientData && Boolean((patientData as PatientRow).post_auth_prompt_completed);
 
       if (metadataRole === 'doctor' && doctorComplete) {
         setLoading(false);
