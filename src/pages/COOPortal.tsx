@@ -289,10 +289,13 @@ export default function COOPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patient_registrations')
-        .select('user_id, full_name, email, phone_number, age, gender, city, state')
+        .select('user_id, full_name, email, phone_number, age, gender, city, state, post_auth_prompt_completed')
         .limit(5000);
       if (error) throw error;
-      return (data || []) as PatientRow[];
+      return (data || []).map((r) => ({
+        ...r,
+        registration_complete: r.post_auth_prompt_completed === true,
+      })) as (PatientRow & { registration_complete: boolean })[];
     },
     enabled: isAllowed,
   });
@@ -1535,7 +1538,7 @@ export default function COOPortal() {
               <CardHeader>
                 <CardTitle>Patient Directory</CardTitle>
                 <CardDescription>
-                  Total registered patients: {patients.length}
+                  Total patients: {patients.length}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
@@ -1550,27 +1553,50 @@ export default function COOPortal() {
                 {filteredPatients.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No patient records found.</p>
                 ) : (
-                  filteredPatients.map((patient) => (
-                    <div key={patient.user_id} className="rounded-lg border p-3">
-                      <button
-                        type="button"
-                        onClick={() => openQuickMessage({
-                          id: patient.user_id,
-                          type: 'patient',
-                          name: patient.full_name || 'Patient',
-                          email: patient.email || '',
-                        })}
-                        className="text-sm font-medium text-left hover:underline"
-                      >
-                        {patient.full_name || 'Patient'}
-                      </button>
-                      <p className="text-xs text-muted-foreground">{patient.email || 'No email'}</p>
-                      <p className="text-xs text-muted-foreground">{patient.phone_number || 'No phone'}</p>
-                      <p className="text-xs text-muted-foreground">Age: {patient.age ?? 'N/A'}</p>
-                      <p className="text-xs text-muted-foreground">Sex: {patient.gender || 'N/A'}</p>
-                      <p className="text-xs text-muted-foreground">Location: {patient.city || 'N/A'}, {patient.state || 'N/A'}</p>
-                    </div>
-                  ))
+                  filteredPatients.map((patient) => {
+                    const p = patient as PatientRow & { registration_complete?: boolean };
+                    const isComplete = p.registration_complete !== false;
+                    return (
+                      <div key={p.user_id} className={`rounded-lg border p-3 ${
+                        !isComplete ? 'border-destructive/30 bg-destructive/5' : ''
+                      }`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            {isComplete ? (
+                              <button
+                                type="button"
+                                onClick={() => openQuickMessage({
+                                  id: p.user_id,
+                                  type: 'patient',
+                                  name: p.full_name || 'Patient',
+                                  email: p.email || '',
+                                })}
+                                className="text-sm font-medium text-left hover:underline"
+                              >
+                                {p.full_name || 'Patient'}
+                              </button>
+                            ) : (
+                              <p className="text-sm font-medium">{p.full_name || 'Patient'}</p>
+                            )}
+                            <p className="text-xs text-muted-foreground">{p.email || 'No email'}</p>
+                            <p className="text-xs text-muted-foreground">{p.phone_number || 'No phone'}</p>
+                            {isComplete && (
+                              <>
+                                <p className="text-xs text-muted-foreground">Age: {(p as any).age ?? 'N/A'}</p>
+                                <p className="text-xs text-muted-foreground">Sex: {(p as any).gender || 'N/A'}</p>
+                                <p className="text-xs text-muted-foreground">Location: {(p as any).city || 'N/A'}, {(p as any).state || 'N/A'}</p>
+                              </>
+                            )}
+                          </div>
+                          {!isComplete && (
+                            <Badge className="bg-destructive/10 text-destructive border-destructive/20 shrink-0">
+                              Incomplete Registration
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
               </CardContent>
             </Card>

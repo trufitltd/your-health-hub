@@ -339,6 +339,7 @@ const CentralAdmin = () => {
   const [newMessageBody, setNewMessageBody] = useState('');
   const [isSendingNewMessage, setIsSendingNewMessage] = useState(false);
   const [deleteDoctorId, setDeleteDoctorId] = useState<string | null>(null);
+  const [deleteAppointmentId, setDeleteAppointmentId] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
@@ -1390,6 +1391,21 @@ const CentralAdmin = () => {
     } catch (error: any) {
       console.error('Delete doctor failed:', error);
       toast({ title: 'Error', description: error.message || 'Failed to remove doctor', variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteAppointment = async (appointmentId: string) => {
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase.from('appointments').delete().eq('id', appointmentId);
+      if (error) throw error;
+      toast({ title: 'Success', description: 'Appointment deleted.' });
+      setDeleteAppointmentId(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-appointments-feed'] });
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message || 'Failed to delete appointment', variant: 'destructive' });
     } finally {
       setIsProcessing(false);
     }
@@ -2551,9 +2567,19 @@ const CentralAdmin = () => {
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                   {getAppointmentStatusBadge(apt.status)}
-                                  <span className="text-xs text-muted-foreground">
-                                    {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">
+                                      {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}
+                                    </span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={() => setDeleteAppointmentId(apt.id)}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                  </div>
                                 </div>
                                 <p className="text-sm"><span className="font-semibold">Patient:</span> {apt.patient_name}</p>
                                 <p className="text-sm"><span className="font-semibold">Doctor:</span> Dr. {apt.doctor_name}</p>
@@ -2578,9 +2604,19 @@ const CentralAdmin = () => {
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                   {getAppointmentStatusBadge(apt.status)}
-                                  <span className="text-xs text-muted-foreground">
-                                    {apt.created_at ? formatDate(apt.created_at) : notAvailableLabel}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">
+                                      {apt.created_at ? formatDate(apt.created_at) : notAvailableLabel}
+                                    </span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={() => setDeleteAppointmentId(apt.id)}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                  </div>
                                 </div>
                                 <p className="text-sm"><span className="font-semibold">Patient:</span> {apt.patient_name}</p>
                                 <p className="text-xs text-muted-foreground">{apt.patient_email || notAvailableLabel} • {apt.patient_phone || notAvailableLabel}</p>
@@ -4130,6 +4166,27 @@ const CentralAdmin = () => {
               className="bg-destructive hover:bg-destructive/90"
             >
               Remove Doctor
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Appointment Confirmation */}
+      <AlertDialog open={!!deleteAppointmentId} onOpenChange={(open) => !open && setDeleteAppointmentId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Appointment</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to permanently delete this appointment? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteAppointmentId && handleDeleteAppointment(deleteAppointmentId)}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              Delete Appointment
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
