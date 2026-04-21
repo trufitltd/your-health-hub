@@ -161,6 +161,7 @@ export default function COOPortal() {
   const [doctorEmailSearch, setDoctorEmailSearch] = useState('');
   const [activeDoctorEmailSearch, setActiveDoctorEmailSearch] = useState('');
   const [patientEmailSearch, setPatientEmailSearch] = useState('');
+  const [patientFilter, setPatientFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
   const [quickMessageTarget, setQuickMessageTarget] = useState<QuickMessageTarget | null>(null);
   const [quickMessageBody, setQuickMessageBody] = useState('');
   const [isSendingQuickMessage, setIsSendingQuickMessage] = useState(false);
@@ -480,6 +481,8 @@ export default function COOPortal() {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'appointments', label: 'Appointments' },
     { id: 'patients', label: 'Patients' },
+    { id: 'complete-patients', label: 'Complete Patients' },
+    { id: 'incomplete-patients', label: 'Incomplete Patients' },
     { id: 'messages', label: 'Messages', badge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined },
     { id: 'doctors', label: 'Doctors' },
     { id: 'active-doctors', label: 'Active Doctors', badge: activeDoctorsOverview.activeOnlineCount > 0 ? (activeDoctorsOverview.activeOnlineCount > 99 ? '99+' : activeDoctorsOverview.activeOnlineCount) : undefined },
@@ -770,6 +773,44 @@ export default function COOPortal() {
                   <CardTitle className="text-3xl">{patientCount}</CardTitle>
                 </CardHeader>
                 <CardContent><Users className="w-5 h-5 text-primary" /></CardContent>
+              </Card>
+
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('complete-patients')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('complete-patients');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-success/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/30"
+              >
+                <CardHeader className="pb-2">
+                  <CardDescription>Complete Patient Registrations</CardDescription>
+                  <CardTitle className="text-3xl">{patients.filter((p: any) => p.registration_complete).length}</CardTitle>
+                </CardHeader>
+                <CardContent><Users className="w-5 h-5 text-success" /></CardContent>
+              </Card>
+
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => openStatDetails('incomplete-patients')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openStatDetails('incomplete-patients');
+                  }
+                }}
+                className="cursor-pointer transition hover:border-orange-400/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/30"
+              >
+                <CardHeader className="pb-2">
+                  <CardDescription>Incomplete Patient Registrations</CardDescription>
+                  <CardTitle className="text-3xl">{patients.filter((p: any) => !p.registration_complete).length}</CardTitle>
+                </CardHeader>
+                <CardContent><Users className="w-5 h-5 text-orange-500" /></CardContent>
               </Card>
 
               <Card
@@ -1537,9 +1578,7 @@ export default function COOPortal() {
             <Card>
               <CardHeader>
                 <CardTitle>Patient Directory</CardTitle>
-                <CardDescription>
-                  Total patients: {patients.length}
-                </CardDescription>
+                <CardDescription>Total patients: {patients.length}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="pb-2">
@@ -1557,22 +1596,11 @@ export default function COOPortal() {
                     const p = patient as PatientRow & { registration_complete?: boolean };
                     const isComplete = p.registration_complete !== false;
                     return (
-                      <div key={p.user_id} className={`rounded-lg border p-3 ${
-                        !isComplete ? 'border-destructive/30 bg-destructive/5' : ''
-                      }`}>
+                      <div key={p.user_id} className={`rounded-lg border p-3 ${!isComplete ? 'border-destructive/30 bg-destructive/5' : ''}`}>
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             {isComplete ? (
-                              <button
-                                type="button"
-                                onClick={() => openQuickMessage({
-                                  id: p.user_id,
-                                  type: 'patient',
-                                  name: p.full_name || 'Patient',
-                                  email: p.email || '',
-                                })}
-                                className="text-sm font-medium text-left hover:underline"
-                              >
+                              <button type="button" onClick={() => openQuickMessage({ id: p.user_id, type: 'patient', name: p.full_name || 'Patient', email: p.email || '' })} className="text-sm font-medium text-left hover:underline">
                                 {p.full_name || 'Patient'}
                               </button>
                             ) : (
@@ -1589,10 +1617,68 @@ export default function COOPortal() {
                             )}
                           </div>
                           {!isComplete && (
-                            <Badge className="bg-destructive/10 text-destructive border-destructive/20 shrink-0">
-                              Incomplete Registration
-                            </Badge>
+                            <Badge className="bg-destructive/10 text-destructive border-destructive/20 shrink-0">Incomplete Registration</Badge>
                           )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="complete-patients" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Complete Patient Registrations</CardTitle>
+                <CardDescription>Patients who have fully completed registration: {patients.filter((p: any) => p.registration_complete).length}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {patients.filter((p: any) => p.registration_complete).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No complete patient registrations found.</p>
+                ) : (
+                  patients.filter((p: any) => p.registration_complete).map((patient) => {
+                    const p = patient as PatientRow & { registration_complete?: boolean };
+                    return (
+                      <div key={p.user_id} className="rounded-lg border p-3">
+                        <button type="button" onClick={() => openQuickMessage({ id: p.user_id, type: 'patient', name: p.full_name || 'Patient', email: p.email || '' })} className="text-sm font-medium text-left hover:underline">
+                          {p.full_name || 'Patient'}
+                        </button>
+                        <p className="text-xs text-muted-foreground">{p.email || 'No email'}</p>
+                        <p className="text-xs text-muted-foreground">{p.phone_number || 'No phone'}</p>
+                        <p className="text-xs text-muted-foreground">Age: {(p as any).age ?? 'N/A'}</p>
+                        <p className="text-xs text-muted-foreground">Sex: {(p as any).gender || 'N/A'}</p>
+                        <p className="text-xs text-muted-foreground">Location: {(p as any).city || 'N/A'}, {(p as any).state || 'N/A'}</p>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="incomplete-patients" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Incomplete Patient Registrations</CardTitle>
+                <CardDescription>Patients who signed up but did not complete registration: {patients.filter((p: any) => !p.registration_complete).length}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {patients.filter((p: any) => !p.registration_complete).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No incomplete patient registrations found.</p>
+                ) : (
+                  patients.filter((p: any) => !p.registration_complete).map((patient) => {
+                    const p = patient as PatientRow & { registration_complete?: boolean };
+                    return (
+                      <div key={p.user_id} className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium">{p.full_name || 'Patient'}</p>
+                            <p className="text-xs text-muted-foreground">{p.email || 'No email'}</p>
+                            <p className="text-xs text-muted-foreground">{p.phone_number || 'No phone'}</p>
+                          </div>
+                          <Badge className="bg-destructive/10 text-destructive border-destructive/20 shrink-0">Incomplete Registration</Badge>
                         </div>
                       </div>
                     );
