@@ -228,6 +228,34 @@ type WalletTransactionRow = {
   status: string | null;
 };
 
+type ClinicalNoteFormData = {
+  presentingComplaint: string;
+  historyOfPresentingComplaint: string;
+  pastMedicalHistory: string;
+  pastDrugHistory: string;
+  allergies: string;
+  familyAndSocialHistory: string;
+  clinicalExamination: string;
+  assessment: string;
+  treatmentPlan: string;
+  investigations: string;
+  ePrescription: string;
+};
+
+const EMPTY_CLINICAL_NOTE_FORM: ClinicalNoteFormData = {
+  presentingComplaint: '',
+  historyOfPresentingComplaint: '',
+  pastMedicalHistory: '',
+  pastDrugHistory: '',
+  allergies: '',
+  familyAndSocialHistory: '',
+  clinicalExamination: '',
+  assessment: '',
+  treatmentPlan: '',
+  investigations: '',
+  ePrescription: '',
+};
+
 const countUnreadAdminReplies = (
   rows: Array<{ message?: string | null; created_at?: string | null }>,
   getThreadReadAtMs: (row: { message?: string | null; created_at?: string | null }) => number,
@@ -316,6 +344,12 @@ const DoctorPortal = () => {
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduleTime, setRescheduleTime] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [clinicalNotesDialogOpen, setClinicalNotesDialogOpen] = useState(false);
+  const [selectedAppointmentForClinicalNotes, setSelectedAppointmentForClinicalNotes] = useState<any>(null);
+  const [selectedSessionIdForClinicalNotes, setSelectedSessionIdForClinicalNotes] = useState<string | null>(null);
+  const [clinicalNoteForm, setClinicalNoteForm] = useState<ClinicalNoteFormData>(EMPTY_CLINICAL_NOTE_FORM);
+  const [isSavingClinicalNotes, setIsSavingClinicalNotes] = useState(false);
+  const [isPreparingClinicalNotes, setIsPreparingClinicalNotes] = useState(false);
   const [isApprovedBannerDismissed, setIsApprovedBannerDismissed] = useState(false);
   const appliedPreferredLanguageRef = useRef(false);
   const sessionParticipantsCacheRef = useRef<Map<string, { patient_id: string | null; doctor_id: string | null }>>(new Map());
@@ -887,6 +921,44 @@ const DoctorPortal = () => {
       .split('_')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
+
+  const isMissingTranslationColumnsError = (error: unknown): boolean => {
+    if (!error || typeof error !== 'object') return false;
+    const code = (error as { code?: unknown }).code;
+    const message = (error as { message?: unknown }).message;
+    const normalizedMessage = typeof message === 'string' ? message.toLowerCase() : '';
+
+    return (
+      (
+        code === '42703' &&
+        normalizedMessage.includes('_translations') &&
+        normalizedMessage.includes('does not exist')
+      ) ||
+      (
+        code === 'PGRST204' &&
+        normalizedMessage.includes('_translations') &&
+        normalizedMessage.includes('schema cache')
+      )
+    );
+  };
+
+  const isLegacyPatientFolderRpcSignatureError = (error: unknown): boolean => {
+    if (!error || typeof error !== 'object') return false;
+    const code = (error as { code?: unknown }).code;
+    const message = (error as { message?: unknown }).message;
+    if (typeof message !== 'string') return false;
+
+    return (
+      (code === 'PGRST202' || code === '42883') &&
+      message.includes('doctor_append_to_patient_folder')
+    );
+  };
+
+  const toTranslationPayload = (value: string): Record<string, string> => {
+    const normalized = value.trim();
+    if (!normalized) return {};
+    return { [language]: normalized };
+  };
 
   const entryHeaderRegex = /---\s*Entry:\s*(.+?)\s+by doctor:([0-9a-fA-F-]{36})/g;
 
@@ -1553,6 +1625,273 @@ const DoctorPortal = () => {
         description: t('doctorPortal.messaging.failedDescription', 'Please try again in a moment.'),
         variant: 'destructive',
       });
+    }
+  };
+
+  const openClinicalNotesDialog = async (apt: any) => {
+    if (!user?.id) return;
+    const appointmentId = String(apt?.id || '').trim();
+    const patientId = String(apt?.patient_id || '').trim();
+
+    if (!appointmentId || !patientId) {
+      toast({
+        title: 'Unable to add clinical notes',
+        description: 'This appointment is missing patient/session context.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsPreparingClinicalNotes(true);
+    try {
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointmentId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      let sessionId = existingSession?.id ?? null;
+      if (!sessionId) {
+        const consultationTypeCandidate = String(
+          apt?.consultation_type ||
+          apt?.consultationType ||
+          apt?.consultation_mode ||
+          DEFAULT_CONSULTATION_TYPE
+        ).toLowerCase();
+        const consultationType: 'video' | 'audio' | 'chat' =
+          consultationTypeCandidate === 'audio' || consultationTypeCandidate === 'chat'
+            ? consultationTypeCandidate
+            : 'video';
+
+        const { data: createdSession, error: createSessionError } = await supabase
+          .from('consultation_sessions')
+          .insert({
+            appointment_id: appointmentId,
+            patient_id: patientId,
+            doctor_id: user.id,
+            consultation_type: consultationType,
+            status: 'ended',
+            started_at: new Date().toISOString(),
+            ended_at: new Date().toISOString(),
+            duration_seconds: 0,
+          })
+          .select('id')
+          .single();
+
+        if (createSessionError) throw createSessionError;
+        sessionId = createdSession.id;
+      }
+
+      setSelectedAppointmentForClinicalNotes(apt);
+      setSelectedSessionIdForClinicalNotes(sessionId);
+      setClinicalNoteForm(EMPTY_CLINICAL_NOTE_FORM);
+      setClinicalNotesDialogOpen(true);
+    } catch (error) {
+      console.error('Failed to open clinical notes dialog:', error);
+      toast({
+        title: 'Unable to add clinical notes',
+        description: 'Please try again in a moment.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsPreparingClinicalNotes(false);
+    }
+  };
+
+  const submitClinicalNotes = async () => {
+    if (!user?.id || !selectedAppointmentForClinicalNotes || !selectedSessionIdForClinicalNotes) return;
+    if (isSavingClinicalNotes) return;
+
+    const presentingComplaint = clinicalNoteForm.presentingComplaint.trim();
+    const historyOfPresentingComplaint = clinicalNoteForm.historyOfPresentingComplaint.trim();
+    const pastMedicalHistory = clinicalNoteForm.pastMedicalHistory.trim();
+    const pastDrugHistory = clinicalNoteForm.pastDrugHistory.trim();
+    const allergies = clinicalNoteForm.allergies.trim();
+    const familyAndSocialHistory = clinicalNoteForm.familyAndSocialHistory.trim();
+    const clinicalExamination = clinicalNoteForm.clinicalExamination.trim();
+    const assessment = clinicalNoteForm.assessment.trim();
+    const treatmentPlan = clinicalNoteForm.treatmentPlan.trim();
+    const investigations = clinicalNoteForm.investigations.trim();
+    const ePrescription = clinicalNoteForm.ePrescription.trim();
+
+    if (
+      !presentingComplaint &&
+      !historyOfPresentingComplaint &&
+      !pastMedicalHistory &&
+      !pastDrugHistory &&
+      !allergies &&
+      !familyAndSocialHistory &&
+      !clinicalExamination &&
+      !assessment &&
+      !treatmentPlan &&
+      !investigations &&
+      !ePrescription
+    ) {
+      toast({
+        title: 'Empty Clinical Notes',
+        description: 'Please document at least one section before saving.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const composedNote = `
+${folderLanguageText.fields.presenting_complaint.label}:
+${presentingComplaint}
+
+${folderLanguageText.fields.history_of_presenting_complaint.label}:
+${historyOfPresentingComplaint}
+
+${folderLanguageText.fields.past_medical_history.label}:
+${pastMedicalHistory}
+
+${folderLanguageText.fields.past_drug_history.label}:
+${pastDrugHistory}
+
+${folderLanguageText.fields.allergies.label}:
+${allergies}
+
+${folderLanguageText.fields.family_social_history.label}:
+${familyAndSocialHistory}
+
+${folderLanguageText.fields.clinical_examination.label}:
+${clinicalExamination}
+
+${folderLanguageText.fields.assessment.label}:
+${assessment}
+
+${folderLanguageText.fields.treatment_plan.label}:
+${treatmentPlan}
+
+${folderLanguageText.fields.investigations.label}:
+${investigations}
+
+${folderLanguageText.fields.e_prescription.label}:
+${ePrescription}
+`;
+
+    setIsSavingClinicalNotes(true);
+    try {
+      const insertPayloadWithTranslations = {
+        session_id: selectedSessionIdForClinicalNotes,
+        patient_id: selectedAppointmentForClinicalNotes.patient_id,
+        doctor_id: user.id,
+        diagnosis: assessment || null,
+        diagnosis_translations: toTranslationPayload(assessment),
+        treatment_plan: treatmentPlan || null,
+        treatment_plan_translations: toTranslationPayload(treatmentPlan),
+        prescriptions: ePrescription || null,
+        prescriptions_translations: toTranslationPayload(ePrescription),
+        follow_up_notes: composedNote,
+        follow_up_notes_translations: toTranslationPayload(composedNote),
+      };
+
+      const insertPayloadLegacy = {
+        session_id: selectedSessionIdForClinicalNotes,
+        patient_id: selectedAppointmentForClinicalNotes.patient_id,
+        doctor_id: user.id,
+        diagnosis: assessment || null,
+        treatment_plan: treatmentPlan || null,
+        prescriptions: ePrescription || null,
+        follow_up_notes: composedNote,
+      };
+
+      const insertWithTranslationsResult = await supabase
+        .from('doctor_consultation_notes')
+        .insert(insertPayloadWithTranslations);
+
+      if (insertWithTranslationsResult.error) {
+        if (!isMissingTranslationColumnsError(insertWithTranslationsResult.error)) {
+          throw insertWithTranslationsResult.error;
+        }
+
+        const legacyInsertResult = await supabase
+          .from('doctor_consultation_notes')
+          .insert(insertPayloadLegacy);
+
+        if (legacyInsertResult.error) throw legacyInsertResult.error;
+      }
+
+      const rpcPayloadWithTranslations = {
+        p_patient_id: selectedAppointmentForClinicalNotes.patient_id,
+        p_note_text: composedNote,
+        p_presenting_complaint: presentingComplaint || null,
+        p_history_of_presenting_complaint: historyOfPresentingComplaint || null,
+        p_past_medical_history: pastMedicalHistory || null,
+        p_past_drug_history: pastDrugHistory || null,
+        p_allergies: allergies || null,
+        p_family_social_history: familyAndSocialHistory || null,
+        p_clinical_examination: clinicalExamination || null,
+        p_assessment: assessment || null,
+        p_treatment_plan: treatmentPlan || null,
+        p_investigations: investigations || null,
+        p_e_prescription: ePrescription || null,
+        p_medical_history_translations: toTranslationPayload(composedNote),
+        p_presenting_complaint_translations: toTranslationPayload(presentingComplaint),
+        p_history_of_presenting_complaint_translations: toTranslationPayload(historyOfPresentingComplaint),
+        p_past_medical_history_translations: toTranslationPayload(pastMedicalHistory),
+        p_past_drug_history_translations: toTranslationPayload(pastDrugHistory),
+        p_allergies_translations: toTranslationPayload(allergies),
+        p_family_social_history_translations: toTranslationPayload(familyAndSocialHistory),
+        p_clinical_examination_translations: toTranslationPayload(clinicalExamination),
+        p_assessment_translations: toTranslationPayload(assessment),
+        p_treatment_plan_translations: toTranslationPayload(treatmentPlan),
+        p_investigations_translations: toTranslationPayload(investigations),
+        p_e_prescription_translations: toTranslationPayload(ePrescription),
+      };
+
+      const rpcPayloadLegacy = {
+        p_patient_id: selectedAppointmentForClinicalNotes.patient_id,
+        p_note_text: composedNote,
+        p_presenting_complaint: presentingComplaint || null,
+        p_history_of_presenting_complaint: historyOfPresentingComplaint || null,
+        p_past_medical_history: pastMedicalHistory || null,
+        p_past_drug_history: pastDrugHistory || null,
+        p_allergies: allergies || null,
+        p_family_social_history: familyAndSocialHistory || null,
+        p_clinical_examination: clinicalExamination || null,
+        p_assessment: assessment || null,
+        p_treatment_plan: treatmentPlan || null,
+        p_investigations: investigations || null,
+        p_e_prescription: ePrescription || null,
+      };
+
+      const rpcWithTranslationsResult = await supabase.rpc(
+        'doctor_append_to_patient_folder',
+        rpcPayloadWithTranslations
+      );
+
+      if (rpcWithTranslationsResult.error) {
+        if (!isLegacyPatientFolderRpcSignatureError(rpcWithTranslationsResult.error)) {
+          throw rpcWithTranslationsResult.error;
+        }
+
+        const legacyRpcResult = await supabase.rpc('doctor_append_to_patient_folder', rpcPayloadLegacy);
+        if (legacyRpcResult.error) throw legacyRpcResult.error;
+      }
+
+      toast({
+        title: 'Clinical Notes Saved',
+        description: 'Clinical notes were added to this consultation successfully.',
+      });
+      setClinicalNotesDialogOpen(false);
+      setClinicalNoteForm(EMPTY_CLINICAL_NOTE_FORM);
+      if (selectedAppointmentForFolder?.id === selectedAppointmentForClinicalNotes.id) {
+        await handleViewPatientFolder(selectedAppointmentForClinicalNotes);
+      }
+    } catch (error) {
+      console.error('Failed to save clinical notes:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to save clinical notes.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingClinicalNotes(false);
     }
   };
 
@@ -2301,6 +2640,21 @@ const DoctorPortal = () => {
                     >
                       <MessageSquare className="w-4 h-4 mr-2" />
                       {t('doctorPortal.actions.message', 'Message')}
+                    </Button>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'in_progress' || calendarFocusedAppointment.status === 'completed') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        openClinicalNotesDialog(calendarFocusedAppointment);
+                        setCalendarEventDialogOpen(false);
+                      }}
+                      disabled={isPreparingClinicalNotes}
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
                     </Button>
                   )}
                   {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
@@ -3876,6 +4230,18 @@ const DoctorPortal = () => {
                                       <MessageSquare className="w-4 h-4 mr-2" />
                                       {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
+                                    {apt.status === 'in_progress' && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="w-full sm:w-auto"
+                                        onClick={() => openClinicalNotesDialog(apt)}
+                                        disabled={isPreparingClinicalNotes}
+                                      >
+                                        <FileText className="w-4 h-4 mr-2" />
+                                        {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
+                                      </Button>
+                                    )}
                                     {apt.patient_id && (
                                       <Button
                                         size="sm"
@@ -4029,6 +4395,17 @@ const DoctorPortal = () => {
                                       <MessageSquare className="w-4 h-4 mr-2" />
                                       {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
+                                    {(apt.status === 'in_progress' || apt.status === 'completed') && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => openClinicalNotesDialog(apt)}
+                                        disabled={isPreparingClinicalNotes}
+                                      >
+                                        <FileText className="w-4 h-4 mr-2" />
+                                        {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
+                                      </Button>
+                                    )}
                                     {apt.patient_id && (
                                       <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
@@ -4120,6 +4497,17 @@ const DoctorPortal = () => {
                                     <Button size="sm" variant="outline" onClick={() => openMessagesForAppointment(apt)}>
                                       <MessageSquare className="w-4 h-4 mr-2" />
                                       {t('doctorPortal.actions.message', 'Message')}
+                                    </Button>
+                                  )}
+                                  {!pendingReschedule && (apt.status === 'in_progress' || apt.status === 'completed') && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openClinicalNotesDialog(apt)}
+                                      disabled={isPreparingClinicalNotes}
+                                    >
+                                      <FileText className="w-4 h-4 mr-2" />
+                                      {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
                                     </Button>
                                   )}
                                   {apt.patient_id && (
@@ -5120,6 +5508,147 @@ const DoctorPortal = () => {
               </Button>
               <Button onClick={submitReschedule} disabled={isRescheduling}>
                 {isRescheduling ? t('common.submitting', 'Submitting...') : t('common.submitRequest', 'Submit Request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={clinicalNotesDialogOpen}
+          onOpenChange={(open) => {
+            setClinicalNotesDialogOpen(open);
+            if (!open) {
+              setSelectedAppointmentForClinicalNotes(null);
+              setSelectedSessionIdForClinicalNotes(null);
+              setClinicalNoteForm(EMPTY_CLINICAL_NOTE_FORM);
+            }
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>{t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}</DialogTitle>
+              <DialogDescription>
+                {selectedAppointmentForClinicalNotes
+                  ? t('doctorPortal.notes.addForPatient', 'Add clinical notes for {patient}.').replace('{patient}', selectedAppointmentForClinicalNotes.patient_name || t('doctorPortal.defaults.thisPatient', 'this patient'))
+                  : t('doctorPortal.notes.addForConsultation', 'Add clinical notes for this consultation.')}
+              </DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="max-h-[65vh] pr-2">
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.presenting_complaint.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.presentingComplaint}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, presentingComplaint: e.target.value }))}
+                    placeholder={folderLanguageText.fields.presenting_complaint.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.history_of_presenting_complaint.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.historyOfPresentingComplaint}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, historyOfPresentingComplaint: e.target.value }))}
+                    placeholder={folderLanguageText.fields.history_of_presenting_complaint.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.past_medical_history.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.pastMedicalHistory}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, pastMedicalHistory: e.target.value }))}
+                    placeholder={folderLanguageText.fields.past_medical_history.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.past_drug_history.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.pastDrugHistory}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, pastDrugHistory: e.target.value }))}
+                    placeholder={folderLanguageText.fields.past_drug_history.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.allergies.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.allergies}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, allergies: e.target.value }))}
+                    placeholder={folderLanguageText.fields.allergies.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.family_social_history.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.familyAndSocialHistory}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, familyAndSocialHistory: e.target.value }))}
+                    placeholder={folderLanguageText.fields.family_social_history.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.clinical_examination.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.clinicalExamination}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, clinicalExamination: e.target.value }))}
+                    placeholder={folderLanguageText.fields.clinical_examination.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.assessment.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.assessment}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, assessment: e.target.value }))}
+                    placeholder={folderLanguageText.fields.assessment.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.treatment_plan.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.treatmentPlan}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, treatmentPlan: e.target.value }))}
+                    placeholder={folderLanguageText.fields.treatment_plan.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.investigations.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.investigations}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, investigations: e.target.value }))}
+                    placeholder={folderLanguageText.fields.investigations.placeholder}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">{folderLanguageText.fields.e_prescription.label}</label>
+                  <Textarea
+                    className="mt-1"
+                    value={clinicalNoteForm.ePrescription}
+                    onChange={(e) => setClinicalNoteForm((prev) => ({ ...prev, ePrescription: e.target.value }))}
+                    placeholder={folderLanguageText.fields.e_prescription.placeholder}
+                  />
+                </div>
+              </div>
+            </ScrollArea>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setClinicalNotesDialogOpen(false)}
+                disabled={isSavingClinicalNotes}
+              >
+                {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button
+                onClick={submitClinicalNotes}
+                disabled={isSavingClinicalNotes || isPreparingClinicalNotes}
+              >
+                {isSavingClinicalNotes ? t('doctorPortal.actions.saving', 'Saving...') : t('doctorPortal.actions.saveClinicalNotes', 'Save Clinical Notes')}
               </Button>
             </DialogFooter>
           </DialogContent>

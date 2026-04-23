@@ -3,10 +3,13 @@ import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
+import { Gift } from 'lucide-react';
 
 export default function BookingPage() {
   const { user, isLoading } = useAuth();
   const { t } = useLanguage();
+  const { data: promotion } = useActivePatientPromotion();
   const navigate = useNavigate();
   const location = useLocation();
   const { doctorId: doctorIdParam } = useParams<{ doctorId?: string }>();
@@ -50,6 +53,17 @@ export default function BookingPage() {
     <Layout>
       <div className="min-h-screen flex items-center justify-center bg-muted/30">
         <div className="text-center">
+          {promotion?.isActive ? (
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
+              <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                <Gift className="h-4 w-4" />
+                Free consultation promotion is active
+              </p>
+              <p className="mt-1 text-xs text-emerald-700">
+                {promotion.remaining.toLocaleString()} of {promotion.limit.toLocaleString()} slots left for newly registered patients who complete registration.
+              </p>
+            </div>
+          ) : null}
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-muted-foreground">{t('booking.redirecting', 'Redirecting...')}</p>
         </div>

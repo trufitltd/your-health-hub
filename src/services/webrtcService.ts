@@ -9,6 +9,7 @@ export interface WebRTCSignal {
 }
 
 export class WebRTCService {
+  private static turnIceCache: { iceServers: RTCIceServer[]; expiresAtMs: number } | null = null;
   private peerConnection: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private sessionId: string;
@@ -72,25 +73,16 @@ export class WebRTCService {
     
     this.localStream = localStream;
     
-    // Enhanced STUN/TURN configuration for better connectivity
-    const iceServers = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      {
-        urls: 'turn:turn.example.com:3478',
-        username: 'user',
-        credential: 'password'
-      }
-    ];
+    const iceServers = await this.getIceServersForSession();
+    const forceRelay = this.shouldForceRelay();
 
     try {
       this.peerConnection = new RTCPeerConnection({
         iceServers: iceServers,
-        iceTransportPolicy: 'all',
+        iceTransportPolicy: forceRelay ? 'relay' : 'all',
         bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require'
+        rtcpMuxPolicy: 'require',
+        iceCandidatePoolSize: 10
       });
 
       if (this.isInitiator) {
@@ -328,6 +320,115 @@ export class WebRTCService {
       console.error('Error initializing WebRTC peer:', error);
       throw error;
     }
+  }
+
+  private async getIceServersForSession(): Promise<RTCIceServer[]> {
+    const fallbackIceServers = this.buildFallbackIceServers();
+    const now = Date.now();
+    const cached = WebRTCService.turnIceCache;
+    if (cached && cached.expiresAtMs > now + 30_000) {
+      return cached.iceServers;
+    }
+
+    try {
+      const { data, error } = await supabase.functions.invoke('turn-credentials', {
+        body: {
+          sessionId: this.sessionId,
+        },
+      });
+
+      if (error) {
+        console.warn('[WebRTC] Failed to fetch ephemeral TURN credentials:', error.message);
+        return fallbackIceServers;
+      }
+
+      const parsed = this.parseEphemeralIceResponse(data);
+      if (!parsed) {
+        console.warn('[WebRTC] TURN credentials response is invalid. Falling back to env TURN settings.');
+        return fallbackIceServers;
+      }
+
+      WebRTCService.turnIceCache = parsed;
+      return parsed.iceServers;
+    } catch (error) {
+      console.warn('[WebRTC] Error while fetching TURN credentials. Using fallback ICE config.', error);
+      return fallbackIceServers;
+    }
+  }
+
+  private parseEphemeralIceResponse(
+    payload: unknown,
+  ): { iceServers: RTCIceServer[]; expiresAtMs: number } | null {
+    if (!payload || typeof payload !== 'object') return null;
+    const data = payload as {
+      iceServers?: unknown;
+      expiresAt?: unknown;
+      ttlSeconds?: unknown;
+    };
+
+    if (!Array.isArray(data.iceServers) || data.iceServers.length === 0) {
+      return null;
+    }
+
+    const expiresAtFromPayload =
+      typeof data.expiresAt === 'string' ? Date.parse(data.expiresAt) : Number.NaN;
+    const ttlSeconds = Number(data.ttlSeconds);
+    const expiresAtMs = Number.isFinite(expiresAtFromPayload)
+      ? expiresAtFromPayload
+      : Date.now() + (Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 900) * 1000;
+
+    if (!Number.isFinite(expiresAtMs)) return null;
+
+    return {
+      iceServers: data.iceServers as RTCIceServer[],
+      expiresAtMs,
+    };
+  }
+
+  private buildFallbackIceServers(): RTCIceServer[] {
+    const stunServers = [
+      'stun:stun.cloudflare.com:3478',
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+    ];
+
+    const turnUrls = this.parseCsvEnv('VITE_TURN_URLS');
+    const legacyTurnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
+    if (legacyTurnUrl?.trim()) {
+      turnUrls.push(legacyTurnUrl.trim());
+    }
+
+    const turnUsername = (import.meta.env.VITE_TURN_USERNAME as string | undefined)?.trim();
+    const turnCredential = (import.meta.env.VITE_TURN_CREDENTIAL as string | undefined)?.trim();
+
+    const iceServers: RTCIceServer[] = [{ urls: stunServers }];
+
+    if (turnUrls.length > 0 && turnUsername && turnCredential) {
+      iceServers.push({
+        urls: Array.from(new Set(turnUrls)),
+        username: turnUsername,
+        credential: turnCredential,
+      });
+    } else {
+      console.warn('[WebRTC] TURN is not fully configured. Falling back to STUN-only connectivity.');
+    }
+
+    return iceServers;
+  }
+
+  private parseCsvEnv(key: string): string[] {
+    const value = import.meta.env[key] as string | undefined;
+    if (!value) return [];
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  private shouldForceRelay(): boolean {
+    const value = import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined;
+    return value === '1' || value === 'true';
   }
 
   private async addLocalTracks(stream?: MediaStream | null) {
