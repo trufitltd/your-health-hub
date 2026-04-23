@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import { useAuth } from '@/hooks/useAuth';
+import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 import heroDoctor from '@/assets/hero-doctor.jpg';
 import heroDoctor2 from '@/assets/myedoctor_hero.png';
 import heroDoctor3 from '@/assets/myedoctor_hero3.jpeg';
@@ -19,6 +20,7 @@ const Index = () => {
   const { t } = useLanguage();
   const { formatNumber } = useLocaleFormatter();
   const { user, role, isLoading } = useAuth();
+  const { data: promotion } = useActivePatientPromotion();
   const navigate = useNavigate();
 
   // Redirect authenticated users to their portals
@@ -98,6 +100,12 @@ const Index = () => {
     return template.replace(/1,?000/g, formatNumber(1000));
   })();
 
+  const promotionHeadline = promotion
+    ? `Free consultation offer: ${promotion.remaining} of ${promotion.limit} slots left`
+    : '';
+  const promotionBody =
+    'For newly registered patients only. Complete your registration profile to claim one free consultation slot.';
+
   // Show loading while checking authentication
   if (isLoading) {
     return (
@@ -130,6 +138,12 @@ const Index = () => {
               transition={{ duration: 0.6 }}
               className="text-center lg:text-left"
             >
+              {promotion?.isActive ? (
+                <div className="mb-4 inline-flex max-w-xl flex-col gap-1 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm">
+                  <p className="text-sm font-semibold text-emerald-800">{promotionHeadline}</p>
+                  <p className="text-xs text-emerald-700">{promotionBody}</p>
+                </div>
+              ) : null}
               <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-light text-primary text-sm font-medium mb-6">
                 <Star className="w-4 h-4 fill-primary" />
                 {trustedBadgeText}

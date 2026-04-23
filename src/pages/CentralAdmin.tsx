@@ -120,18 +120,41 @@ interface AdminAppointmentRow {
   doctor_phone: string;
 }
 
-interface AdminClerkingRow {
+interface AdminPatientFolderRow {
   id: string;
-  session_id: string | null;
-  doctor_id: string | null;
   patient_id: string | null;
-  diagnosis: string | null;
-  treatment_plan: string | null;
-  prescriptions: string | null;
-  follow_up_notes: string | null;
-  created_at: string | null;
-  doctor_name: string;
   patient_name: string;
+  patient_email: string;
+  patient_type: string | null;
+  presenting_complaint: string | null;
+  history_of_presenting_complaint: string | null;
+  past_medical_history: string | null;
+  past_drug_history: string | null;
+  allergies: string | null;
+  family_social_history: string | null;
+  clinical_examination: string | null;
+  assessment: string | null;
+  treatment_plan: string | null;
+  investigations: string | null;
+  e_prescription: string | null;
+  medical_history: string | null;
+  current_medications: string | null;
+  previous_diagnoses: string | null;
+  notes_count: number;
+  latest_note_at: string | null;
+  uploaded_investigations_count: number;
+  latest_uploaded_investigation_at: string | null;
+  uploaded_investigations: Array<{
+    id: string;
+    file_name: string | null;
+    file_url: string | null;
+    file_type: string | null;
+    file_size: number | null;
+    uploaded_at: string | null;
+    notes: string | null;
+  }>;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 const hasDoctorRegistrationLicense = (doctor: Pick<Doctor, 'medical_license_url' | 'license_file_url'>) => {
@@ -309,6 +332,14 @@ const CentralAdmin = () => {
   const { formatDate, formatDateTime, formatCurrency } = useLocaleFormatter();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
+  const formatBytes = (rawBytes: unknown) => {
+    const bytes = Number(rawBytes);
+    if (!Number.isFinite(bytes) || bytes <= 0) return null;
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { playNotificationSound } = useNotificationSound();
@@ -346,8 +377,8 @@ const CentralAdmin = () => {
   const [notificationAlertIntensity, setNotificationAlertIntensityState] = useState<NotificationAlertIntensity>(() => getNotificationAlertIntensity());
   const [isUpdatingDoctorSignupStatus, setIsUpdatingDoctorSignupStatus] = useState(false);
   const [isUpdatingPatientSignupStatus, setIsUpdatingPatientSignupStatus] = useState(false);
-  const [clerkingSearch, setClerkingSearch] = useState('');
-  const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'clerking'>(null);
+  const [patientFolderSearch, setPatientFolderSearch] = useState('');
+  const [isExporting, setIsExporting] = useState<null | 'all' | 'appointments' | 'doctors' | 'patients' | 'patient-folders'>(null);
   const [doctorSignupOpen, setDoctorSignupOpen] = useState(true);
   const [doctorSignupClosedMessage, setDoctorSignupClosedMessage] = useState(
     'Doctor sign up has been closed for this round and will resume soon. Please keep checking the site.',
@@ -862,54 +893,59 @@ const CentralAdmin = () => {
     setUnreadAppointmentCount(activeTab === 'appointments' ? 0 : newAppointments.length);
   }, [activeTab, newAppointments]);
 
-  const { data: adminClerkingNotes = [], isLoading: adminClerkingLoading, isError: adminClerkingError } = useQuery({
-    queryKey: ['admin-clerking-notes'],
+  const { data: adminPatientFolders = [], isLoading: adminPatientFoldersLoading, isError: adminPatientFoldersError } = useQuery({
+    queryKey: ['admin-patient-folders'],
     queryFn: async () => {
-      const { data, error } = await supabase.rpc('get_admin_clerking_notes', { limit_count: 500 });
+      const { data, error } = await supabase.rpc('admin_list_patient_folders', {
+        p_limit: 500,
+        p_offset: 0,
+      });
 
-      if (error) {
-        console.error('Error fetching admin clerking notes via RPC:', error);
-        const rpcMissing =
-          String((error as any)?.code || '') === 'PGRST202' ||
-          String((error as any)?.message || '').includes('get_admin_clerking_notes');
-        if (!rpcMissing) throw error;
+      if (error) throw error;
 
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('doctor_consultation_notes')
-          .select('id, session_id, doctor_id, patient_id, diagnosis, treatment_plan, prescriptions, follow_up_notes, created_at')
-          .order('created_at', { ascending: false })
-          .limit(500);
-
-        if (fallbackError) throw fallbackError;
-
-        return ((fallbackData || []) as Array<any>).map((row) => ({
-          id: String(row.id),
-          session_id: row.session_id || null,
-          doctor_id: row.doctor_id || null,
-          patient_id: row.patient_id || null,
-          diagnosis: row.diagnosis || null,
+      return ((data || []) as Array<any>).map((row, index) => {
+        const patientId = String(row.patient_id || '').trim();
+        const stableId = String(row.id || '').trim() || (patientId ? `patient-${patientId}` : `folder-${index}`);
+        const uploadedInvestigations = Array.isArray(row.uploaded_investigations)
+          ? row.uploaded_investigations.map((file: any, fileIndex: number) => ({
+              id: String(file?.id || `file-${fileIndex}`),
+              file_name: file?.file_name || null,
+              file_url: file?.file_url || null,
+              file_type: file?.file_type || null,
+              file_size: typeof file?.file_size === 'number' ? file.file_size : Number(file?.file_size || 0) || null,
+              uploaded_at: file?.uploaded_at || null,
+              notes: file?.notes || null,
+            }))
+          : [];
+        return {
+          id: stableId,
+          patient_id: patientId || null,
+          patient_name: String(row.patient_name || 'Patient'),
+          patient_email: String(row.patient_email || ''),
+          patient_type: row.patient_type || null,
+          presenting_complaint: row.presenting_complaint || null,
+          history_of_presenting_complaint: row.history_of_presenting_complaint || null,
+          past_medical_history: row.past_medical_history || null,
+          past_drug_history: row.past_drug_history || null,
+          allergies: row.allergies || null,
+          family_social_history: row.family_social_history || null,
+          clinical_examination: row.clinical_examination || null,
+          assessment: row.assessment || null,
           treatment_plan: row.treatment_plan || null,
-          prescriptions: row.prescriptions || null,
-          follow_up_notes: row.follow_up_notes || null,
+          investigations: row.investigations || null,
+          e_prescription: row.e_prescription || null,
+          medical_history: row.medical_history || null,
+          current_medications: row.current_medications || null,
+          previous_diagnoses: row.previous_diagnoses || null,
+          notes_count: Number(row.notes_count || 0),
+          latest_note_at: row.latest_note_at || null,
+          uploaded_investigations_count: Number(row.uploaded_investigations_count || uploadedInvestigations.length || 0),
+          latest_uploaded_investigation_at: row.latest_uploaded_investigation_at || null,
+          uploaded_investigations: uploadedInvestigations,
           created_at: row.created_at || null,
-          doctor_name: 'Doctor',
-          patient_name: 'Patient',
-        } satisfies AdminClerkingRow));
-      }
-
-      return ((data || []) as Array<any>).map((row) => ({
-        id: String(row.id),
-        session_id: row.session_id || null,
-        doctor_id: row.doctor_id || null,
-        patient_id: row.patient_id || null,
-        diagnosis: row.diagnosis || null,
-        treatment_plan: row.treatment_plan || null,
-        prescriptions: row.prescriptions || null,
-        follow_up_notes: row.follow_up_notes || null,
-        created_at: row.created_at || null,
-        doctor_name: String(row.doctor_name || 'Doctor'),
-        patient_name: String(row.patient_name || 'Patient'),
-      } satisfies AdminClerkingRow));
+          updated_at: row.updated_at || null,
+        } satisfies AdminPatientFolderRow;
+      });
     },
     enabled: !!user && isAdmin,
     refetchInterval: 30000,
@@ -954,23 +990,35 @@ const CentralAdmin = () => {
       : 0,
   };
 
-  const clerkingRowsFiltered = useMemo(() => {
-    const q = clerkingSearch.trim().toLowerCase();
-    if (!q) return adminClerkingNotes;
-    return adminClerkingNotes.filter((row) => {
+  const patientFolderRowsFiltered = useMemo(() => {
+    const q = patientFolderSearch.trim().toLowerCase();
+    if (!q) return adminPatientFolders;
+    return adminPatientFolders.filter((row) => {
       const haystack = [
-        row.doctor_name,
         row.patient_name,
-        row.diagnosis,
+        row.patient_email,
+        row.patient_type,
+        row.presenting_complaint,
+        row.history_of_presenting_complaint,
+        row.past_medical_history,
+        row.past_drug_history,
+        row.allergies,
+        row.family_social_history,
+        row.clinical_examination,
+        row.assessment,
         row.treatment_plan,
-        row.prescriptions,
-        row.follow_up_notes,
+        row.investigations,
+        row.e_prescription,
+        row.medical_history,
+        row.current_medications,
+        row.previous_diagnoses,
+        ...row.uploaded_investigations.map((file) => `${file.file_name || ''} ${file.notes || ''}`),
       ]
         .map((value) => String(value || '').toLowerCase())
         .join(' ');
       return haystack.includes(q);
     });
-  }, [adminClerkingNotes, clerkingSearch]);
+  }, [adminPatientFolders, patientFolderSearch]);
 
   const qaMetrics = useMemo(() => {
     const total = qaAppointments.length;
@@ -1711,13 +1759,12 @@ const CentralAdmin = () => {
       return (data || []) as Array<Record<string, unknown>>;
     });
 
-  const fetchAllClerkingForExport = async () =>
+  const fetchAllPatientFoldersForExport = async () =>
     fetchAllPages(async (from, to) => {
-      const { data, error } = await supabase
-        .from('doctor_consultation_notes')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .range(from, to);
+      const { data, error } = await supabase.rpc('admin_list_patient_folders', {
+        p_limit: to - from + 1,
+        p_offset: from,
+      });
 
       if (error) throw error;
       return (data || []) as Array<Record<string, unknown>>;
@@ -1823,45 +1870,67 @@ const CentralAdmin = () => {
     }
   };
 
-  const exportClerking = async () => {
-    setIsExporting('clerking');
+  const exportPatientFolders = async () => {
+    setIsExporting('patient-folders');
     try {
-      const [clerkingRows, doctorsRows, patientsRows] = await Promise.all([
-        fetchAllClerkingForExport(),
-        fetchAllDoctorsForExport(),
-        fetchAllPatientsForExport(),
-      ]);
-      const { doctorMap, patientMap } = getNameDirectory(doctorsRows, patientsRows);
-      const enrichedRows = clerkingRows.map((row) => {
-        const patientId = String(row.patient_id || '');
-        const doctorId = String(row.doctor_id || '');
-        const patient = patientMap.get(patientId);
-        const doctor = doctorMap.get(doctorId);
-        return {
-          ...row,
-          doctor_name: doctor?.full_name || null,
-          doctor_email: doctor?.email || null,
-          patient_name: patient?.full_name || null,
-          patient_email: patient?.email || null,
-        };
-      });
-      downloadCsvFile(`clerking_${getExportDateSuffix()}.csv`, enrichedRows);
-      toast({ title: 'Download started', description: `Exported ${enrichedRows.length} clerking records.` });
+      const folderRows = await fetchAllPatientFoldersForExport();
+      downloadCsvFile(`patient_folders_${getExportDateSuffix()}.csv`, folderRows);
+      toast({ title: 'Download started', description: `Exported ${folderRows.length} patient folders.` });
     } catch (error: any) {
-      toast({ title: 'Export failed', description: error?.message || 'Could not export clerking notes.', variant: 'destructive' });
+      toast({ title: 'Export failed', description: error?.message || 'Could not export patient folders.', variant: 'destructive' });
     } finally {
       setIsExporting(null);
+    }
+  };
+
+  const exportSinglePatientFolder = async (row: AdminPatientFolderRow) => {
+    try {
+      const folderRow = [
+        {
+          id: row.id,
+          patient_id: row.patient_id,
+          patient_name: row.patient_name,
+          patient_email: row.patient_email,
+          patient_type: row.patient_type,
+          presenting_complaint: row.presenting_complaint,
+          history_of_presenting_complaint: row.history_of_presenting_complaint,
+          past_medical_history: row.past_medical_history,
+          past_drug_history: row.past_drug_history,
+          allergies: row.allergies,
+          family_social_history: row.family_social_history,
+          clinical_examination: row.clinical_examination,
+          assessment: row.assessment,
+          treatment_plan: row.treatment_plan,
+          investigations: row.investigations,
+          e_prescription: row.e_prescription,
+          medical_history: row.medical_history,
+          current_medications: row.current_medications,
+          previous_diagnoses: row.previous_diagnoses,
+          notes_count: row.notes_count,
+          latest_note_at: row.latest_note_at,
+          uploaded_investigations_count: row.uploaded_investigations_count,
+          latest_uploaded_investigation_at: row.latest_uploaded_investigation_at,
+          uploaded_investigations: row.uploaded_investigations,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        },
+      ];
+      const safeName = String(row.patient_name || 'patient').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      downloadCsvFile(`patient_folder_${safeName || 'patient'}_${getExportDateSuffix()}.csv`, folderRow);
+      toast({ title: 'Download started', description: `Exported folder for ${row.patient_name || 'patient'}.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export this patient folder.', variant: 'destructive' });
     }
   };
 
   const exportAllDatasets = async () => {
     setIsExporting('all');
     try {
-      const [doctorsRows, patientsRows, appointmentsRows, clerkingRows] = await Promise.all([
+      const [doctorsRows, patientsRows, appointmentsRows, patientFolderRows] = await Promise.all([
         fetchAllDoctorsForExport(),
         fetchAllPatientsForExport(),
         fetchAllAppointmentsForExport(),
-        fetchAllClerkingForExport(),
+        fetchAllPatientFoldersForExport(),
       ]);
 
       const { doctorMap, patientMap } = getNameDirectory(doctorsRows, patientsRows);
@@ -1883,29 +1952,15 @@ const CentralAdmin = () => {
         };
       });
 
-      const enrichedClerking = clerkingRows.map((row) => {
-        const patientId = String(row.patient_id || '');
-        const doctorId = String(row.doctor_id || '');
-        const patient = patientMap.get(patientId);
-        const doctor = doctorMap.get(doctorId);
-        return {
-          ...row,
-          doctor_name: doctor?.full_name || null,
-          doctor_email: doctor?.email || null,
-          patient_name: patient?.full_name || null,
-          patient_email: patient?.email || null,
-        };
-      });
-
       const suffix = getExportDateSuffix();
       downloadCsvFile(`doctors_${suffix}.csv`, doctorsRows);
       downloadCsvFile(`patients_${suffix}.csv`, patientsRows);
       downloadCsvFile(`appointments_${suffix}.csv`, enrichedAppointments);
-      downloadCsvFile(`clerking_${suffix}.csv`, enrichedClerking);
+      downloadCsvFile(`patient_folders_${suffix}.csv`, patientFolderRows);
 
       toast({
         title: 'Downloads started',
-        description: `Doctors (${doctorsRows.length}), Patients (${patientsRows.length}), Appointments (${enrichedAppointments.length}), Clerkings (${enrichedClerking.length}).`,
+        description: `Doctors (${doctorsRows.length}), Patients (${patientsRows.length}), Appointments (${enrichedAppointments.length}), Patient Folders (${patientFolderRows.length}).`,
       });
     } catch (error: any) {
       toast({ title: 'Export failed', description: error?.message || 'Could not export all datasets.', variant: 'destructive' });
@@ -2143,7 +2198,7 @@ const CentralAdmin = () => {
                     { id: 'verification', label: 'Verification', icon: Award, badge: stats.pendingVerification },
                     { id: 'incomplete-doctors', label: 'Incomplete Doctors', icon: AlertCircle, badge: stats.incompleteDoctors },
                     { id: 'messages', label: 'Messages', icon: Mail, badge: (unreadInboxCount + unreadCooMessages) > 0 ? ((unreadInboxCount + unreadCooMessages) > 99 ? '99+' : unreadInboxCount + unreadCooMessages) : undefined, badgeTone: 'danger' as const },
-                    { id: 'clerking', label: 'Clerking', icon: FileText },
+                    { id: 'patient-folders', label: 'Patient Folders', icon: FileText },
                     { id: 'clinical', label: 'Clinical Activities', icon: FileText },
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                     { id: 'monitoring', label: 'Monitoring', icon: Eye },
@@ -2248,7 +2303,7 @@ const CentralAdmin = () => {
                 <CardHeader>
                   <CardTitle className="text-lg">Data Exports</CardTitle>
                   <CardDescription>
-                    Download all records for appointments, doctors, patients, and clerkings.
+                    Download all records for appointments, doctors, patients, and patient folders.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -2269,9 +2324,9 @@ const CentralAdmin = () => {
                       {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
                       Patients
                     </Button>
-                    <Button variant="outline" onClick={exportClerking} disabled={isExporting !== null}>
-                      {isExporting === 'clerking' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                      Clerkings
+                    <Button variant="outline" onClick={exportPatientFolders} disabled={isExporting !== null}>
+                      {isExporting === 'patient-folders' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Patient Folders
                     </Button>
                   </div>
                 </CardContent>
@@ -2331,7 +2386,7 @@ const CentralAdmin = () => {
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="appointments">Appointments</TabsTrigger>
                 <TabsTrigger value="messages">Messages</TabsTrigger>
-                <TabsTrigger value="clerking">Clerking</TabsTrigger>
+                <TabsTrigger value="patient-folders">Patient Folders</TabsTrigger>
                 <TabsTrigger value="payments">Payments</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="monitoring">Monitoring</TabsTrigger>
@@ -2997,13 +3052,13 @@ const CentralAdmin = () => {
                 </Card>
               </TabsContent>
 
-              {/* Clerking Tab */}
-              <TabsContent value="clerking" className="space-y-6">
+              {/* Patient Folders Tab */}
+              <TabsContent value="patient-folders" className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Doctor Documentation / Clerking</CardTitle>
+                    <CardTitle>Patient Folders</CardTitle>
                     <CardDescription>
-                      Review consultation documentation entered by each doctor.
+                      Review each patient's full folder and download individual folders or all folders.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -3011,52 +3066,123 @@ const CentralAdmin = () => {
                       <div className="relative w-full max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                         <Input
-                          placeholder="Search doctor, patient, diagnosis, treatment..."
+                          placeholder="Search patient, complaint, assessment, treatment..."
                           className="pl-10"
-                          value={clerkingSearch}
-                          onChange={(e) => setClerkingSearch(e.target.value)}
+                          value={patientFolderSearch}
+                          onChange={(e) => setPatientFolderSearch(e.target.value)}
                         />
                       </div>
-                      <Button variant="outline" size="sm" onClick={exportClerking} disabled={isExporting !== null}>
-                        {isExporting === 'clerking' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                        Download CSV
+                      <Button variant="outline" size="sm" onClick={exportPatientFolders} disabled={isExporting !== null}>
+                        {isExporting === 'patient-folders' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                        Download All Folders
                       </Button>
                     </div>
 
                     <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
-                      {adminClerkingLoading ? (
-                        <p className="text-sm text-muted-foreground">Loading clerking notes...</p>
-                      ) : adminClerkingError ? (
-                        <p className="text-sm text-destructive">Failed to load clerking notes. Please refresh or re-run 53_admin_clerking_notes_rpc.sql in Supabase.</p>
-                      ) : clerkingRowsFiltered.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No clerking records found.</p>
+                      {adminPatientFoldersLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading patient folders...</p>
+                      ) : adminPatientFoldersError ? (
+                        <p className="text-sm text-destructive">Failed to load patient folders. Please refresh and try again.</p>
+                      ) : patientFolderRowsFiltered.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No patient folders found.</p>
                       ) : (
-                        clerkingRowsFiltered.map((row) => (
+                        patientFolderRowsFiltered.map((row) => (
                           <div key={row.id} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-sm font-semibold">Dr. {row.doctor_name}</p>
-                              <span className="text-xs text-muted-foreground">
-                                {row.created_at ? formatDateTime(row.created_at) : notAvailableLabel}
-                              </span>
+                              <div>
+                                <p className="text-sm font-semibold">{row.patient_name || 'Patient'}</p>
+                                <p className="text-xs text-muted-foreground">{row.patient_email || notAvailableLabel}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary" className="capitalize">
+                                  {row.patient_type || 'unknown'}
+                                </Badge>
+                                <Button size="sm" variant="outline" onClick={() => exportSinglePatientFolder(row)}>
+                                  <Download className="w-4 h-4 mr-2" />
+                                  Download Folder
+                                </Button>
+                              </div>
                             </div>
-                            <p className="text-xs text-muted-foreground">Patient: {row.patient_name}</p>
+
                             <div className="grid md:grid-cols-2 gap-3 text-sm">
                               <div className="p-3 rounded-lg bg-background border border-border">
-                                <p className="text-xs font-semibold text-muted-foreground mb-1">Diagnosis</p>
-                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.diagnosis || notAvailableLabel}</p>
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Presenting Complaint</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.presenting_complaint || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">History of Presenting Complaint</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.history_of_presenting_complaint || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Assessment</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.assessment || notAvailableLabel}</p>
                               </div>
                               <div className="p-3 rounded-lg bg-background border border-border">
                                 <p className="text-xs font-semibold text-muted-foreground mb-1">Treatment Plan</p>
                                 <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.treatment_plan || notAvailableLabel}</p>
                               </div>
                               <div className="p-3 rounded-lg bg-background border border-border">
-                                <p className="text-xs font-semibold text-muted-foreground mb-1">Prescriptions</p>
-                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.prescriptions || notAvailableLabel}</p>
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Investigations</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.investigations || notAvailableLabel}</p>
                               </div>
                               <div className="p-3 rounded-lg bg-background border border-border">
-                                <p className="text-xs font-semibold text-muted-foreground mb-1">Follow-up Notes</p>
-                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.follow_up_notes || notAvailableLabel}</p>
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">E-Prescription</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.e_prescription || notAvailableLabel}</p>
                               </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Allergies</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.allergies || notAvailableLabel}</p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-background border border-border">
+                                <p className="text-xs font-semibold text-muted-foreground mb-1">Current Medications</p>
+                                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{row.current_medications || notAvailableLabel}</p>
+                              </div>
+                            </div>
+
+                            <div className="grid sm:grid-cols-3 gap-2 text-xs text-muted-foreground">
+                              <p>Clinical notes count: {row.notes_count}</p>
+                              <p>Latest note: {row.latest_note_at ? formatDateTime(row.latest_note_at) : notAvailableLabel}</p>
+                              <p>Last updated: {row.updated_at ? formatDateTime(row.updated_at) : notAvailableLabel}</p>
+                            </div>
+
+                            <div className="rounded-lg border border-border bg-background p-3 space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs font-semibold text-muted-foreground">Patient Uploaded Investigations</p>
+                                <span className="text-xs text-muted-foreground">
+                                  {row.uploaded_investigations_count} file{row.uploaded_investigations_count === 1 ? '' : 's'}
+                                  {row.latest_uploaded_investigation_at ? ` • latest ${formatDateTime(row.latest_uploaded_investigation_at)}` : ''}
+                                </span>
+                              </div>
+                              {row.uploaded_investigations.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No investigations uploaded yet.</p>
+                              ) : (
+                                <div className="space-y-2">
+                                  {row.uploaded_investigations.map((file) => (
+                                    <div key={file.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2">
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-medium break-words">{file.file_name || 'Investigation file'}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {[file.uploaded_at ? formatDateTime(file.uploaded_at) : null, formatBytes(file.file_size), file.file_type]
+                                            .filter(Boolean)
+                                            .join(' • ') || notAvailableLabel}
+                                        </p>
+                                        {file.notes ? (
+                                          <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{file.notes}</p>
+                                        ) : null}
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => file.file_url && window.open(file.file_url, '_blank', 'noopener,noreferrer')}
+                                        disabled={!file.file_url}
+                                      >
+                                        <Eye className="w-4 h-4 mr-2" />
+                                        Open
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))

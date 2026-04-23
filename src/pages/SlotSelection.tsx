@@ -17,6 +17,7 @@ import { usePaystackPayment } from '@/hooks/usePaystackPayment';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
+import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 import {
   formatConsultationLanguageLabel,
   normalizeConsultationLanguage,
@@ -87,6 +88,7 @@ export default function SlotSelection() {
   const { user } = useAuth();
   const { t } = useLanguage();
   const { formatDate: formatLocaleDate, formatClockTime, formatCurrency } = useLocaleFormatter();
+  const { data: promotion } = useActivePatientPromotion();
   const state = location.state as LocationState | null;
   const queryDoctorId = new URLSearchParams(location.search).get('doctor') || undefined;
   const selectedDoctorId = state?.doctorId || queryDoctorId;
@@ -799,6 +801,18 @@ export default function SlotSelection() {
               >
                 {t('slotSelection.back', '← Back')}
               </Button>
+
+              {promotion?.isActive ? (
+                <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                    <Gift className="h-4 w-4" />
+                    Free consultation promotion is live
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-700">
+                    {promotion.remaining.toLocaleString()} of {promotion.limit.toLocaleString()} slots left. Eligibility is enforced automatically at checkout.
+                  </p>
+                </div>
+              ) : null}
 
               <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
                 <CardContent className="p-6">
