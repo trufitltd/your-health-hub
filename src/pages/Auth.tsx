@@ -13,6 +13,7 @@ import { createDefaultSchedule } from '@/services/scheduleService';
 import logoImage from '@/assets/MyE-DoctorLogo.png';
 import { useLocaleFormatter } from '@/lib/locale';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 
 type AuthMode = 'login' | 'register' | 'verify' | 'reset';
 type UserRole = 'patient' | 'doctor';
@@ -250,6 +251,7 @@ export default function AuthPage() {
   const [doctorConsentAgreed, setDoctorConsentAgreed] = useState(false);
   const [consultationLanguages, setConsultationLanguages] = useState<string[]>([]);
   const { formatCurrency, formatNumber } = useLocaleFormatter();
+  const { data: promotion } = useActivePatientPromotion();
   const consultationLanguageOptions = [
     { value: 'english', label: t('auth.values.languages.english', 'English') },
     { value: 'hausa', label: t('auth.values.languages.hausa', 'Hausa') },
@@ -291,6 +293,12 @@ export default function AuthPage() {
   const selectedPhoneCountry = COUNTRY_PHONE_CODES.find((countryCode) => countryCode.iso === phoneCountryIso);
   const selectedPhoneDialCode = selectedPhoneCountry?.dialCode || '+234';
   const activeSignupBlockedMessage = role === 'doctor' ? doctorSignupBlockedMessage : patientSignupBlockedMessage;
+  const promotionHeadline = promotion
+    ? `Free consultation for first ${formatNumber(promotion.limit)} patients`
+    : '';
+  const promotionSubtext = promotion
+    ? `${formatNumber(promotion.remaining)} slot${promotion.remaining === 1 ? '' : 's'} left. New patients must sign up and complete registration to qualify.`
+    : '';
 
   const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
   const RATE_LIMIT_STORAGE_KEY = 'authRateLimitBlockedUntil';
@@ -1070,6 +1078,13 @@ export default function AuthPage() {
               ? t('auth.resetPassword.newPasswordSubtitle', 'Enter your new password below')
               : t('auth.subtitle.joinPatients', 'Join thousands of patients getting quality healthcare')}
           </p>
+
+          {promotion?.isActive ? (
+            <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm font-semibold text-emerald-800">{promotionHeadline}</p>
+              <p className="mt-1 text-xs text-emerald-700">{promotionSubtext}</p>
+            </div>
+          ) : null}
 
           {/* Role Selection (Register only) */}
           {mode === 'register' && (
