@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Layout } from '@/components/layout';
-import { Search, Star, Clock, Video } from 'lucide-react';
+import { Search, Star, Clock, Video, Gift } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn, formatSpecialtyLabel, formatDoctorName } from '@/lib/utils';
@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
+import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 
 interface DoctorCard {
   id: string;
@@ -408,6 +409,7 @@ const getLocalizedSpecialty = (
 
 export default function SpecialistsPage() {
   const { t, language } = useLanguage();
+  const { data: promotion } = useActivePatientPromotion();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSpecialty, setSelectedSpecialty] = useState('__all__');
   const [expandedBios, setExpandedBios] = useState<Set<string>>(new Set());
@@ -587,6 +589,19 @@ export default function SpecialistsPage() {
                 'Browse our network of certified specialists and book your consultation today'
               )}
             </p>
+            {promotion?.isActive ? (
+              <div className="mx-auto mt-6 flex max-w-2xl items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
+                <Gift className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+                <div>
+                  <p className="text-sm font-semibold text-emerald-800">
+                    Promotion live: first {promotion.limit.toLocaleString()} newly registered patients get one free consultation.
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-700">
+                    {promotion.remaining.toLocaleString()} slots left. Complete registration to qualify.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </motion.div>
 
           {/* Search */}
