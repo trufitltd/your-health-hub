@@ -89,11 +89,6 @@ const CONSULTATION_LANGUAGE_LABELS: Record<string, string> = {
   portuguese: 'Portuguese',
 };
 
-const isMissingColumnError = (error: { code?: string; message?: string } | null | undefined) => {
-  if (!error) return false;
-  return error.code === '42703' || error.code === 'PGRST204';
-};
-
 const normalizeConsultationLanguage = (value: string | null | undefined) => {
   if (!value) return '';
   return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -416,12 +411,10 @@ export default function DoctorDiscovery() {
       if (checkTimes.length === 0) return [];
       const uniqueDates = Array.from(new Set(checkTimes.map(({ date }) => date)));
 
-      // Use approved doctors (booking eligibility), not stale doctors.is_active.
-      const { data: approvedDoctors, error: approvedError } = await supabase
-        .from('doctor_registrations')
-        .select('user_id, full_name, medical_license_url')
-        .eq('verification_status', 'approved')
-        .not('medical_license_url', 'is', null);
+      const { data: approvedDoctors, error: approvedError } = await supabase.rpc('list_public_doctors', {
+        p_limit: 5000,
+        p_offset: 0,
+      });
 
       if (approvedError) throw approvedError;
       if (!approvedDoctors || approvedDoctors.length === 0) return [];
@@ -429,7 +422,6 @@ export default function DoctorDiscovery() {
       const activeDoctorIds = approvedDoctors
         .filter((doctor) =>
           isDoctorVisibleInDiscovery((doctor as any).full_name, canViewTestDoctor)
-          && String((doctor as any).medical_license_url || '').trim().length > 0
         )
         .map((doctor) => doctor.user_id)
         .filter(Boolean) as string[];
@@ -451,11 +443,13 @@ export default function DoctorDiscovery() {
 
         const appointmentsByDate = new Map<string, SlotStatusRow[]>();
         for (const date of uniqueDates) {
-          const { data: appointments, error: appointmentsError } = await supabase
-            .from('appointments')
-            .select('time,duration_minutes,status,slot_locked_until')
-            .eq('doctor_id', doctorId)
-            .eq('date', date);
+          const { data: appointments, error: appointmentsError } = await supabase.rpc(
+            'public_list_doctor_booked_slots',
+            {
+              p_doctor_id: doctorId,
+              p_date: date,
+            }
+          );
 
           if (appointmentsError) throw appointmentsError;
 
@@ -506,140 +500,77 @@ export default function DoctorDiscovery() {
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
     queryKey: ['doctors-discovery', canViewTestDoctor],
     queryFn: async () => {
-      const doctorsWithLanguagesQuery = await supabase
-        .from('doctor_registrations')
-        .select(`
-          id,
-          user_id,
-          full_name,
-          specialty,
-          rate_per_consultation,
-          hospital_affiliation,
-          profile_picture_url,
-          medical_license_url,
-          age,
-          verification_status,
-          city,
-          state,
-          bio,
-          bio_translations,
-          experience,
-          preferred_consultation_languages
-        `)
-        .eq('verification_status', 'approved')
-        .order('full_name');
+      const doctorsQuery = await supabase.rpc('list_public_doctors', {
+        p_limit: 5000,
+        p_offset: 0,
+      });
+      if (doctorsQuery.error) throw doctorsQuery.error;
 
-      let registrationRows: Array<{
-        id: string;
+      let registrationRows = ((doctorsQuery.data || []) as Array<{
         user_id: string;
         full_name: string;
         specialty: string;
         rate_per_consultation?: number | null;
         hospital_affiliation: string;
-        profile_picture_url?: string;
-        medical_license_url?: string | null;
-        age: number;
-        verification_status: string;
+        profile_picture_url?: string | null;
         city: string;
         state: string;
-        bio?: string;
+        bio?: string | null;
         bio_translations?: Record<string, unknown> | null;
         experience?: string | null;
         preferred_consultation_languages?: string[] | null;
-      }> = [];
+        rating?: number | null;
+        total_reviews?: number | null;
+      }>)
+        .filter((doctor) => isDoctorVisibleInDiscovery(doctor.full_name, canViewTestDoctor));
 
-      if (doctorsWithLanguagesQuery.error) {
-        if (!isMissingColumnError(doctorsWithLanguagesQuery.error)) {
-          throw doctorsWithLanguagesQuery.error;
-        }
-
-        const doctorsFallbackQuery = await supabase
-          .from('doctor_registrations')
-          .select(`
-            id,
-            user_id,
-            full_name,
-            specialty,
-            rate_per_consultation,
-            hospital_affiliation,
-            profile_picture_url,
-            medical_license_url,
-            age,
-            verification_status,
-            city,
-            state,
-            bio,
-            experience
-          `)
-          .eq('verification_status', 'approved')
-          .order('full_name');
-
-        if (doctorsFallbackQuery.error) throw doctorsFallbackQuery.error;
-        registrationRows = (doctorsFallbackQuery.data || []) as typeof registrationRows;
-      } else {
-        registrationRows = (doctorsWithLanguagesQuery.data || []) as typeof registrationRows;
-      }
-
-      registrationRows = registrationRows.filter((doctor) =>
-        isDoctorVisibleInDiscovery(doctor.full_name, canViewTestDoctor)
-        && String(doctor.medical_license_url || '').trim().length > 0
-      );
-
-      // Fetch ratings for each doctor
-      const doctorsWithRatings = await Promise.all(
-        registrationRows.map(async (doctor) => {
-          // Check if doctor has any available schedules
-          const { data: schedules } = await supabase
+      const doctorIds = registrationRows.map((doctor) => doctor.user_id).filter(Boolean);
+      const { data: schedules } = doctorIds.length > 0
+        ? await supabase
             .from('doctor_schedules')
-            .select('id')
-            .eq('doctor_id', doctor.user_id)
+            .select('doctor_id')
+            .in('doctor_id', doctorIds)
             .eq('is_available', true)
-            .limit(1);
+        : { data: [] };
+      const doctorsWithSchedules = new Set((schedules || []).map((row: any) => String(row.doctor_id || '')));
 
-          // Fetch ratings
-          const { data: ratingData } = await supabase
-            .from('appointments')
-            .select('rating')
-            .eq('doctor_id', doctor.user_id)
-            .not('rating', 'is', null);
+      const doctorsWithRatings = registrationRows.map((doctor) => {
+        const hasAvailableSchedules = doctorsWithSchedules.has(String(doctor.user_id || ''));
+        const preferredConsultationLanguages = Array.isArray(doctor.preferred_consultation_languages)
+          ? doctor.preferred_consultation_languages
+            .map((language) => normalizeConsultationLanguage(String(language)))
+            .filter(Boolean)
+          : [];
+        const localizedBioTranslations = (doctor.bio_translations && typeof doctor.bio_translations === 'object')
+          ? Object.entries(doctor.bio_translations as Record<string, unknown>).reduce<Record<string, string>>(
+            (acc, [code, value]) => {
+              if (typeof value !== 'string') return acc;
+              const trimmed = value.trim();
+              if (!trimmed) return acc;
+              acc[code.toLowerCase()] = trimmed;
+              return acc;
+            },
+            {}
+          )
+          : {};
 
-          const ratings = (ratingData || []).map(r => r.rating).filter(Boolean);
-          const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b) / ratings.length : 0;
+        return {
+          ...doctor,
+          id: doctor.user_id,
+          age: 0,
+          verification_status: 'approved',
+          medical_license_url: null,
+          rating: Number(doctor.rating || 0),
+          total_reviews: Number(doctor.total_reviews || 0),
+          experience_years: doctor.experience ? Number(doctor.experience) : null,
+          rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
+          bio_translations: localizedBioTranslations,
+          preferred_consultation_languages: preferredConsultationLanguages,
+          is_active: hasAvailableSchedules,
+        };
+      });
 
-          const hasAvailableSchedules = (schedules || []).length > 0;
-          const preferredConsultationLanguages = Array.isArray(doctor.preferred_consultation_languages)
-            ? doctor.preferred_consultation_languages
-              .map((language) => normalizeConsultationLanguage(String(language)))
-              .filter(Boolean)
-            : [];
-          const localizedBioTranslations = (doctor.bio_translations && typeof doctor.bio_translations === 'object')
-            ? Object.entries(doctor.bio_translations as Record<string, unknown>).reduce<Record<string, string>>(
-              (acc, [code, value]) => {
-                if (typeof value !== 'string') return acc;
-                const trimmed = value.trim();
-                if (!trimmed) return acc;
-                acc[code.toLowerCase()] = trimmed;
-                return acc;
-              },
-              {}
-            )
-            : {};
-
-          return {
-            ...doctor,
-            rating: avgRating,
-            total_reviews: ratings.length,
-            experience_years: doctor.experience ? Number(doctor.experience) : null,
-            rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
-            bio_translations: localizedBioTranslations,
-            preferred_consultation_languages: preferredConsultationLanguages,
-            // Bookable when doctor is approved and has at least one available schedule.
-            is_active: hasAvailableSchedules,
-          };
-        })
-      );
-
-      return doctorsWithRatings.filter(doctor => doctor.is_active !== false);
+      return doctorsWithRatings.filter((doctor) => doctor.is_active !== false);
     }
   });
 
