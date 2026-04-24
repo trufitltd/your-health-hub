@@ -33,6 +33,10 @@ type DoctorRow = {
   identification_type: string | null;
   identification_number: string | null;
   verification_status: string | null;
+  practice_category: string | null;
+  specialist_level: string | null;
+  fellowship_number: string | null;
+  residency_training_evidence_url: string | null;
 };
 
 type PatientRow = {
@@ -62,33 +66,48 @@ const normalizeSpecialtyValue = (value: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const DOCTOR_SPECIALTY_OPTIONS = [
-  'General Practice',
-  'Cardiology',
-  'Dermatology',
-  'Endocrinology',
-  'Family Medicine',
-  'Gastroenterology',
-  'General Surgery',
-  'Hematology',
+const DOCTOR_GENERAL_PRACTITIONER_SPECIALTY_OPTIONS = [
+  'General Practitioner',
+] as const;
+
+const DOCTOR_SPECIALIST_SPECIALTY_OPTIONS = [
   'Internal Medicine',
-  'Nephrology',
-  'Neurology',
-  'Neurosurgery',
-  'Obstetrics and Gynecology',
-  'Oncology',
-  'Ophthalmology',
-  'Orthopedics',
-  'Otolaryngology (ENT)',
+  'Surgery',
   'Pediatrics',
+  'Obstetrics & Gynecology',
   'Psychiatry',
-  'Pulmonology',
+  'Family Medicine',
+  'Emergency Medicine',
   'Radiology',
-  'Rheumatology',
+  'Anesthesia',
+  'Dermatology',
+  'Ophthalmology',
+  'ENT',
+  'Orthopedics',
+  'Cardiology',
+  'Neurology',
+  'Oncology',
+  'Nephrology',
+  'Gastroenterology',
+  'Endocrinology',
+  'Infectious Diseases',
+  'Pulmonology',
+  'Hematology',
   'Urology',
+  'Neurosurgery',
+  'Plastic Surgery',
+] as const;
+
+const DOCTOR_SPECIALTY_OPTIONS = [
+  ...DOCTOR_GENERAL_PRACTITIONER_SPECIALTY_OPTIONS,
+  ...DOCTOR_SPECIALIST_SPECIALTY_OPTIONS,
 ] as const;
 
 const DOCTOR_SPECIALTY_OTHER_VALUE = '__other__';
+const PRACTICE_CATEGORY_GENERAL_PRACTITIONER = 'general_practitioner';
+const PRACTICE_CATEGORY_SPECIALIST = 'specialist';
+const SPECIALIST_LEVEL_SENIOR_REGISTRAR = 'senior_registrar';
+const SPECIALIST_LEVEL_CONSULTANT = 'consultant';
 const GENERAL_PRACTITIONER_SPECIALTY_KEYS = new Set([
   'general practice',
   'general practitioner',
@@ -148,8 +167,12 @@ export default function CompleteRegistration() {
   const [doctorCountry, setDoctorCountry] = useState('');
   const [doctorMaritalStatus, setDoctorMaritalStatus] = useState('');
   const [doctorHospitalAffiliation, setDoctorHospitalAffiliation] = useState('');
+  const [doctorPracticeCategory, setDoctorPracticeCategory] = useState('');
+  const [doctorSpecialistLevel, setDoctorSpecialistLevel] = useState('');
   const [doctorSpecialtySelection, setDoctorSpecialtySelection] = useState('');
   const [doctorSpecialtyOther, setDoctorSpecialtyOther] = useState('');
+  const [doctorFellowshipNumber, setDoctorFellowshipNumber] = useState('');
+  const [doctorResidencyTrainingEvidenceFile, setDoctorResidencyTrainingEvidenceFile] = useState<File | null>(null);
   const [doctorConsultationRate, setDoctorConsultationRate] = useState('');
   const [doctorExperience, setDoctorExperience] = useState('');
   const [doctorConsultationLanguages, setDoctorConsultationLanguages] = useState<string[]>([]);
@@ -250,6 +273,9 @@ export default function CompleteRegistration() {
         const safeMaritalStatus = clearPlaceholder(d?.marital_status);
         const safeHospitalAffiliation = clearPlaceholder(d?.hospital_affiliation);
         const safeSpecialty = clearPlaceholder(d?.specialty);
+        const safePracticeCategory = clearPlaceholder(d?.practice_category).toLowerCase();
+        const safeSpecialistLevel = clearPlaceholder(d?.specialist_level).toLowerCase();
+        const safeFellowshipNumber = clearPlaceholder(d?.fellowship_number);
         const safeRate = d?.rate_per_consultation && Number(d.rate_per_consultation) !== 5000 ? String(d.rate_per_consultation) : '';
         const safeExperience = clearPlaceholder(d?.experience);
         const safeConsultationLanguages = Array.isArray(d?.preferred_consultation_languages)
@@ -269,7 +295,7 @@ export default function CompleteRegistration() {
         const mappedSpecialty = normalizedSpecialty
           ? (
             GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizedSpecialty)
-              ? 'General Practice'
+              ? 'General Practitioner'
               : DOCTOR_SPECIALTY_NORMALIZED_MAP.get(normalizedSpecialty)
           )
           : '';
@@ -283,14 +309,25 @@ export default function CompleteRegistration() {
         setDoctorCountry(safeCountry);
         setDoctorMaritalStatus(safeMaritalStatus);
         setDoctorHospitalAffiliation(safeHospitalAffiliation);
+        setDoctorPracticeCategory(
+          safePracticeCategory === PRACTICE_CATEGORY_SPECIALIST || safePracticeCategory === PRACTICE_CATEGORY_GENERAL_PRACTITIONER
+            ? safePracticeCategory
+            : (GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizedSpecialty) ? PRACTICE_CATEGORY_GENERAL_PRACTITIONER : PRACTICE_CATEGORY_SPECIALIST)
+        );
+        setDoctorSpecialistLevel(
+          safeSpecialistLevel === SPECIALIST_LEVEL_SENIOR_REGISTRAR || safeSpecialistLevel === SPECIALIST_LEVEL_CONSULTANT
+            ? safeSpecialistLevel
+            : ''
+        );
         setDoctorConsultationRate(safeRate);
         setDoctorExperience(safeExperience);
         setDoctorConsultationLanguages(safeConsultationLanguages);
+        setDoctorFellowshipNumber(safeFellowshipNumber);
         setDoctorIdentificationType(safeIdentificationType);
         setDoctorIdentificationNumber(safeIdentificationNumber);
 
         if (!safeSpecialty || isGenericOtherToken) {
-          setDoctorSpecialtySelection('General Practice');
+          setDoctorSpecialtySelection('General Practitioner');
           setDoctorSpecialtyOther('');
         } else if (mappedSpecialty) {
           setDoctorSpecialtySelection(mappedSpecialty);
@@ -308,6 +345,18 @@ export default function CompleteRegistration() {
   }, [authLoading, navigate, user]);
 
   const needsDoctorLicense = role === 'doctor' && !isFilled(doctorRow?.medical_license_url);
+  const selectedPracticeCategory = doctorPracticeCategory || (
+    GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizeSpecialtyValue(doctorSpecialtySelection))
+      ? PRACTICE_CATEGORY_GENERAL_PRACTITIONER
+      : PRACTICE_CATEGORY_SPECIALIST
+  );
+  const specialistSelected = selectedPracticeCategory === PRACTICE_CATEGORY_SPECIALIST;
+  const generalPractitionerSelected = selectedPracticeCategory === PRACTICE_CATEGORY_GENERAL_PRACTITIONER;
+  const doctorSpecialtyOptions = generalPractitionerSelected
+    ? DOCTOR_GENERAL_PRACTITIONER_SPECIALTY_OPTIONS
+    : DOCTOR_SPECIALIST_SPECIALTY_OPTIONS;
+  const requiresConsultantFellowshipNumber = specialistSelected && doctorSpecialistLevel === SPECIALIST_LEVEL_CONSULTANT;
+  const requiresResidencyTrainingEvidence = specialistSelected && doctorSpecialistLevel === SPECIALIST_LEVEL_SENIOR_REGISTRAR;
   const resolvedDoctorSpecialty = (
     doctorSpecialtySelection === DOCTOR_SPECIALTY_OTHER_VALUE
       ? doctorSpecialtyOther
@@ -329,6 +378,8 @@ export default function CompleteRegistration() {
     if (role === 'doctor') {
       const parsedConsultationRate = Number(doctorConsultationRate);
       const isGeneralPracticeDoctor = GENERAL_PRACTITIONER_SPECIALTY_KEYS.has(normalizeSpecialtyValue(resolvedDoctorSpecialty));
+      const normalizedPracticeCategory = selectedPracticeCategory;
+      const normalizedSpecialistLevel = specialistSelected ? doctorSpecialistLevel : '';
 
       const requiredDoctorFields = {
         fullName: doctorFullName.trim(),
@@ -340,7 +391,10 @@ export default function CompleteRegistration() {
         country: doctorCountry.trim(),
         maritalStatus: doctorMaritalStatus.trim(),
         hospitalAffiliation: doctorHospitalAffiliation.trim(),
+        practiceCategory: normalizedPracticeCategory,
+        specialistLevel: normalizedSpecialistLevel,
         specialty: resolvedDoctorSpecialty,
+        fellowshipNumber: doctorFellowshipNumber.trim(),
         ratePerConsultation: parsedConsultationRate,
         experience: doctorExperience.trim(),
         consultationLanguages: doctorConsultationLanguages,
@@ -359,6 +413,8 @@ export default function CompleteRegistration() {
         || !requiredDoctorFields.country
         || !requiredDoctorFields.maritalStatus
         || !requiredDoctorFields.hospitalAffiliation
+        || !requiredDoctorFields.practiceCategory
+        || (specialistSelected && !requiredDoctorFields.specialistLevel)
         || !requiredDoctorFields.specialty
         || !Number.isFinite(requiredDoctorFields.ratePerConsultation)
         || requiredDoctorFields.ratePerConsultation <= 0
@@ -370,6 +426,30 @@ export default function CompleteRegistration() {
         toast({
           title: 'Missing information',
           description: 'All doctor registration fields are required. Please return to sign up and complete every field.',
+        });
+        return;
+      }
+
+      if (specialistSelected && !DOCTOR_SPECIALIST_SPECIALTY_OPTIONS.includes(requiredDoctorFields.specialty as typeof DOCTOR_SPECIALIST_SPECIALTY_OPTIONS[number]) && requiredDoctorFields.specialty !== doctorSpecialtyOther.trim()) {
+        toast({
+          title: 'Invalid specialty',
+          description: 'Please select a valid specialist specialty.',
+        });
+        return;
+      }
+
+      if (requiresConsultantFellowshipNumber && !requiredDoctorFields.fellowshipNumber) {
+        toast({
+          title: 'Fellowship number required',
+          description: 'Please enter your fellowship number as a consultant.',
+        });
+        return;
+      }
+
+      if (requiresResidencyTrainingEvidence && !doctorResidencyTrainingEvidenceFile && !isFilled(doctorRow?.residency_training_evidence_url)) {
+        toast({
+          title: 'Residency evidence required',
+          description: 'Please upload your residency/senior registrar training evidence.',
         });
         return;
       }
@@ -391,6 +471,7 @@ export default function CompleteRegistration() {
       try {
         let profileUrl = doctorRow?.profile_picture_url || null;
         let licenseUrl = doctorRow?.medical_license_url || '';
+        let residencyTrainingEvidenceUrl = doctorRow?.residency_training_evidence_url || null;
 
         if (profileFile) {
           const ext = profileFile.name.split('.').pop() || 'jpg';
@@ -408,6 +489,14 @@ export default function CompleteRegistration() {
           licenseUrl = supabase.storage.from('doctor-files').getPublicUrl(path).data.publicUrl;
         }
 
+        if (doctorResidencyTrainingEvidenceFile) {
+          const ext = doctorResidencyTrainingEvidenceFile.name.split('.').pop() || 'pdf';
+          const path = `${user.id}/credentials/residency-training-evidence.${ext}`;
+          const { error: uploadError } = await supabase.storage.from('doctor-files').upload(path, doctorResidencyTrainingEvidenceFile, { upsert: true });
+          if (uploadError) throw uploadError;
+          residencyTrainingEvidenceUrl = supabase.storage.from('doctor-files').getPublicUrl(path).data.publicUrl;
+        }
+
         if (!isFilled(licenseUrl)) throw new Error('Medical license is required.');
 
         const payload = {
@@ -422,7 +511,11 @@ export default function CompleteRegistration() {
           country: requiredDoctorFields.country,
           marital_status: requiredDoctorFields.maritalStatus,
           hospital_affiliation: requiredDoctorFields.hospitalAffiliation,
+          practice_category: requiredDoctorFields.practiceCategory,
+          specialist_level: specialistSelected ? requiredDoctorFields.specialistLevel : null,
           specialty: requiredDoctorFields.specialty,
+          fellowship_number: requiresConsultantFellowshipNumber ? requiredDoctorFields.fellowshipNumber : null,
+          residency_training_evidence_url: requiresResidencyTrainingEvidence ? residencyTrainingEvidenceUrl : null,
           rate_per_consultation: requiredDoctorFields.ratePerConsultation,
           experience: requiredDoctorFields.experience,
           preferred_consultation_languages: requiredDoctorFields.consultationLanguages,
@@ -615,13 +708,53 @@ export default function CompleteRegistration() {
                 <Input id="doctorHospitalAffiliation" placeholder="Hospital affiliation" className="h-12 mt-1.5" value={doctorHospitalAffiliation} onChange={(e) => setDoctorHospitalAffiliation(e.target.value)} required />
               </div>
 
+              <div>
+                <Label>Practice Category *</Label>
+                <Select
+                  value={doctorPracticeCategory}
+                  onValueChange={(value) => {
+                    setDoctorPracticeCategory(value);
+                    if (value === PRACTICE_CATEGORY_GENERAL_PRACTITIONER) {
+                      setDoctorSpecialistLevel('');
+                      setDoctorSpecialtySelection('General Practitioner');
+                      setDoctorSpecialtyOther('');
+                      setDoctorFellowshipNumber('');
+                      setDoctorResidencyTrainingEvidenceFile(null);
+                    } else {
+                      if (doctorSpecialtySelection === 'General Practitioner') {
+                        setDoctorSpecialtySelection('');
+                      }
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select practice category" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={PRACTICE_CATEGORY_GENERAL_PRACTITIONER}>General Practitioner</SelectItem>
+                    <SelectItem value={PRACTICE_CATEGORY_SPECIALIST}>Specialist</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {specialistSelected && (
+                <div>
+                  <Label>Specialist Level *</Label>
+                  <Select value={doctorSpecialistLevel} onValueChange={setDoctorSpecialistLevel}>
+                    <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select level" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={SPECIALIST_LEVEL_SENIOR_REGISTRAR}>Senior Registrar</SelectItem>
+                      <SelectItem value={SPECIALIST_LEVEL_CONSULTANT}>Consultant</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Specialty *</Label>
                   <Select value={doctorSpecialtySelection} onValueChange={setDoctorSpecialtySelection}>
                     <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Select specialty" /></SelectTrigger>
                     <SelectContent>
-                      {DOCTOR_SPECIALTY_OPTIONS.map((specialty) => (
+                      {doctorSpecialtyOptions.map((specialty) => (
                         <SelectItem key={specialty} value={specialty}>
                           {specialty}
                         </SelectItem>
@@ -648,6 +781,37 @@ export default function CompleteRegistration() {
                   />
                 </div>
               )}
+
+              {requiresConsultantFellowshipNumber && (
+                <div>
+                  <Label htmlFor="doctorFellowshipNumber">Fellowship Number *</Label>
+                  <Input
+                    id="doctorFellowshipNumber"
+                    placeholder="Enter fellowship number"
+                    className="h-12 mt-1.5"
+                    value={doctorFellowshipNumber}
+                    onChange={(e) => setDoctorFellowshipNumber(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+
+              {requiresResidencyTrainingEvidence && (
+                <div className="space-y-2">
+                  <Label htmlFor="doctorResidencyTrainingEvidence">Upload Evidence of Residency Training / Senior Registrar *</Label>
+                  <Input
+                    id="doctorResidencyTrainingEvidence"
+                    type="file"
+                    accept="image/*,.pdf"
+                    onChange={(e) => setDoctorResidencyTrainingEvidenceFile(e.target.files?.[0] || null)}
+                  />
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Upload className="w-3 h-3" />
+                    {doctorResidencyTrainingEvidenceFile?.name || 'No file selected'}
+                  </p>
+                </div>
+              )}
+
               <div>
                 <Label htmlFor="doctorConsultationRate">Consultation Rate (NGN) *</Label>
                 <Input
