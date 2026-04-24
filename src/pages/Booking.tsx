@@ -4,12 +4,24 @@ import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
-import { Gift } from 'lucide-react';
 
 export default function BookingPage() {
   const { user, isLoading } = useAuth();
   const { t } = useLanguage();
   const { data: promotion } = useActivePatientPromotion();
+  const formattedPromotionEndAt = promotion?.endsAt
+    ? (() => {
+        const endDate = new Date(promotion.endsAt);
+        const pad = (value: number) => String(value).padStart(2, '0');
+        return `${pad(endDate.getDate())}/${pad(endDate.getMonth() + 1)}/${endDate.getFullYear()}, ${pad(endDate.getHours())}:${pad(endDate.getMinutes())}:${pad(endDate.getSeconds())}`;
+      })()
+    : '';
+  const promotionHeadline = promotion
+    ? `Free consultation promotion ends in ${promotion.countdownText}`
+    : '';
+  const promotionSubtext = promotion
+    ? `Offer ends on ${formattedPromotionEndAt}. Eligibility is enforced automatically at checkout`
+    : '';
   const navigate = useNavigate();
   const location = useLocation();
   const { doctorId: doctorIdParam } = useParams<{ doctorId?: string }>();
@@ -52,16 +64,11 @@ export default function BookingPage() {
   return (
     <Layout>
       <div className="min-h-screen flex items-center justify-center bg-muted/30">
-        <div className="text-center">
+        <div className="w-full max-w-md text-center">
           {promotion?.isActive ? (
-            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
-              <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
-                <Gift className="h-4 w-4" />
-                Free consultation promotion is active
-              </p>
-              <p className="mt-1 text-xs text-emerald-700">
-                {promotion.remaining.toLocaleString()} of {promotion.limit.toLocaleString()} slots left for newly registered patients who complete registration.
-              </p>
+            <div className="mb-6 rounded-xl border-2 border-red-300 bg-gradient-to-r from-red-50 via-rose-50 to-orange-50 px-5 py-4 shadow-md text-left">
+              <p className="text-base font-extrabold text-red-700">{promotionHeadline}</p>
+              <p className="mt-1 text-sm font-semibold text-red-600">{promotionSubtext}</p>
             </div>
           ) : null}
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />

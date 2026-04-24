@@ -191,6 +191,15 @@ type DiscoveryStartingPrices = {
   };
 };
 
+const getMarketingSlotsLeft = (doctorKey: string): 1 | 2 | 3 => {
+  const key = doctorKey || 'doctor';
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = ((hash * 31) + key.charCodeAt(index)) >>> 0;
+  }
+  return ((hash % 3) + 1) as 1 | 2 | 3;
+};
+
 export default function DoctorDiscovery() {
   const { user } = useAuth();
   const { t, language } = useLanguage();
@@ -1271,6 +1280,8 @@ export default function DoctorDiscovery() {
                   const isGeneralPracticeDoctor = isGeneralPracticeSpecialty(doctor.specialty || '');
                   const startingPrice = getStartingPriceForDoctor(doctor);
                   const pricingVariationMessage = getPricingVariationMessage(doctor);
+                  const marketingSlotsLeft = getMarketingSlotsLeft(doctor.user_id || doctor.id);
+                  const doctorDisplayName = formatDoctorName(doctor.full_name);
                   return (
                     <motion.div
                       key={doctor.id}
@@ -1354,6 +1365,12 @@ export default function DoctorDiscovery() {
                                 {`From ${formatCurrency(startingPrice, discoveryStartingPrices.currency)}`}
                               </p>
                               <p className="text-xs text-muted-foreground">{pricingVariationMessage}</p>
+                            </div>
+
+                            <div className="mb-4 p-2 rounded-lg bg-orange-50 border border-orange-200">
+                              <p className="text-xs font-semibold text-orange-700">
+                                Only {marketingSlotsLeft} slot{marketingSlotsLeft === 1 ? '' : 's'} left for booking with {doctorDisplayName}
+                              </p>
                             </div>
 
                             <div className="flex gap-2 pt-4 border-t">

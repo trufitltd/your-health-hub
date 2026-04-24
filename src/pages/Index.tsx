@@ -101,10 +101,11 @@ const Index = () => {
   })();
 
   const promotionHeadline = promotion
-    ? `Free consultation offer: ${promotion.remaining} of ${promotion.limit} slots left`
+    ? `Free consultation promotion ends in ${promotion.countdownText}`
     : '';
-  const promotionBody =
-    'For newly registered patients only. Complete your registration profile to claim one free consultation slot.';
+  const promotionBody = promotion
+    ? `Offer ends on ${promotion.endDateText}. New patients must sign up and complete registration to qualify.`
+    : '';
 
   // Show loading while checking authentication
   if (isLoading) {
@@ -139,9 +140,9 @@ const Index = () => {
               className="text-center lg:text-left"
             >
               {promotion?.isActive ? (
-                <div className="mb-4 inline-flex max-w-xl flex-col gap-1 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm">
-                  <p className="text-sm font-semibold text-emerald-800">{promotionHeadline}</p>
-                  <p className="text-xs text-emerald-700">{promotionBody}</p>
+                <div className="mb-4 inline-flex max-w-xl flex-col gap-1 rounded-2xl border-2 border-red-300 bg-gradient-to-r from-red-50 via-rose-50 to-orange-50 px-5 py-4 text-left shadow-md">
+                  <p className="text-base font-extrabold text-red-700">{promotionHeadline}</p>
+                  <p className="text-sm font-semibold text-red-600">{promotionBody}</p>
                 </div>
               ) : null}
               <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-light text-primary text-sm font-medium mb-6">

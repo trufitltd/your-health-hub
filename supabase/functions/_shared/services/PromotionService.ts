@@ -7,49 +7,37 @@ export interface PromotionEligibility {
 }
 
 export class PromotionService {
-  private readonly DEFAULT_PROMOTION_LIMIT = 126;
   private readonly PROMOTION_TYPE = 'FIRST_126_FREE';
 
   constructor(private readonly supabase: SupabaseClient) {}
 
-  private async getPromotionLimit(): Promise<number> {
+  private async getPromotionEndAt(): Promise<string | null> {
     const { data, error } = await this.supabase
       .from('platform_settings')
-      .select('promotion_first_n_free_limit')
+      .select('promotion_ends_at')
       .maybeSingle();
 
     if (error || !data) {
-      console.warn('[PromotionService] Failed to load promotion limit, using default:', error?.message);
-      return this.DEFAULT_PROMOTION_LIMIT;
+      console.warn('[PromotionService] Failed to load promotion end date:', error?.message);
+      return null;
     }
 
-    return data.promotion_first_n_free_limit;
+    return data.promotion_ends_at;
   }
 
   async checkEligibility(patientId: string, doctorId: string): Promise<PromotionEligibility> {
     try {
       console.log('[PromotionService] Checking eligibility...', { patientId, doctorId });
-      const promotionLimit = await this.getPromotionLimit();
-      console.log('[PromotionService] Limit:', promotionLimit);
-
-      // 1. Check total promotion limit
-      const { count: totalCount, error: totalError } = await this.supabase
-        .from('appointments')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_promotion', true)
-        .eq('promotion_type', this.PROMOTION_TYPE)
-        .neq('status', 'cancelled');
-
-      if (totalError) {
-        console.error('[PromotionService] Total count query failed:', totalError);
-        return { eligible: false, reason: `Database error (total): ${totalError.message}` };
+      const promotionEndsAt = await this.getPromotionEndAt();
+      if (!promotionEndsAt) {
+        return { eligible: false, reason: 'Promotion is not active' };
       }
-      console.log('[PromotionService] Total used:', totalCount);
-      if ((totalCount || 0) >= promotionLimit) {
-        return { eligible: false, reason: 'Promotion limit reached' };
+      const promotionEndsAtMs = new Date(promotionEndsAt).getTime();
+      if (!Number.isFinite(promotionEndsAtMs) || Date.now() >= promotionEndsAtMs) {
+        return { eligible: false, reason: 'Promotion has ended' };
       }
 
-      // 2. Check if patient already had a free consultation
+      // Check if patient already had a free consultation
       const { count: patientCount, error: patientError } = await this.supabase
         .from('appointments')
         .select('*', { count: 'exact', head: true })
@@ -67,7 +55,7 @@ export class PromotionService {
         return { eligible: false, reason: 'Patient already used free consultation' };
       }
 
-      // 3. Check if doctor was already booked for a free consultation
+      // Check if doctor was already booked for a free consultation
       const { count: doctorCount, error: doctorError } = await this.supabase
         .from('appointments')
         .select('*', { count: 'exact', head: true })
