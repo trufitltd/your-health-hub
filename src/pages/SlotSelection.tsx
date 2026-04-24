@@ -14,7 +14,7 @@ import { generateTimeSlots } from '@/hooks/useAvailableSlots';
 import { toast } from '@/components/ui/use-toast';
 import { Calendar as CalendarIcon, Clock, ChevronRight, AlertCircle, CreditCard, Wallet, Gift, CheckCircle } from 'lucide-react';
 import { usePaystackPayment } from '@/hooks/usePaystackPayment';
-import { formatSpecialtyLabel } from '@/lib/utils';
+import { formatDoctorName, formatSpecialtyLabel } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
 import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
@@ -69,6 +69,15 @@ const toDateKey = (date: Date) => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const getMarketingSlotsLeft = (doctorKey: string): 1 | 2 | 3 => {
+  const key = doctorKey || 'doctor';
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = ((hash * 31) + key.charCodeAt(index)) >>> 0;
+  }
+  return ((hash % 3) + 1) as 1 | 2 | 3;
 };
 
 const calendarClassNames = {
@@ -128,6 +137,7 @@ export default function SlotSelection() {
   const doctorSpecialty = state?.specialty || doctorInfo?.specialty || '';
   const doctorProfilePicture = state?.profilePicture || doctorInfo?.profile_picture_url;
   const doctorBio = doctorInfo?.bio || '';
+  const marketingSlotsLeft = useMemo(() => getMarketingSlotsLeft(selectedDoctorId || ''), [selectedDoctorId]);
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -806,13 +816,19 @@ export default function SlotSelection() {
                 <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
                   <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
                     <Gift className="h-4 w-4" />
-                    Free consultation promotion is live
+                    Free consultation promotion ends in {promotion.countdownText}
                   </p>
                   <p className="mt-1 text-xs text-emerald-700">
-                    {promotion.remaining.toLocaleString()} of {promotion.limit.toLocaleString()} slots left. Eligibility is enforced automatically at checkout.
+                    Offer ends on {promotion.endDateText}. Eligibility is enforced automatically at checkout.
                   </p>
                 </div>
               ) : null}
+
+              <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3">
+                <p className="text-sm font-semibold text-orange-700">
+                  Only {marketingSlotsLeft} slot{marketingSlotsLeft === 1 ? '' : 's'} left for booking with {formatDoctorName(doctorName)}
+                </p>
+              </div>
 
               <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
                 <CardContent className="p-6">
