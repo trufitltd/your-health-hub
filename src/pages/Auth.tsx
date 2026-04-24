@@ -294,10 +294,10 @@ export default function AuthPage() {
   const selectedPhoneDialCode = selectedPhoneCountry?.dialCode || '+234';
   const activeSignupBlockedMessage = role === 'doctor' ? doctorSignupBlockedMessage : patientSignupBlockedMessage;
   const promotionHeadline = promotion
-    ? `Free consultation for first ${formatNumber(promotion.limit)} patients`
+    ? `Free consultation promotion ends in ${promotion.countdownText}`
     : '';
   const promotionSubtext = promotion
-    ? `${formatNumber(promotion.remaining)} slot${promotion.remaining === 1 ? '' : 's'} left. New patients must sign up and complete registration to qualify.`
+    ? `Offer ends on ${promotion.endDateText}. New patients must sign up and complete registration to qualify.`
     : '';
 
   const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
@@ -1080,9 +1080,9 @@ export default function AuthPage() {
           </p>
 
           {promotion?.isActive ? (
-            <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <p className="text-sm font-semibold text-emerald-800">{promotionHeadline}</p>
-              <p className="mt-1 text-xs text-emerald-700">{promotionSubtext}</p>
+            <div className="mb-6 rounded-xl border-2 border-red-300 bg-gradient-to-r from-red-50 via-rose-50 to-orange-50 px-5 py-4 shadow-md">
+              <p className="text-base font-extrabold text-red-700">{promotionHeadline}</p>
+              <p className="mt-1 text-sm font-semibold text-red-600">{promotionSubtext}</p>
             </div>
           ) : null}
 
