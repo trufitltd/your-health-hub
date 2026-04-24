@@ -18,6 +18,8 @@ interface DoctorCard {
   avatar_url?: string | null;
   bio?: string | null;
   experience?: string | null;
+  rating?: number | null;
+  total_reviews?: number;
   registration?: Record<string, unknown> | null;
 }
 
@@ -432,59 +434,32 @@ export default function SpecialistsPage() {
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
     queryKey: ['specialists-doctors'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('doctors')
-        .select('id,name,specialty,avatar_url')
-        .eq('is_active', true)
-        .order('name', { ascending: true });
+      const { data, error } = await supabase.rpc('list_public_doctors', {
+        p_limit: 1000,
+        p_offset: 0,
+      });
 
       if (error) {
-        console.error('Error fetching doctors:', error);
+        console.error('Error fetching public doctors:', error);
         throw error;
       }
 
-      // Fetch bio and experience from doctor_registrations
-      const doctorIds = (data || []).map(d => d.id);
-      const { data: registrations } = await supabase
-        .from('doctor_registrations')
-        .select('*')
-        .in('user_id', doctorIds)
-        .eq('verification_status', 'approved')
-        .not('medical_license_url', 'is', null);
-
-      const registrationMap = new Map(
-        (registrations || [])
-          .filter((registration: Record<string, unknown>) => String(registration.medical_license_url || '').trim().length > 0)
-          .filter((registration: Record<string, unknown>) => !isExcludedDoctorName(String(registration.full_name || '')))
-          .map((registration: Record<string, unknown>) => [registration.user_id as string, registration])
-      );
-
-      return (data || [])
-        .filter((doctor) => !isExcludedDoctorName(String(doctor.name || '')))
-        .filter((doctor) => registrationMap.has(doctor.id))
-        .map(d => ({
-          ...d,
-          bio: (registrationMap.get(d.id)?.bio as string | null | undefined) || null,
-          experience: (registrationMap.get(d.id)?.experience as string | null | undefined) || null,
-          registration: registrationMap.get(d.id) || null,
+      return ((data || []) as Array<Record<string, unknown>>)
+        .filter((doctor) => !isExcludedDoctorName(String(doctor.full_name || '')))
+        .map((doctor) => ({
+          id: String(doctor.user_id || ''),
+          name: String(doctor.full_name || 'Doctor'),
+          specialty: String(doctor.specialty || ''),
+          avatar_url: String(doctor.profile_picture_url || '') || null,
+          bio: (doctor.bio as string | null | undefined) || null,
+          experience: (doctor.experience as string | null | undefined) || null,
+          rating: Number(doctor.rating || 0),
+          total_reviews: Number(doctor.total_reviews || 0),
+          registration: {
+            specialty_translations: null,
+            bio_translations: doctor.bio_translations || null,
+          },
         })) as DoctorCard[];
-    },
-  });
-
-  const { data: ratings = [] } = useQuery({
-    queryKey: ['specialists-doctor-ratings'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('appointments')
-        .select('doctor_id,rating')
-        .not('rating', 'is', null);
-
-      if (error) {
-        console.error('Error fetching ratings:', error);
-        return [];
-      }
-
-      return data || [];
     },
   });
 
@@ -504,20 +479,6 @@ export default function SpecialistsPage() {
       return data || [];
     },
   });
-
-  const ratingByDoctor = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    ratings.forEach((row: { doctor_id: string; rating: number | null }) => {
-      if (!row.doctor_id || typeof row.rating !== 'number') return;
-      if (!map.has(row.doctor_id)) {
-        map.set(row.doctor_id, { total: 0, count: 0 });
-      }
-      const entry = map.get(row.doctor_id)!;
-      entry.total += row.rating;
-      entry.count += 1;
-    });
-    return map;
-  }, [ratings]);
 
   const schedulesByDoctor = useMemo(() => {
     const map = new Map<string, DoctorScheduleRow[]>();
@@ -656,11 +617,10 @@ export default function SpecialistsPage() {
           {/* Doctors Grid */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredDoctors.map((doctor, index) => {
-              const ratingInfo = ratingByDoctor.get(doctor.id);
-              const rating = ratingInfo && ratingInfo.count > 0
-                ? Number((ratingInfo.total / ratingInfo.count).toFixed(1))
+              const rating = (typeof doctor.rating === 'number' && doctor.rating > 0)
+                ? Number(doctor.rating.toFixed(1))
                 : null;
-              const reviews = ratingInfo?.count || 0;
+              const reviews = Number(doctor.total_reviews || 0);
               const nextAvailable = getNextAvailable(
                 schedulesByDoctor.get(doctor.id),
                 dayNames,
