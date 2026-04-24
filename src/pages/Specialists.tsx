@@ -70,6 +70,15 @@ const getNextAvailable = (
   return null;
 };
 
+const getMarketingSlotsLeft = (doctorKey: string): 1 | 2 | 3 => {
+  const key = doctorKey || 'doctor';
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = ((hash * 31) + key.charCodeAt(index)) >>> 0;
+  }
+  return ((hash % 3) + 1) as 1 | 2 | 3;
+};
+
 const SPECIALTY_TRANSLATIONS: Record<string, Partial<Record<AppLanguage, string>>> = {
   'general practice': {
     en: 'General Practice',
@@ -555,10 +564,10 @@ export default function SpecialistsPage() {
                 <Gift className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
                 <div>
                   <p className="text-sm font-semibold text-emerald-800">
-                    Promotion live: first {promotion.limit.toLocaleString()} newly registered patients get one free consultation.
+                    Promotion live: free consultation offer ends in {promotion.countdownText}.
                   </p>
                   <p className="mt-1 text-xs text-emerald-700">
-                    {promotion.remaining.toLocaleString()} slots left. Complete registration to qualify.
+                    Offer ends on {promotion.endDateText}. Complete registration to qualify.
                   </p>
                 </div>
               </div>
@@ -630,8 +639,10 @@ export default function SpecialistsPage() {
               const isBioExpanded = expandedBios.has(doctor.id);
               const localizedBio = getLocalizedBio(doctor.registration, language);
               const hasLongBio = (localizedBio || '').trim().length > 140;
+              const marketingSlotsLeft = getMarketingSlotsLeft(doctor.id);
+              const doctorDisplayName = formatDoctorName(doctor.name);
 
-              return (
+            return (
               <motion.div
                 key={doctor.id}
                 initial={{ opacity: 0, y: 20 }}
@@ -709,6 +720,12 @@ export default function SpecialistsPage() {
                   <span>
                     {t('specialists.card.next', 'Next')}: {nextAvailable || t('specialists.card.checkAvailability', 'Check availability')}
                   </span>
+                </div>
+
+                <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-orange-700">
+                    Only {marketingSlotsLeft} slot{marketingSlotsLeft === 1 ? '' : 's'} left for booking with {doctorDisplayName}
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-end pt-4 border-t border-border">

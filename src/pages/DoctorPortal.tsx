@@ -1558,6 +1558,14 @@ const DoctorPortal = () => {
       });
       return;
     }
+    if (String(appointment?.status || '').trim().toLowerCase() !== 'confirmed') {
+      toast({
+        title: 'Reschedule unavailable',
+        description: 'Only confirmed appointments can be rescheduled.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setRescheduleAppointmentId(appointment.id || null);
     setRescheduleDate(appointment.date || '');
     setRescheduleTime(toTimeInputValue(String(appointment.time || '')));
@@ -2658,8 +2666,7 @@ ${ePrescription}
                     </Button>
                   )}
                   {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
-                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') &&
-                    hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    calendarFocusedAppointment.status === 'confirmed' && (
                     <>
                       <Button
                         size="sm"
@@ -2671,6 +2678,12 @@ ${ePrescription}
                       >
                         {t('doctorPortal.actions.reschedule', 'Reschedule')}
                       </Button>
+                    </>
+                  )}
+                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                    (calendarFocusedAppointment.status === 'confirmed' || calendarFocusedAppointment.status === 'in_progress') &&
+                    hasAppointmentTimePassed(calendarFocusedAppointment) && (
+                    <>
                       <Button
                         size="sm"
                         variant="outline"
@@ -4252,7 +4265,7 @@ ${ePrescription}
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    {isPastConfirmed && (
+                                    {apt.status === 'confirmed' && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -4525,12 +4538,16 @@ ${ePrescription}
                                       </Button>
                                     </div>
                                   )}
-                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') &&
-                                    hasAppointmentTimePassed(apt) && (
+                                  {!pendingReschedule && apt.status === 'confirmed' && (
                                       <div className="flex gap-2">
                                         <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
                                           Reschedule
                                         </Button>
+                                      </div>
+                                    )}
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') &&
+                                    hasAppointmentTimePassed(apt) && (
+                                      <div className="flex gap-2">
                                         <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleMarkNoShow(apt.id)}>
                                           Mark No Show
                                         </Button>
