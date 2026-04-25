@@ -1109,7 +1109,10 @@ const PatientPortal = () => {
     const hasInvestigationRequest = Boolean(requiredInvestigations && requiredInvestigations.trim().length > 0);
     if (!hasInvestigationRequest) return null;
     const dayText = nearest.daysLeft === 1 ? '1 day' : `${nearest.daysLeft ?? 0} days`;
-    return `Your doctor marked this consultation as needing follow-up. Please upload your investigation results within ${dayText}. After 7 days, this appointment will be marked completed automatically.`;
+    return {
+      title: `Follow-up deadline: ${dayText}`,
+      body: `Your doctor marked this consultation as needing follow-up. Please upload your investigation results within ${dayText}. After ${dayText}, this appointment will be marked completed automatically.`,
+    };
   }, [followUpAppointmentWithNearestDeadline, requiredInvestigations]);
 
   useEffect(() => {
@@ -1118,8 +1121,8 @@ const PatientPortal = () => {
     if (followUpNoticeShownRef.current === appointmentId) return;
     followUpNoticeShownRef.current = appointmentId;
     toast({
-      title: t('patientPortal.followUp.deadlineTitle', 'Follow-up deadline: 7 days'),
-      description: followUpInvestigationMessage,
+      title: followUpInvestigationMessage.title,
+      description: followUpInvestigationMessage.body,
     });
   }, [followUpAppointmentWithNearestDeadline, followUpInvestigationMessage, t]);
 
@@ -4856,7 +4859,7 @@ const PatientPortal = () => {
                       {followUpInvestigationMessage && (
                         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">
                           <p className="text-sm font-semibold">
-                            {t('patientPortal.followUp.deadlineTitle', 'Follow-up deadline: 7 days')}
+                            {t('patientPortal.followUp.deadlineTitle', 'Follow-up deadline: 3 days')}
                           </p>
                           <p className="mt-1 text-sm">
                             {followUpInvestigationMessage}

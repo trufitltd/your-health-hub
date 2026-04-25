@@ -66,44 +66,6 @@ interface PatientThread {
   }>;
 }
 
-function getMessagingWindow(
-  status: string | null | undefined,
-  date: string | null | undefined,
-  time: string | null | undefined,
-  updatedAt: string | null | undefined,
-): { allowed: boolean; reason: string } {
-  if (!status) return { allowed: false, reason: 'Appointment details unavailable.' };
-  const normalized = status.trim().toLowerCase();
-  const now = Date.now();
-  const TWO_HOURS = 2 * 60 * 60 * 1000;
-  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
-
-  if (normalized === 'confirmed') {
-    if (!date) return { allowed: false, reason: 'Appointment date unavailable.' };
-    const dateTimeStr = time ? `${date}T${time}` : `${date}T00:00:00`;
-    const apptMs = new Date(dateTimeStr).getTime();
-    if (isNaN(apptMs)) return { allowed: false, reason: 'Appointment date is invalid.' };
-    if (now >= apptMs - TWO_HOURS) return { allowed: true, reason: '' };
-    return { allowed: false, reason: 'Messaging opens 2 hours before the appointment.' };
-  }
-
-  if (normalized === 'in_progress') {
-    const anchorMs = updatedAt ? new Date(updatedAt).getTime() : (date ? new Date(`${date}T${time || '00:00:00'}`).getTime() : NaN);
-    if (isNaN(anchorMs)) return { allowed: true, reason: '' };
-    if (now <= anchorMs + SEVEN_DAYS) return { allowed: true, reason: '' };
-    return { allowed: false, reason: 'Messaging window (7 days) has closed for this appointment.' };
-  }
-
-  if (normalized === 'completed') {
-    const anchorMs = updatedAt ? new Date(updatedAt).getTime() : (date ? new Date(`${date}T${time || '00:00:00'}`).getTime() : NaN);
-    if (isNaN(anchorMs)) return { allowed: true, reason: '' };
-    if (now <= anchorMs + TWO_HOURS) return { allowed: true, reason: '' };
-    return { allowed: false, reason: 'Messaging window (2 hours post-appointment) has closed.' };
-  }
-
-  return { allowed: false, reason: 'Messaging is not available for this appointment status.' };
-}
-
 interface DoctorMessagesTabProps {
   focusSessionId?: string | null;
   jumpToUnreadSignal?: number;
@@ -212,7 +174,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
           `,
           )
           .eq('doctor_id', user.id)
-          .in('appointments.status', ['confirmed', 'in_progress', 'completed']);
+          .in('appointments.status', ['pending_approval', 'confirmed', 'in_progress', 'no_show']);
 
         if (error) {
           console.error('Failed to load consultations:', error);
@@ -815,7 +777,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
             ) : filteredThreads.length === 0 ? (
               <div className="p-6 text-sm text-muted-foreground flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5" />
-                <span>No confirmed, ongoing, or completed consultations yet.</span>
+                <span>No active consultations yet.</span>
               </div>
             ) : (
               filteredThreads.map((thread) => (
@@ -1019,36 +981,23 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
           </div>
 
           <div className="sticky bottom-0 p-4 border-t border-border bg-background">
-            {(() => {
-              const win = getMessagingWindow(selectedThread.appointmentStatus, selectedThread.appointmentDate, selectedThread.appointmentTime, selectedThread.appointmentUpdatedAt);
-              if (!win.allowed) {
-                return (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/40 rounded-lg px-4 py-3">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-warning" />
-                    {win.reason}
-                  </div>
-                );
-              }
-              return (
-                <form onSubmit={handleSendMessage} className="flex items-end gap-2">
-                  <input ref={attachmentInputRef} type="file" className="hidden" onChange={handleAttachDocument} />
-                  <Button type="button" variant="ghost" size="icon" className="flex-shrink-0" disabled={isUploadingAttachment} onClick={() => attachmentInputRef.current?.click()}>
-                    <Paperclip className="w-5 h-5 text-muted-foreground" />
-                  </Button>
-                  <Input
-                    ref={composerInputRef}
-                    placeholder={isUploadingAttachment ? 'Uploading attachment...' : 'Type a message...'}
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1 min-h-[44px]"
-                    disabled={isUploadingAttachment}
-                  />
-                  <Button type="submit" disabled={!newMessage.trim() || isUploadingAttachment} className="flex-shrink-0">
-                    <Send className="w-5 h-5" />
-                  </Button>
-                </form>
-              );
-            })()}
+            <form onSubmit={handleSendMessage} className="flex items-end gap-2">
+              <input ref={attachmentInputRef} type="file" className="hidden" onChange={handleAttachDocument} />
+              <Button type="button" variant="ghost" size="icon" className="flex-shrink-0" disabled={isUploadingAttachment} onClick={() => attachmentInputRef.current?.click()}>
+                <Paperclip className="w-5 h-5 text-muted-foreground" />
+              </Button>
+              <Input
+                ref={composerInputRef}
+                placeholder={isUploadingAttachment ? 'Uploading attachment...' : 'Type a message...'}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                className="flex-1 min-h-[44px]"
+                disabled={isUploadingAttachment}
+              />
+              <Button type="submit" disabled={!newMessage.trim() || isUploadingAttachment} className="flex-shrink-0">
+                <Send className="w-5 h-5" />
+              </Button>
+            </form>
           </div>
         </div>
       ) : (
@@ -1057,7 +1006,7 @@ export function DoctorMessagesTab({ focusSessionId = null, jumpToUnreadSignal = 
             <Search className="w-8 h-8 text-primary" />
           </div>
           <h3 className="text-xl font-semibold mb-2">Patient Messages</h3>
-          <p className="text-muted-foreground max-w-sm">Select a confirmed, ongoing, or completed consultation to view chat history.</p>
+          <p className="text-muted-foreground max-w-sm">Select an active consultation to view chat history.</p>
         </div>
       )}
 
