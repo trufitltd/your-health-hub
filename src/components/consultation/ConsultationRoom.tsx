@@ -2107,7 +2107,7 @@ export function ConsultationRoom({
                     await consultationService.markAppointmentNeedsFollowUp(appointmentId);
                     toast({
                       title: ui('Follow-up started'),
-                      description: ui('Patient follow-up window is set for 7 days.'),
+                      description: ui('Patient follow-up window is set for 3 days.'),
                     });
                   } catch (err) {
                     console.error('Failed to mark follow-up appointment:', err);

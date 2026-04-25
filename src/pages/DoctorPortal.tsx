@@ -1558,10 +1558,11 @@ const DoctorPortal = () => {
       });
       return;
     }
-    if (String(appointment?.status || '').trim().toLowerCase() !== 'confirmed') {
+    const aptStatus = String(appointment?.status || '').trim().toLowerCase();
+    if (!['pending_approval', 'confirmed', 'in_progress', 'no_show'].includes(aptStatus)) {
       toast({
         title: 'Reschedule unavailable',
-        description: 'Only confirmed appointments can be rescheduled.',
+        description: 'Completed or cancelled appointments cannot be rescheduled.',
         variant: 'destructive',
       });
       return;
@@ -4219,7 +4220,7 @@ ${ePrescription}
                                       <p className="text-sm text-muted-foreground">{apt.patient_age ? `${apt.patient_age} years old` : 'Age N/A'}</p>
                                       {isPastConfirmed && (
                                         <p className="text-xs font-medium text-amber-700 mt-1">
-                                          Appointment time passed. Mark no-show or reschedule via patient follow-up.
+                                          Appointment time has passed. Please mark as no-show, then reschedule if you wish to continue.
                                         </p>
                                       )}
                                     </div>
@@ -4265,7 +4266,7 @@ ${ePrescription}
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                       </Button>
                                     )}
-                                    {apt.status === 'confirmed' && (
+                                    {!isPastConfirmed && apt.status !== 'completed' && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -4276,14 +4277,24 @@ ${ePrescription}
                                       </Button>
                                     )}
                                     {isPastConfirmed && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="w-full text-destructive border-destructive/30 sm:w-auto"
-                                        onClick={() => handleMarkNoShow(apt.id)}
-                                      >
-                                        Mark No Show
-                                      </Button>
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="w-full text-destructive border-destructive/30 sm:w-auto"
+                                          onClick={() => handleMarkNoShow(apt.id)}
+                                        >
+                                          Mark No Show
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="w-full sm:w-auto"
+                                          onClick={() => openRescheduleDialog(apt)}
+                                        >
+                                          Reschedule
+                                        </Button>
+                                      </>
                                     )}
                                   </div>
                                 </div>
@@ -4538,7 +4549,7 @@ ${ePrescription}
                                       </Button>
                                     </div>
                                   )}
-                                  {!pendingReschedule && apt.status === 'confirmed' && (
+                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress' || apt.status === 'pending_approval') && !hasAppointmentTimePassed(apt) && (
                                       <div className="flex gap-2">
                                         <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
                                           Reschedule
@@ -4550,6 +4561,16 @@ ${ePrescription}
                                       <div className="flex gap-2">
                                         <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleMarkNoShow(apt.id)}>
                                           Mark No Show
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                          Reschedule
+                                        </Button>
+                                      </div>
+                                    )}
+                                  {!pendingReschedule && apt.status === 'no_show' && (
+                                      <div className="flex gap-2">
+                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                          Reschedule
                                         </Button>
                                       </div>
                                     )}
