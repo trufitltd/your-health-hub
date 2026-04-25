@@ -189,7 +189,7 @@ class ConsultationService {
   }
 
   /**
-   * Mark an appointment as needing follow-up and start the 7-day follow-up window.
+   * Mark an appointment as needing follow-up and start the 3-day follow-up window.
    */
   async markAppointmentNeedsFollowUp(appointmentId: string): Promise<void> {
     const { error } = await supabase.rpc('mark_appointment_needs_follow_up', {
@@ -203,7 +203,7 @@ class ConsultationService {
   }
 
   /**
-   * Auto-complete follow-up appointments that passed the 7-day deadline.
+   * Auto-complete follow-up appointments that passed the 3-day deadline.
    */
   async completeOverdueFollowUps(): Promise<number> {
     const { data, error } = await supabase.rpc('complete_overdue_follow_up_appointments');
