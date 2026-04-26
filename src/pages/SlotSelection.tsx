@@ -114,7 +114,7 @@ export default function SlotSelection() {
           .maybeSingle(),
         supabase
           .from('doctors')
-          .select('name, specialty, avatar_url, bio, consultation_fee')
+          .select('name, specialty, avatar_url, bio')
           .eq('id', selectedDoctorId)
           .maybeSingle(),
       ]);
@@ -130,7 +130,6 @@ export default function SlotSelection() {
         bio: registrationData?.bio || doctorData?.bio || '',
         rate_per_consultation: Number(
           registrationData?.rate_per_consultation
-          ?? doctorData?.consultation_fee
           ?? 0,
         ),
       };
@@ -698,11 +697,13 @@ export default function SlotSelection() {
         });
       }, 90_000);
       try {
-        initializePayment({
+        await initializePayment({
           email: paymentInit.email || user.email || '',
           amount: paymentInit.amountInKobo,
           reference: paymentInit.reference,
           accessCode: paymentInit.accessCode,
+          authorizationUrl: paymentInit.authorizationUrl,
+          preferRedirect: true,
           publicKey: paystackPublicKey,
           metadata: paymentInit.metadata,
           onSuccess: async (response: any) => {
