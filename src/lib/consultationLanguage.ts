@@ -43,3 +43,16 @@ export const extractConsultationLanguageFromNotes = (notes: unknown): string => 
 
   return '';
 };
+
+// Strip the [consultation_language:...] tag from notes for clean display
+export const cleanNotesForDisplay = (notes: string | null | undefined): string => {
+  if (!notes) return '';
+  return notes.replace(/\[consultation_language:[^\]]*\]/gi, '').trim();
+};
+
+// Return a formatted "Consultation Language: English" string from notes, or ''
+export const formatConsultationLanguageFromNotes = (notes: unknown): string => {
+  const lang = extractConsultationLanguageFromNotes(notes);
+  if (!lang) return '';
+  return `Consultation Language: ${formatConsultationLanguageLabel(lang)}`;
+};
