@@ -797,6 +797,7 @@ export class BookingService {
     const paymentStatus = String(payment.status || '').trim().toLowerCase();
     const paymentMetadata = (payment.metadata || {}) as Record<string, unknown>;
     const webhookVerification = paymentMetadata.verification;
+    const paymentVerifiedAt = payment.verified_at ? String(payment.verified_at) : '';
 
     let verified: { ok: boolean; status: string; amountInKobo: number; raw: Record<string, unknown> } = {
       ok: false,
@@ -806,8 +807,14 @@ export class BookingService {
     };
 
     const hasWebhookSuccessMarker = (
-      (paymentStatus === 'success' || paymentStatus === 'completed')
-      && !!webhookVerification
+      (
+        paymentStatus === 'success'
+        || paymentStatus === 'successful'
+        || paymentStatus === 'succeeded'
+        || paymentStatus === 'paid'
+        || paymentStatus === 'completed'
+      )
+      && (!!webhookVerification || paymentVerifiedAt.length > 0)
     );
 
     if (hasWebhookSuccessMarker) {

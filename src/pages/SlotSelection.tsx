@@ -109,12 +109,12 @@ export default function SlotSelection() {
       const [{ data: registrationData, error: registrationError }, { data: doctorData, error: doctorError }] = await Promise.all([
         supabase
           .from('doctor_registrations')
-          .select('full_name, specialty, profile_picture_url, bio')
+          .select('full_name, specialty, profile_picture_url, bio, rate_per_consultation')
           .eq('user_id', selectedDoctorId)
           .maybeSingle(),
         supabase
           .from('doctors')
-          .select('name, specialty, avatar_url, bio')
+          .select('name, specialty, avatar_url, bio, consultation_fee')
           .eq('id', selectedDoctorId)
           .maybeSingle(),
       ]);
@@ -128,6 +128,11 @@ export default function SlotSelection() {
         specialty: registrationData?.specialty || doctorData?.specialty || '',
         profile_picture_url: registrationData?.profile_picture_url || doctorData?.avatar_url || undefined,
         bio: registrationData?.bio || doctorData?.bio || '',
+        rate_per_consultation: Number(
+          registrationData?.rate_per_consultation
+          ?? doctorData?.consultation_fee
+          ?? 0,
+        ),
       };
     },
     enabled: !!selectedDoctorId,
@@ -487,7 +492,8 @@ export default function SlotSelection() {
     retry: false,
   });
 
-  const displayedPrice = finalPrice ?? previewPrice?.finalPrice ?? null;
+  const fallbackDoctorRate = Number(doctorInfo?.rate_per_consultation || 0);
+  const displayedPrice = finalPrice ?? previewPrice?.finalPrice ?? (fallbackDoctorRate > 0 ? fallbackDoctorRate : null);
   const isPromotion = previewPrice?.isPromotion || false;
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
