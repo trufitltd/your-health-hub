@@ -35,6 +35,7 @@ type AppointmentRow = {
   id: string;
   status: string | null;
   created_at: string | null;
+  updated_at?: string | null;
   date: string | null;
   patient_id: string | null;
   doctor_id: string | null;
@@ -75,11 +76,24 @@ type PaymentRow = {
   amount: number | null;
   status: string | null;
   created_at: string | null;
+  verified_at?: string | null;
   payment_method: string | null;
   provider: string | null;
   patient_name?: string | null;
   patient_email?: string | null;
   patient_phone?: string | null;
+};
+
+type PaymentAppointmentLookupRow = {
+  id: string;
+  created_at: string | null;
+};
+
+type AppointmentPaymentSummary = {
+  appointment_id: string;
+  status: string | null;
+  created_at: string | null;
+  verified_at: string | null;
 };
 
 type ContactInboxRow = {
@@ -318,7 +332,7 @@ export default function COOPortal() {
 
       const { data, error } = await supabase
         .from('payments')
-        .select('id, appointment_id, patient_id, amount, status, created_at, payment_method, provider')
+        .select('id, appointment_id, patient_id, amount, status, created_at, verified_at, payment_method, provider')
         .order('created_at', { ascending: false })
         .limit(2000);
       if (error) throw error;
@@ -359,6 +373,104 @@ export default function COOPortal() {
   const patientById = useMemo(() => {
     return new Map(patients.map((patient) => [patient.user_id, patient]));
   }, [patients]);
+
+  const paymentAppointmentIds = useMemo(() => {
+    return Array.from(
+      new Set(
+        payments
+          .map((payment) => payment.appointment_id)
+          .filter((value): value is string => Boolean(value))
+      )
+    );
+  }, [payments]);
+
+  const { data: paymentAppointmentRows = [] } = useQuery({
+    queryKey: ['coo-payment-appointments-lookup', paymentAppointmentIds.join(',')],
+    queryFn: async () => {
+      if (paymentAppointmentIds.length === 0) return [] as PaymentAppointmentLookupRow[];
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id, created_at')
+        .in('id', paymentAppointmentIds);
+      if (error) throw error;
+      return (data || []) as PaymentAppointmentLookupRow[];
+    },
+    enabled: isAllowed && paymentAppointmentIds.length > 0,
+    staleTime: 60_000,
+  });
+
+  const paymentAppointmentById = useMemo(() => {
+    return new Map(paymentAppointmentRows.map((row) => [row.id, row]));
+  }, [paymentAppointmentRows]);
+
+  const paymentSummaryByAppointmentId = useMemo(() => {
+    const next = new Map<string, AppointmentPaymentSummary>();
+    for (const payment of payments) {
+      const appointmentId = String(payment.appointment_id || '');
+      if (!appointmentId) continue;
+      const candidate = payment.verified_at || payment.created_at || null;
+      const current = next.get(appointmentId);
+      const candidateTime = candidate ? new Date(candidate).getTime() : -1;
+      const currentActivity = current ? (current.verified_at || current.created_at) : null;
+      const currentTime = currentActivity ? new Date(currentActivity).getTime() : -1;
+      if (!current || candidateTime > currentTime) {
+        next.set(appointmentId, {
+          appointment_id: appointmentId,
+          status: payment.status || null,
+          created_at: payment.created_at || null,
+          verified_at: payment.verified_at || null,
+        });
+      }
+    }
+    return next;
+  }, [payments]);
+
+  const formatExactDateTime = (value?: string | null) => {
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  };
+  const formatBookedAt = (value?: string | null) => {
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  const renderAppointmentAuditTimestamps = (apt: AppointmentRow) => {
+    const payment = paymentSummaryByAppointmentId.get(apt.id);
+    const paymentStatus = String(payment?.status || '').trim().toLowerCase();
+    const paymentMadeAt = payment?.verified_at
+      || (['success', 'successful', 'succeeded', 'paid', 'completed'].includes(paymentStatus)
+        ? payment?.created_at || null
+        : null);
+    const activityDate = paymentMadeAt || apt.updated_at || apt.created_at || null;
+    return (
+      <div className="rounded-md bg-muted/40 p-2 space-y-1">
+        <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Created:</span> {formatExactDateTime(apt.created_at)}</p>
+        <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Verified:</span> {formatExactDateTime(payment?.verified_at || null)}</p>
+        <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Booked at:</span> {formatBookedAt(apt.created_at)}</p>
+        <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Payment made at:</span> {formatExactDateTime(paymentMadeAt)}</p>
+        <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Activity date:</span> {formatExactDateTime(activityDate)}</p>
+      </div>
+    );
+  };
 
   const activeDoctorsOverview = useMemo(() => {
     const onlineIds = Object.keys(onlineDoctorIds);
@@ -931,7 +1043,7 @@ export default function COOPortal() {
                   <p className="text-sm text-muted-foreground">No new bookings in the last 7 days.</p>
                 ) : (
                   newBookings.map((apt) => (
-                    <div key={apt.id} className="rounded-lg border p-3 space-y-1">
+                    <div key={apt.id} className="rounded-lg border p-3 space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-medium">
                           {apt.patient_id ? (
@@ -975,8 +1087,9 @@ export default function COOPortal() {
                         )}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Appointment: {formatDateTime(apt.date)} · Booked: {formatDateTime(apt.created_at)}
+                        Appointment date: {formatDateTime(apt.date)}
                       </p>
+                      {renderAppointmentAuditTimestamps(apt)}
                     </div>
                   ))
                 )}
@@ -1004,6 +1117,7 @@ export default function COOPortal() {
                         <p className="text-xs text-muted-foreground">
                           Date: {formatDateTime(apt.date)}
                         </p>
+                        {renderAppointmentAuditTimestamps(apt)}
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
                           <p className="text-xs text-muted-foreground">
@@ -1074,6 +1188,7 @@ export default function COOPortal() {
                         <p className="text-xs text-muted-foreground">
                           Date: {formatDateTime(apt.date)}
                         </p>
+                        {renderAppointmentAuditTimestamps(apt)}
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
                           <p className="text-xs text-muted-foreground">
@@ -1144,6 +1259,7 @@ export default function COOPortal() {
                         <p className="text-xs text-muted-foreground">
                           Date: {formatDateTime(apt.date)}
                         </p>
+                        {renderAppointmentAuditTimestamps(apt)}
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
                           <p className="text-xs text-muted-foreground">
@@ -1216,6 +1332,7 @@ export default function COOPortal() {
                         <p className="text-xs text-muted-foreground">
                           Date: {formatDateTime(apt.date)}
                         </p>
+                        {renderAppointmentAuditTimestamps(apt)}
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
                           <p className="text-xs text-muted-foreground">
@@ -1288,6 +1405,7 @@ export default function COOPortal() {
                         <p className="text-xs text-muted-foreground">
                           Date: {formatDateTime(apt.date)}
                         </p>
+                        {renderAppointmentAuditTimestamps(apt)}
                         <div className="rounded-md bg-muted/40 p-2">
                           <p className="text-xs font-medium">Doctor</p>
                           <p className="text-xs text-muted-foreground">
@@ -1702,16 +1820,26 @@ export default function COOPortal() {
                 ) : (
                   paymentOverview.rows.map((payment) => {
                     const patient = payment.patient_id ? patientById.get(payment.patient_id) : null;
+                    const appointment = payment.appointment_id ? paymentAppointmentById.get(payment.appointment_id) : null;
                     const messageTargetPatientId = patient?.user_id || payment.patient_id || null;
                     const patientName = patient?.full_name || payment.patient_name || 'Unknown Patient';
                     const patientEmail = patient?.email || payment.patient_email || 'N/A';
                     const patientPhone = patient?.phone_number || payment.patient_phone || 'N/A';
+                    const paymentMadeAt = payment.verified_at || payment.created_at;
 
                     return (
                     <div key={payment.id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
                       <div className="min-w-0 space-y-1">
                         <p className="text-sm font-medium">{formatCurrency(Number(payment.amount || 0))}</p>
-                        <p className="text-xs text-muted-foreground">{formatDateTime(payment.created_at || null)}</p>
+                        <p className="text-xs text-muted-foreground">{formatExactDateTime(payment.created_at || null)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Booked at:</span>{' '}
+                          {formatExactDateTime(appointment?.created_at || null)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Payment made at:</span>{' '}
+                          {formatExactDateTime(paymentMadeAt || null)}
+                        </p>
                         <p className="text-xs">
                           <span className="font-medium">Patient:</span>{' '}
                           {messageTargetPatientId ? (

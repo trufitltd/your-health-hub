@@ -63,25 +63,19 @@ export const AvailabilityService = {
 
   async calculatePricePreview(input: PricePreviewRequest): Promise<PricePreviewResponse> {
     const { data: { session } } = await supabase.auth.getSession();
-    console.log('[AvailabilityService] Calling pricing-preview using native fetch');
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/pricing-preview`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-      },
-      body: JSON.stringify({ ...input, patientId: session?.user?.id }),
+    const { data, error } = await supabase.functions.invoke('pricing-preview', {
+      body: { ...input, patientId: session?.user?.id },
+      headers: session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : undefined,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('[AvailabilityService] Pricing preview error:', errorData);
-      throw new Error(errorData.message || 'Failed to fetch pricing preview');
+    if (error) {
+      const details = typeof (error as any)?.message === 'string' ? (error as any).message : 'Failed to fetch pricing preview';
+      throw new Error(details);
     }
 
-    const result = await response.json() as PricePreviewResponse | null;
+    const result = data as PricePreviewResponse | null;
     if (!result || typeof result.finalPrice !== 'number') {
       throw new Error('Invalid pricing preview response');
     }
