@@ -66,6 +66,7 @@ export interface PaymentIntentResult {
   email: string;
   metadata: Record<string, unknown>;
   accessCode?: string;
+  authorizationUrl?: string;
 }
 
 export interface BookingInitiateResult {

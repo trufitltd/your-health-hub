@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useEffect } from 'react';
 import { normalizeAppointmentStatus, normalizeRescheduleRequestStatus } from '@/services/marketplaceTypes';
+import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
 
 export interface Appointment {
   id: string;
@@ -61,12 +62,28 @@ export const useAppointments = () => {
       
       // Fetch doctor profile pictures
       const doctorIds = (data || []).map(apt => apt.doctor_id).filter(Boolean);
-      if (doctorIds.length === 0) {
-        return (data || []).map((apt: any) => ({
+      const toEffectiveAppointment = (apt: any) => {
+        const normalizedRescheduleStatus = normalizeRescheduleRequestStatus(apt.reschedule_request_status);
+        const approvedDate = normalizedRescheduleStatus === 'approved'
+          ? String(apt.reschedule_proposed_date || '').trim()
+          : '';
+        const approvedTimeRaw = normalizedRescheduleStatus === 'approved'
+          ? String(apt.reschedule_proposed_time || '').trim()
+          : '';
+        const approvedTime = normalizeTimeHHMM(approvedTimeRaw);
+        const baseTime = normalizeTimeHHMM(String(apt.time || '').trim());
+
+        return {
           ...apt,
+          date: approvedDate || apt.date,
+          time: approvedTime || baseTime || apt.time,
           status: normalizeAppointmentStatus(apt.status),
-          reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
-        })) as Appointment[];
+          reschedule_request_status: normalizedRescheduleStatus,
+        };
+      };
+
+      if (doctorIds.length === 0) {
+        return (data || []).map((apt: any) => toEffectiveAppointment(apt)) as Appointment[];
       }
       
       const { data: doctorData } = await supabase
@@ -77,9 +94,7 @@ export const useAppointments = () => {
       const doctorPictureMap = new Map(doctorData?.map(d => [d.user_id, d.profile_picture_url]) || []);
       
       return (data || []).map((apt: any) => ({
-        ...apt,
-        status: normalizeAppointmentStatus(apt.status),
-        reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+        ...toEffectiveAppointment(apt),
         doctor_profile_picture: doctorPictureMap.get(apt.doctor_id) || null
       })) as Appointment[];
     },
@@ -87,7 +102,7 @@ export const useAppointments = () => {
   });
 
   const invalidateAppointments = () => {
-    queryClient.invalidateQueries({ queryKey: ['appointments', user?.id] });
+    queryClient.invalidateQueries({ queryKey: ['appointments', user?.id], refetchType: 'all' });
   };
 
   // Real-time subscription for appointments
