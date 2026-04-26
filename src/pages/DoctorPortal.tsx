@@ -81,7 +81,7 @@ import {
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
-import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
+import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage, cleanNotesForDisplay, formatConsultationLanguageFromNotes } from '@/lib/consultationLanguage';
 import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
 
 const PROFILE_BIO_TRANSLATION_LANGUAGES = [
@@ -2577,7 +2577,8 @@ ${ePrescription}
                           ).toLocaleDateString()} {t('common.at', 'at')} {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
                         </p>
                       )}
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('doctorPortal.notes.none', 'No notes')}</p>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{cleanNotesForDisplay(apt.notes) || t('doctorPortal.notes.none', 'No notes')}</p>
+                      {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-xs text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                     </div>
                     <div className="flex items-center gap-2">
                       {apt.status === 'pending_approval' && (
@@ -2655,7 +2656,8 @@ ${ePrescription}
                       {t('doctorPortal.calendar.appointmentTimePassedHint', 'Appointment time passed. Keep this in confirmed until you mark no-show or complete follow-up.')}
                     </p>
                   )}
-                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || t('doctorPortal.notes.noneProvided', 'No notes provided.')}</p>
+                  <p className="text-sm text-muted-foreground">{cleanNotesForDisplay(calendarFocusedAppointment.notes) || t('doctorPortal.notes.noneProvided', 'No notes provided.')}</p>
+                  {formatConsultationLanguageFromNotes(calendarFocusedAppointment.notes) && <p className="text-sm text-muted-foreground">{formatConsultationLanguageFromNotes(calendarFocusedAppointment.notes)}</p>}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
@@ -4220,7 +4222,8 @@ ${ePrescription}
                                         reschedule_request_status?: string | null;
                                         reschedule_requested_by?: string | null;
                                       })}
-                                      <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                      <p className="text-sm text-muted-foreground mt-1">{cleanNotesForDisplay(apt.notes) || 'No notes'}</p>
+                                      {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-sm text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                                     </div>
                                   </div>
                                   <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
@@ -4448,7 +4451,8 @@ ${ePrescription}
                                             ? `${apt.patient_age} ${t('doctorPortal.labels.yearsOld', 'years old')}`
                                             : t('doctorPortal.labels.ageNA', 'Age N/A')}
                                         </p>
-                                        <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">{cleanNotesForDisplay(apt.notes) || 'No notes'}</p>
+                                        {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-xs text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                                       </div>
                                     </div>
                                     <div className="flex gap-2">
