@@ -1541,7 +1541,7 @@ const DoctorPortal = () => {
   };
 
   const doctorVisibleAppointments = useMemo(
-    () => (fetchedAppointments || []).filter((apt) => apt.status !== 'pending_payment'),
+    () => (fetchedAppointments || []),
     [fetchedAppointments],
   );
   const rescheduleAppointment = useMemo(
@@ -1550,7 +1550,11 @@ const DoctorPortal = () => {
   );
 
   const openRescheduleDialog = (appointment: any) => {
-    if (isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null })) {
+    const aptStatus = String(appointment?.status || '').trim().toLowerCase();
+    if (
+      isPendingRescheduleRequest(appointment as { reschedule_request_status?: string | null }) &&
+      aptStatus !== 'pending_approval'
+    ) {
       toast({
         title: 'Request already pending',
         description: 'A reschedule request is already awaiting a response.',
@@ -1558,8 +1562,7 @@ const DoctorPortal = () => {
       });
       return;
     }
-    const aptStatus = String(appointment?.status || '').trim().toLowerCase();
-    if (!['pending_approval', 'confirmed', 'in_progress', 'no_show'].includes(aptStatus)) {
+    if (!['pending_payment', 'pending_approval', 'confirmed', 'in_progress', 'no_show'].includes(aptStatus)) {
       toast({
         title: 'Reschedule unavailable',
         description: 'Completed or cancelled appointments cannot be rescheduled.',
@@ -2114,7 +2117,7 @@ ${ePrescription}
     switch (appointmentStatusFilter) {
       case 'pending_approval':
         filtered = doctorVisibleAppointments.filter(
-          (apt) => apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+          (apt) => apt.status === 'pending_approval' || apt.status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
         );
         break;
       case 'confirmed':
@@ -2548,17 +2551,31 @@ ${ePrescription}
                       )}
                       <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('doctorPortal.notes.none', 'No notes')}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setCalendarFocusedAppointmentId(apt.id);
-                        setCalendarDayDialogOpen(false);
-                        setCalendarEventDialogOpen(true);
-                      }}
-                    >
-                      {t('common.view', 'View')}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {apt.status === 'pending_approval' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            openRescheduleDialog(apt);
+                            setCalendarDayDialogOpen(false);
+                          }}
+                        >
+                          {t('doctorPortal.actions.reschedule', 'Reschedule')}
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setCalendarFocusedAppointmentId(apt.id);
+                          setCalendarDayDialogOpen(false);
+                          setCalendarEventDialogOpen(true);
+                        }}
+                      >
+                        {t('common.view', 'View')}
+                      </Button>
+                    </div>
                   </div>
                 ))
               )}
@@ -2666,8 +2683,15 @@ ${ePrescription}
                       {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
                     </Button>
                   )}
-                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
-                    calendarFocusedAppointment.status === 'confirmed' && (
+                  {(calendarFocusedAppointment.status === 'pending_approval' ||
+                    (
+                      !isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
+                      (
+                        calendarFocusedAppointment.status === 'confirmed'
+                        || calendarFocusedAppointment.status === 'in_progress'
+                        || calendarFocusedAppointment.status === 'no_show'
+                      )
+                    )) && (
                     <>
                       <Button
                         size="sm"
@@ -2725,6 +2749,18 @@ ${ePrescription}
                   {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
                     isPatientRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
                     <>
+                      {calendarFocusedAppointment.status === 'pending_approval' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            openRescheduleDialog(calendarFocusedAppointment);
+                            setCalendarEventDialogOpen(false);
+                          }}
+                        >
+                          {t('doctorPortal.actions.reschedule', 'Reschedule')}
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         onClick={() => {
@@ -2748,7 +2784,21 @@ ${ePrescription}
                   )}
                   {isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
                     isDoctorRequestedReschedule(calendarFocusedAppointment as { reschedule_requested_by?: string | null }) && (
-                    <Badge variant="secondary">{t('doctorPortal.badges.waitingPatientApproval', 'Waiting for patient approval')}</Badge>
+                    <>
+                      <Badge variant="secondary">{t('doctorPortal.badges.waitingPatientApproval', 'Waiting for patient approval')}</Badge>
+                      {calendarFocusedAppointment.status === 'pending_approval' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            openRescheduleDialog(calendarFocusedAppointment);
+                            setCalendarEventDialogOpen(false);
+                          }}
+                        >
+                          {t('doctorPortal.actions.reschedule', 'Reschedule')}
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -4153,6 +4203,14 @@ ${ePrescription}
                                     )}
                                     {pendingReschedule && patientRequested ? (
                                       <>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="w-full sm:w-auto"
+                                          onClick={() => openRescheduleDialog(apt)}
+                                        >
+                                          Reschedule
+                                        </Button>
                                         <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
                                           Approve Reschedule
                                         </Button>
@@ -4161,9 +4219,27 @@ ${ePrescription}
                                         </Button>
                                       </>
                                     ) : pendingReschedule ? (
-                                      <Badge variant="secondary">Waiting for patient approval</Badge>
+                                      <>
+                                        <Badge variant="secondary">Waiting for patient approval</Badge>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="w-full sm:w-auto"
+                                          onClick={() => openRescheduleDialog(apt)}
+                                        >
+                                          Reschedule
+                                        </Button>
+                                      </>
                                     ) : (
                                       <>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="w-full sm:w-auto"
+                                          onClick={() => openRescheduleDialog(apt)}
+                                        >
+                                          Reschedule
+                                        </Button>
                                         <Button size="sm" className="w-full sm:w-auto" onClick={() => handleApproveRequest(apt)}>
                                           Approve
                                         </Button>
@@ -4539,7 +4615,7 @@ ${ePrescription}
                                       {t('doctorPortal.actions.viewFolder', 'View Folder')}
                                     </Button>
                                   )}
-                                  {!pendingReschedule && apt.status === 'pending_approval' && (
+                                  {!pendingReschedule && (apt.status === 'pending_approval' || apt.status === 'pending_payment') && (
                                     <div className="flex gap-2">
                                       <Button size="sm" onClick={() => handleApproveRequest(apt)}>
                                         Approve
@@ -4549,33 +4625,26 @@ ${ePrescription}
                                       </Button>
                                     </div>
                                   )}
-                                  {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress' || apt.status === 'pending_approval') && !hasAppointmentTimePassed(apt) && (
-                                      <div className="flex gap-2">
-                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
-                                          Reschedule
-                                        </Button>
-                                      </div>
-                                    )}
+                                  {!pendingReschedule && (apt.status === 'pending_approval' || apt.status === 'pending_payment' || apt.status === 'confirmed' || apt.status === 'in_progress' || apt.status === 'no_show') && (
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                        Reschedule
+                                      </Button>
+                                    </div>
+                                  )}
                                   {!pendingReschedule && (apt.status === 'confirmed' || apt.status === 'in_progress') &&
                                     hasAppointmentTimePassed(apt) && (
                                       <div className="flex gap-2">
                                         <Button size="sm" variant="outline" className="text-destructive" onClick={() => handleMarkNoShow(apt.id)}>
                                           Mark No Show
                                         </Button>
-                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
-                                          Reschedule
-                                        </Button>
-                                      </div>
-                                    )}
-                                  {!pendingReschedule && apt.status === 'no_show' && (
-                                      <div className="flex gap-2">
-                                        <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
-                                          Reschedule
-                                        </Button>
                                       </div>
                                     )}
                                   {pendingReschedule && patientRequested && (
                                     <div className="flex gap-2">
+                                      <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                        Reschedule
+                                      </Button>
                                       <Button size="sm" onClick={() => handleApproveRequest(apt)}>
                                         Approve Reschedule
                                       </Button>
@@ -4585,7 +4654,12 @@ ${ePrescription}
                                     </div>
                                   )}
                                   {pendingReschedule && !patientRequested && (
-                                    <Badge variant="secondary">Waiting for patient approval</Badge>
+                                    <div className="flex gap-2 items-center">
+                                      <Badge variant="secondary">Waiting for patient approval</Badge>
+                                      <Button size="sm" variant="outline" onClick={() => openRescheduleDialog(apt)}>
+                                        Reschedule
+                                      </Button>
+                                    </div>
                                   )}
                                 </div>
                               )})

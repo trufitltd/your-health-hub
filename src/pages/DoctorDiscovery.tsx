@@ -534,14 +534,27 @@ export default function DoctorDiscovery() {
         .filter((doctor) => isDoctorVisibleInDiscovery(doctor.full_name, canViewTestDoctor));
 
       const doctorIds = registrationRows.map((doctor) => doctor.user_id).filter(Boolean);
-      const { data: schedules } = doctorIds.length > 0
-        ? await supabase
-            .from('doctor_schedules')
-            .select('doctor_id')
-            .in('doctor_id', doctorIds)
-            .eq('is_available', true)
-        : { data: [] };
-      const doctorsWithSchedules = new Set((schedules || []).map((row: any) => String(row.doctor_id || '')));
+      let doctorsWithSchedules = new Set<string>();
+      if (doctorIds.length > 0) {
+        // Use a broad read + local intersection to avoid false negatives from large IN filters.
+        const { data: schedules, error: schedulesError } = await supabase
+          .from('doctor_schedules')
+          .select('doctor_id')
+          .eq('is_available', true);
+
+        if (schedulesError) {
+          console.warn('[DoctorDiscovery] Failed to fetch available schedules:', schedulesError);
+          // Do not mark everyone unavailable on transient query failure.
+          doctorsWithSchedules = new Set(doctorIds);
+        } else {
+          const discoveryDoctorIdSet = new Set(doctorIds.map((id) => String(id)));
+          doctorsWithSchedules = new Set(
+            (schedules || [])
+              .map((row: any) => String(row.doctor_id || ''))
+              .filter((doctorId) => discoveryDoctorIdSet.has(doctorId))
+          );
+        }
+      }
 
       const doctorsWithRatings = registrationRows.map((doctor) => {
         const hasAvailableSchedules = doctorsWithSchedules.has(String(doctor.user_id || ''));
@@ -579,7 +592,7 @@ export default function DoctorDiscovery() {
         };
       });
 
-      return doctorsWithRatings.filter((doctor) => doctor.is_active !== false);
+      return doctorsWithRatings;
     }
   });
 
@@ -853,13 +866,6 @@ export default function DoctorDiscovery() {
     if (!user) {
       toast({ title: 'Please sign in', description: 'You must be signed in to book appointments.' });
       navigate(`/auth?redirect=/booking/${doctor.user_id}`);
-      return;
-    }
-    if (!doctor.is_active) {
-      toast({ 
-        title: 'Doctor Unavailable', 
-        description: `${doctor.full_name} is currently unavailable. Please choose another doctor.` 
-      });
       return;
     }
 
@@ -1288,7 +1294,7 @@ export default function DoctorDiscovery() {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                     >
-                      <Card className={`h-full flex flex-col hover:shadow-lg transition-shadow ${!doctor.is_active ? 'opacity-60' : ''}`}>
+                      <Card className="h-full flex flex-col hover:shadow-lg transition-shadow">
                         <CardContent className="p-6 flex-1 flex flex-col">
                           <div className="flex items-start justify-between mb-4">
                               <div className="relative">
@@ -1308,11 +1314,6 @@ export default function DoctorDiscovery() {
                                 <Badge className="text-xs bg-blue-100 text-blue-800">
                                   {isGeneralPracticeDoctor ? 'General' : 'Specialist'}
                                 </Badge>
-                                {!doctor.is_active && (
-                                  <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20">
-                                    Unavailable
-                                  </Badge>
-                                )}
                               </div>
                             </div>
 
@@ -1379,7 +1380,6 @@ export default function DoctorDiscovery() {
                                 size="sm"
                                 className="flex-1"
                                 onClick={() => handleViewProfile(doctor)}
-                                disabled={!doctor.is_active}
                               >
                                 View Profile
                               </Button>
@@ -1387,9 +1387,8 @@ export default function DoctorDiscovery() {
                                 size="sm"
                                 className="flex-1"
                                 onClick={() => handleBookNow(doctor)}
-                                disabled={!doctor.is_active}
                               >
-                                {doctor.is_active ? 'Book Now' : 'Unavailable'}
+                                Book Now
                               </Button>
                             </div>
                           </CardContent>

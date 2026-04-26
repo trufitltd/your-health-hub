@@ -5,7 +5,7 @@ import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
   Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2, Send,
-  Badge as BadgeIcon, Settings, Gift
+  Badge as BadgeIcon, Settings, Gift, Copy
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -118,6 +118,13 @@ interface AdminAppointmentRow {
   doctor_name: string;
   doctor_email: string;
   doctor_phone: string;
+}
+
+interface AdminAppointmentPaymentRow {
+  appointment_id: string | null;
+  status: string | null;
+  created_at: string | null;
+  verified_at: string | null;
 }
 
 interface AdminPatientFolderRow {
@@ -324,6 +331,35 @@ const CentralAdmin = () => {
     enabled: !!user,
     refetchInterval: 15000,
   });
+  const adminAppointmentIds = useMemo(
+    () => adminAppointments.map((row) => row.id).filter(Boolean),
+    [adminAppointments],
+  );
+  const { data: adminAppointmentPaymentRows = [] } = useQuery({
+    queryKey: ['admin-appointment-payment-timestamps', adminAppointmentIds.join(',')],
+    queryFn: async () => {
+      if (adminAppointmentIds.length === 0) return [] as AdminAppointmentPaymentRow[];
+      const { data, error } = await supabase.rpc('admin_list_payments', {
+        p_status: null,
+        p_provider: null,
+        p_limit: 5000,
+        p_offset: 0,
+      });
+      if (error) {
+        throw error;
+      }
+      return ((data || []) as Array<any>)
+        .filter((row) => row?.appointment_id && adminAppointmentIds.includes(String(row.appointment_id)))
+        .map((row) => ({
+          appointment_id: row.appointment_id ? String(row.appointment_id) : null,
+          status: row.status ? String(row.status) : null,
+          created_at: row.created_at ? String(row.created_at) : null,
+          verified_at: row.verified_at ? String(row.verified_at) : null,
+        })) as AdminAppointmentPaymentRow[];
+    },
+    enabled: !!user && adminAppointmentIds.length > 0,
+    refetchInterval: 15000,
+  });
 
   // Realtime notifications for admin
   useRealtimeNotifications(user?.id, 'admin', user?.email);
@@ -332,6 +368,39 @@ const CentralAdmin = () => {
   const { formatDate, formatDateTime, formatCurrency } = useLocaleFormatter();
   const { isInstalled: isPwaInstalled, promptInstall } = usePwaInstall();
   const notAvailableLabel = t('specialists.defaults.notAvailable', 'N/A');
+  const formatBookedAt = (value?: string | null) =>
+    value
+      ? formatDateTime(
+          value,
+          {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          },
+          notAvailableLabel,
+        )
+      : notAvailableLabel;
+  const isSuccessfulPaymentStatus = (status?: string | null) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    return ['success', 'successful', 'succeeded', 'paid', 'completed'].includes(normalized);
+  };
+  const adminAppointmentPaymentById = useMemo(() => {
+    const next = new Map<string, AdminAppointmentPaymentRow>();
+    for (const row of adminAppointmentPaymentRows) {
+      const appointmentId = String(row.appointment_id || '');
+      if (!appointmentId) continue;
+      const rowActivity = new Date(row.verified_at || row.created_at || 0).getTime();
+      const existing = next.get(appointmentId);
+      const existingActivity = existing ? new Date(existing.verified_at || existing.created_at || 0).getTime() : -1;
+      if (!existing || rowActivity > existingActivity) {
+        next.set(appointmentId, row);
+      }
+    }
+    return next;
+  }, [adminAppointmentPaymentRows]);
   const formatBytes = (rawBytes: unknown) => {
     const bytes = Number(rawBytes);
     if (!Number.isFinite(bytes) || bytes <= 0) return null;
@@ -411,6 +480,38 @@ const CentralAdmin = () => {
       urgent: true,
       intensity: notificationAlertIntensity,
     });
+  };
+
+  const handleCopyAppointmentId = async (appointmentId: string) => {
+    const idToCopy = String(appointmentId || '').trim();
+    if (!idToCopy) {
+      toast({ title: 'Copy failed', description: 'Appointment ID is missing.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(idToCopy);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = idToCopy;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+
+      toast({ title: 'Copied', description: 'Full appointment ID copied.' });
+    } catch (error: any) {
+      toast({
+        title: 'Copy failed',
+        description: error?.message || 'Could not copy appointment ID.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const adminEmails = useMemo(() => {
@@ -2638,12 +2739,34 @@ const CentralAdmin = () => {
                           ) : (
                             newAppointments.map((apt) => (
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                                {(() => {
+                                  const payment = adminAppointmentPaymentById.get(apt.id);
+                                  const paymentMadeAt = payment?.verified_at
+                                    || (isSuccessfulPaymentStatus(payment?.status) ? payment?.created_at || null : null);
+                                  const activityDate = paymentMadeAt || apt.updated_at || apt.created_at || null;
+                                  return (
+                                    <div className="rounded-md bg-muted/30 p-2 space-y-1">
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Created:</span> {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Verified:</span> {payment?.verified_at ? formatDateTime(payment.verified_at) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Booked at:</span> {formatBookedAt(apt.created_at)}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Payment made at:</span> {paymentMadeAt ? formatDateTime(paymentMadeAt) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Activity date:</span> {activityDate ? formatDateTime(activityDate) : notAvailableLabel}</p>
+                                    </div>
+                                  );
+                                })()}
                                 <div className="flex items-center justify-between gap-2">
                                   {getAppointmentStatusBadge(apt.status)}
                                   <div className="flex items-center gap-2">
-                                    <span className="text-xs text-muted-foreground">
-                                      {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}
-                                    </span>
+                                    <span className="text-xs text-muted-foreground">{apt.id.slice(0, 8)}...</span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6"
+                                      onClick={() => handleCopyAppointmentId(apt.id)}
+                                      title="Copy full appointment ID"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </Button>
                                     <Button
                                       size="icon"
                                       variant="ghost"
@@ -2675,12 +2798,34 @@ const CentralAdmin = () => {
                           ) : (
                             adminAppointments.map((apt) => (
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                                {(() => {
+                                  const payment = adminAppointmentPaymentById.get(apt.id);
+                                  const paymentMadeAt = payment?.verified_at
+                                    || (isSuccessfulPaymentStatus(payment?.status) ? payment?.created_at || null : null);
+                                  const activityDate = paymentMadeAt || apt.updated_at || apt.created_at || null;
+                                  return (
+                                    <div className="rounded-md bg-muted/30 p-2 space-y-1">
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Created:</span> {apt.created_at ? formatDateTime(apt.created_at) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Verified:</span> {payment?.verified_at ? formatDateTime(payment.verified_at) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Booked at:</span> {formatBookedAt(apt.created_at)}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Payment made at:</span> {paymentMadeAt ? formatDateTime(paymentMadeAt) : notAvailableLabel}</p>
+                                      <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Activity date:</span> {activityDate ? formatDateTime(activityDate) : notAvailableLabel}</p>
+                                    </div>
+                                  );
+                                })()}
                                 <div className="flex items-center justify-between gap-2">
                                   {getAppointmentStatusBadge(apt.status)}
                                   <div className="flex items-center gap-2">
-                                    <span className="text-xs text-muted-foreground">
-                                      {apt.created_at ? formatDate(apt.created_at) : notAvailableLabel}
-                                    </span>
+                                    <span className="text-xs text-muted-foreground">{apt.id.slice(0, 8)}...</span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6"
+                                      onClick={() => handleCopyAppointmentId(apt.id)}
+                                      title="Copy full appointment ID"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </Button>
                                     <Button
                                       size="icon"
                                       variant="ghost"

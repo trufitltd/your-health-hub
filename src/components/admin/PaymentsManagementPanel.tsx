@@ -65,6 +65,7 @@ type WithdrawalRequestRow = {
 type AppointmentLookupRow = {
   id: string;
   status: string | null;
+  created_at: string | null;
 };
 
 type PatientLookupRow = {
@@ -109,6 +110,21 @@ const formatDateTime = (value?: string | null) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'N/A';
   return date.toLocaleString();
+};
+
+const formatExactDateTime = (value?: string | null) => {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 };
 
 const toDateInputValue = (date: Date) => {
@@ -560,7 +576,7 @@ export const PaymentsManagementPanel = () => {
       if (appointmentIds.length === 0) return [] as AppointmentLookupRow[];
       const { data, error } = await supabase
         .from('appointments')
-        .select('id, status')
+        .select('id, status, created_at')
         .in('id', appointmentIds);
       if (error) throw error;
       return (data || []) as AppointmentLookupRow[];
@@ -572,6 +588,12 @@ export const PaymentsManagementPanel = () => {
   const appointmentStatusLookup = useMemo(() => {
     const map = new Map<string, string | null>();
     appointmentRows.forEach((row) => map.set(row.id, row.status));
+    return map;
+  }, [appointmentRows]);
+
+  const appointmentBookedAtLookup = useMemo(() => {
+    const map = new Map<string, string | null>();
+    appointmentRows.forEach((row) => map.set(row.id, row.created_at || null));
     return map;
   }, [appointmentRows]);
 
@@ -1062,14 +1084,24 @@ export const PaymentsManagementPanel = () => {
                               : 'N/A'}
                           </p>
                           <p>
-                            <span className="font-medium text-foreground">Created:</span> {formatDateTime(payment.created_at)}
+                            <span className="font-medium text-foreground">Created:</span> {formatExactDateTime(payment.created_at)}
                           </p>
                           <p>
-                            <span className="font-medium text-foreground">Verified:</span> {formatDateTime(payment.verified_at)}
+                            <span className="font-medium text-foreground">Verified:</span> {formatExactDateTime(payment.verified_at)}
+                          </p>
+                          <p>
+                            <span className="font-medium text-foreground">Booked at:</span>{' '}
+                            {payment.appointment_id
+                              ? formatExactDateTime(appointmentBookedAtLookup.get(payment.appointment_id) || null)
+                              : 'N/A'}
+                          </p>
+                          <p>
+                            <span className="font-medium text-foreground">Payment made at:</span>{' '}
+                            {formatExactDateTime(getPaymentActivityTimestamp(payment))}
                           </p>
                           <p>
                             <span className="font-medium text-foreground">Activity date:</span>{' '}
-                            {formatDateTime(getPaymentActivityTimestamp(payment))}
+                            {formatExactDateTime(getPaymentActivityTimestamp(payment))}
                           </p>
                         </div>
                       </div>
