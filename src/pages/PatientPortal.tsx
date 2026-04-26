@@ -80,7 +80,7 @@ import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
-import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
+import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage, cleanNotesForDisplay, formatConsultationLanguageFromNotes } from '@/lib/consultationLanguage';
 import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
 import {
   DEFAULT_BOOKING_DURATION_MINUTES,
@@ -2957,7 +2957,8 @@ const PatientPortal = () => {
                           ).toLocaleDateString()} {t('common.at', 'at')} {(apt as { reschedule_proposed_time?: string | null }).reschedule_proposed_time || apt.time}
                         </p>
                       )}
-                      <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('patientPortal.notes.none', 'No notes')}</p>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{cleanNotesForDisplay(apt.notes) || t('patientPortal.notes.none', 'No notes')}</p>
+                      {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-xs text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                     </div>
                     <div className="flex items-center gap-2">
                       {apt.status === 'pending_payment' && (
@@ -3034,7 +3035,8 @@ const PatientPortal = () => {
                       {t('patientPortal.calendar.appointmentTimePassedHint', 'Appointment time has passed. It remains confirmed until your doctor marks no-show or follow-up.')}
                     </p>
                   )}
-                  <p className="text-sm text-muted-foreground">{calendarFocusedAppointment.notes || t('patientPortal.notes.noneProvided', 'No notes provided.')}</p>
+                  <p className="text-sm text-muted-foreground">{cleanNotesForDisplay(calendarFocusedAppointment.notes) || t('patientPortal.notes.noneProvided', 'No notes provided.')}</p>
+                  {formatConsultationLanguageFromNotes(calendarFocusedAppointment.notes) && <p className="text-sm text-muted-foreground">{formatConsultationLanguageFromNotes(calendarFocusedAppointment.notes)}</p>}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 justify-end">
@@ -4405,7 +4407,8 @@ const PatientPortal = () => {
                                         </p>
                                       )}
                                       {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
-                                      <p className="text-sm text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                      <p className="text-sm text-muted-foreground mt-1">{cleanNotesForDisplay(apt.notes) || 'No notes'}</p>
+                                      {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-sm text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                                     </div>
                                   </div>
                                   <div className="flex gap-2">
@@ -4646,7 +4649,8 @@ const PatientPortal = () => {
                                       <div>
                                         <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                         <p className="text-sm text-muted-foreground">{t('common.appointments', 'Appointments')}</p>
-                                        <p className="text-xs text-muted-foreground mt-1">{apt.notes || 'No notes'}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">{cleanNotesForDisplay(apt.notes) || 'No notes'}</p>
+                                        {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-xs text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2">
