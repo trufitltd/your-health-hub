@@ -56,9 +56,9 @@ BEGIN
     RAISE EXCEPTION 'Forbidden';
   END IF;
 
-  -- Doctors can reschedule confirmed, in_progress, pending_approval, no_show; patients only confirmed/pending_approval/no_show
+  -- Doctors can reschedule pending_payment, pending_approval, confirmed, in_progress, no_show
   IF v_requested_by = 'doctor' THEN
-    IF v_status NOT IN ('pending_approval', 'confirmed', 'in_progress', 'no_show') THEN
+    IF v_status NOT IN ('pending_payment', 'pending_approval', 'confirmed', 'in_progress', 'no_show') THEN
       RAISE EXCEPTION 'Cannot request reschedule for appointment in status %', v_status;
     END IF;
   ELSE
