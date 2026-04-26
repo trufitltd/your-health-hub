@@ -81,6 +81,7 @@ import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
+import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
 import {
   DEFAULT_BOOKING_DURATION_MINUTES,
   DEFAULT_CONSULTATION_TYPE,
@@ -2037,11 +2038,13 @@ const PatientPortal = () => {
           setBookingOpen(false);
           await new Promise((resolve) => setTimeout(resolve, 220));
           let paymentCompleted = false;
-          initializePayment({
+          await initializePayment({
             email: paymentInit.email || user?.email || '',
             amount: paymentInit.amountInKobo,
             reference: paymentInit.reference,
             accessCode: paymentInit.accessCode,
+            authorizationUrl: paymentInit.authorizationUrl,
+            preferRedirect: true,
             publicKey: paystackPublicKey,
             metadata: paymentInit.metadata,
             onSuccess: async (response: any) => {
@@ -2174,7 +2177,32 @@ const PatientPortal = () => {
               : 'New slot confirmed.'
             : 'The reschedule request was declined.',
       });
+
+      if (action === 'approve') {
+        // Patch cache immediately using new_date/new_time returned by RPC
+        const newDate = (response as any).new_date;
+        const newTime = normalizeTimeHHMM((response as any).new_time) || (response as any).new_time;
+        if (newDate && newTime) {
+          queryClient.setQueryData(['appointments', user?.id], (old: any[]) =>
+            (old || []).map((apt) =>
+              apt.id === appointmentId
+                ? { ...apt, date: newDate, time: newTime, reschedule_request_status: 'approved' }
+                : apt
+            )
+          );
+        } else {
+          const { data: updated } = await supabase
+            .from('appointments').select('*').eq('id', appointmentId).single();
+          if (updated) {
+            queryClient.setQueryData(['appointments', user?.id], (old: any[]) =>
+              (old || []).map((apt) => apt.id === appointmentId ? { ...apt, ...updated } : apt)
+            );
+          }
+        }
+      }
+
       invalidateAppointments();
+      await queryClient.refetchQueries({ queryKey: ['appointments', user?.id], type: 'active' });
       await queryClient.invalidateQueries({ queryKey: ['patient-wallet', user?.id] });
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
@@ -2931,17 +2959,30 @@ const PatientPortal = () => {
                       )}
                       <p className="text-xs text-muted-foreground mt-1 truncate">{apt.notes || t('patientPortal.notes.none', 'No notes')}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setCalendarFocusedAppointmentId(apt.id);
-                        setCalendarDayDialogOpen(false);
-                        setCalendarEventDialogOpen(true);
-                      }}
-                    >
-                      {t('common.view', 'View')}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {apt.status === 'pending_payment' && (
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            handlePayNow(apt);
+                            setCalendarDayDialogOpen(false);
+                          }}
+                        >
+                          Pay Now
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setCalendarFocusedAppointmentId(apt.id);
+                          setCalendarDayDialogOpen(false);
+                          setCalendarEventDialogOpen(true);
+                        }}
+                      >
+                        {t('common.view', 'View')}
+                      </Button>
+                    </div>
                   </div>
                 ))
               )}
@@ -3031,6 +3072,29 @@ const PatientPortal = () => {
                     >
                       {t('patientPortal.actions.leaveReview', 'Leave Review')}
                     </Button>
+                  )}
+                  {calendarFocusedAppointment.status === 'pending_payment' && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          handlePayNow(calendarFocusedAppointment);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        Pay Now
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          setCancelAppointmentId((calendarFocusedAppointment as { id?: string }).id ?? null);
+                          setCalendarEventDialogOpen(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
                   )}
                   {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
                     (calendarFocusedAppointment.status === 'pending_approval' ||
@@ -3207,14 +3271,28 @@ const PatientPortal = () => {
       const paymentInit = paymentInitData as any;
 
       let paymentCompleted = false;
-      initializePayment({
+      let paymentWatchdogTriggered = false;
+      const paymentWatchdog = window.setTimeout(() => {
+        if (paymentCompleted) return;
+        paymentWatchdogTriggered = true;
+        toast({
+          title: 'Payment window timed out',
+          description: 'Paystack took too long to respond. Please close it and try again.',
+          variant: 'destructive',
+        });
+      }, 90000);
+      await initializePayment({
         email: paymentInit?.email || user.email || '',
         amount: paymentInit?.amountInKobo,
         reference: paymentInit?.reference,
         accessCode: paymentInit?.accessCode,
+        authorizationUrl: paymentInit?.authorizationUrl,
+        preferRedirect: true,
         publicKey: paystackPublicKey,
         metadata: paymentInit?.metadata,
         onSuccess: async (response: any) => {
+          if (paymentWatchdogTriggered) return;
+          window.clearTimeout(paymentWatchdog);
           paymentCompleted = true;
           const paidReference = String(response?.reference || paymentInit?.reference || '').trim();
 
@@ -3261,6 +3339,7 @@ const PatientPortal = () => {
           }
         },
         onClose: () => {
+          window.clearTimeout(paymentWatchdog);
           if (paymentCompleted) return;
           toast({ title: 'Payment cancelled', description: 'You cancelled the payment process.' });
         },

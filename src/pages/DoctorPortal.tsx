@@ -82,6 +82,7 @@ import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
 import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage } from '@/lib/consultationLanguage';
+import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
 
 const PROFILE_BIO_TRANSLATION_LANGUAGES = [
   { code: 'ha', label: 'Hausa' },
@@ -1301,6 +1302,28 @@ const DoctorPortal = () => {
       console.log('Patient IDs:', patientIds);
 
       const paidAppointmentIdSet = new Set<string>();
+      const toEffectiveDoctorAppointment = (apt: any) => {
+        const normalizedStatus = normalizeAppointmentStatus(apt.status);
+        const normalizedRescheduleStatus = normalizeRescheduleRequestStatus(apt.reschedule_request_status);
+        const approvedDate = normalizedRescheduleStatus === 'approved'
+          ? String(apt.reschedule_proposed_date || '').trim()
+          : '';
+        const approvedTimeRaw = normalizedRescheduleStatus === 'approved'
+          ? String(apt.reschedule_proposed_time || '').trim()
+          : '';
+        const approvedTime = normalizeTimeHHMM(approvedTimeRaw);
+        const baseTime = normalizeTimeHHMM(String(apt.time || '').trim());
+
+        return {
+          ...apt,
+          date: approvedDate || apt.date,
+          time: approvedTime || baseTime || apt.time,
+          status: normalizedStatus === 'pending_payment' && paidAppointmentIdSet.has(String(apt.id || ''))
+            ? 'pending_approval'
+            : normalizedStatus,
+          reschedule_request_status: normalizedRescheduleStatus,
+        };
+      };
       if (appointmentIds.length > 0) {
         const { data: paymentRows, error: paymentError } = await supabase
           .from('payments')
@@ -1323,15 +1346,7 @@ const DoctorPortal = () => {
       
       if (patientIds.length === 0) {
         return appointments.map((apt: any) => ({
-          ...apt,
-          status: (() => {
-            const normalizedStatus = normalizeAppointmentStatus(apt.status);
-            if (normalizedStatus === 'pending_payment' && paidAppointmentIdSet.has(String(apt.id || ''))) {
-              return 'pending_approval';
-            }
-            return normalizedStatus;
-          })(),
-          reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+          ...toEffectiveDoctorAppointment(apt),
           patient_age: null,
         }));
       }
@@ -1346,15 +1361,7 @@ const DoctorPortal = () => {
       // Merge the data
       const patientDataMap = new Map(patientData?.map(p => [p.user_id, { age: p.age, full_name: p.full_name, profile_picture_url: p.profile_picture_url }]) || []);
       return appointments.map((apt: any) => ({
-        ...apt,
-        status: (() => {
-          const normalizedStatus = normalizeAppointmentStatus(apt.status);
-          if (normalizedStatus === 'pending_payment' && paidAppointmentIdSet.has(String(apt.id || ''))) {
-            return 'pending_approval';
-          }
-          return normalizedStatus;
-        })(),
-        reschedule_request_status: normalizeRescheduleRequestStatus(apt.reschedule_request_status),
+        ...toEffectiveDoctorAppointment(apt),
         patient_age: patientDataMap.get(apt.patient_id)?.age || null,
         patient_name: patientDataMap.get(apt.patient_id)?.full_name || null,
         patient_profile_picture: patientDataMap.get(apt.patient_id)?.profile_picture_url || null
@@ -1434,7 +1441,28 @@ const DoctorPortal = () => {
             ? `Appointment updated. ₦${charged.toLocaleString()} charged from patient wallet.`
             : 'Appointment updated to the proposed slot.',
         });
+        // Patch cache immediately using new_date/new_time returned by RPC
+        const newDate = (result as any).new_date;
+        const newTime = normalizeTimeHHMM((result as any).new_time) || (result as any).new_time;
+        if (newDate && newTime) {
+          queryClient.setQueryData(['doctor-appointments', user?.id], (old: any[]) =>
+            (old || []).map((apt) =>
+              apt.id === appointmentId
+                ? { ...apt, date: newDate, time: newTime, reschedule_request_status: 'approved' }
+                : apt
+            )
+          );
+        } else {
+          const { data: updated } = await supabase
+            .from('appointments').select('*').eq('id', appointmentId).single();
+          if (updated) {
+            queryClient.setQueryData(['doctor-appointments', user?.id], (old: any[]) =>
+              (old || []).map((apt) => apt.id === appointmentId ? { ...apt, ...updated } : apt)
+            );
+          }
+        }
         refetch();
+        queryClient.invalidateQueries({ queryKey: ['doctor-appointments', user?.id], refetchType: 'all' });
         return;
       }
 

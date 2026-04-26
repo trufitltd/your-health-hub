@@ -86,8 +86,12 @@ export class PaymentService {
     }
 
     const accessCode = String(initializeData?.data?.access_code || '').trim();
+    const authorizationUrl = String(initializeData?.data?.authorization_url || '').trim();
     if (!accessCode) {
       throw new Error('Paystack initialize did not return an access code');
+    }
+    if (!authorizationUrl) {
+      throw new Error('Paystack initialize did not return an authorization URL');
     }
 
     const { error: accessCodePersistError } = await this.supabase
@@ -96,6 +100,7 @@ export class PaymentService {
         metadata: {
           ...metadata,
           paystack_access_code: accessCode,
+          paystack_authorization_url: authorizationUrl,
         },
       })
       .or(`provider_reference.eq.${reference},payment_reference.eq.${reference}`);
@@ -110,6 +115,7 @@ export class PaymentService {
       email: input.email,
       metadata,
       accessCode,
+      authorizationUrl,
     };
   }
 

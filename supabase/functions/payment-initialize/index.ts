@@ -79,7 +79,7 @@ serve(async (req) => {
 
     const { data: existingPendingPaystack, error: pendingLookupError } = await serviceClient
       .from('payments')
-      .select('amount, provider_reference, payment_reference, metadata')
+      .select('amount, provider_reference, payment_reference, metadata, created_at')
       .eq('appointment_id', appointmentId)
       .eq('provider', 'paystack')
       .in('status', ['PENDING', 'pending'])
@@ -98,19 +98,50 @@ serve(async (req) => {
     if (existingPendingPaystack && existingReference) {
       const existingAmountInKobo = Math.round(Number(existingPendingPaystack.amount || 0) * 100);
       const existingAccessCode = String((existingPendingPaystack.metadata as Record<string, unknown> | null)?.paystack_access_code || '').trim();
-      return new Response(
-        JSON.stringify({
-          email: profile?.email || user.email || '',
-          amountInKobo: existingAmountInKobo,
-          reference: existingReference,
-          metadata: existingPendingPaystack.metadata || {},
-          accessCode: existingAccessCode || undefined,
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        },
-      );
+      const existingAuthorizationUrl = String((existingPendingPaystack.metadata as Record<string, unknown> | null)?.paystack_authorization_url || '').trim();
+      const createdAtText = String((existingPendingPaystack as Record<string, unknown>)?.created_at || '').trim();
+      const createdAtMs = createdAtText ? Date.parse(createdAtText) : Number.NaN;
+      const pendingAgeMs = Number.isNaN(createdAtMs) ? Number.POSITIVE_INFINITY : Math.max(0, Date.now() - createdAtMs);
+      const isFreshPendingIntent = pendingAgeMs <= 15 * 60 * 1000;
+
+      // Reuse only when redirect URL exists; otherwise create a fresh intent.
+      if (existingAuthorizationUrl && isFreshPendingIntent) {
+        return new Response(
+          JSON.stringify({
+            email: profile?.email || user.email || '',
+            amountInKobo: existingAmountInKobo,
+            reference: existingReference,
+            metadata: existingPendingPaystack.metadata || {},
+            accessCode: existingAccessCode || undefined,
+            authorizationUrl: existingAuthorizationUrl,
+          }),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          },
+        );
+      }
+
+      // Mark stale pending intents as failed so a fresh initialization can proceed.
+      if (!isFreshPendingIntent) {
+        const staleMetadata = (existingPendingPaystack.metadata as Record<string, unknown> | null) || {};
+        const { error: staleMarkError } = await serviceClient
+          .from('payments')
+          .update({
+            status: 'FAILED',
+            metadata: {
+              ...staleMetadata,
+              stale_checkout_intent: true,
+              stale_marked_at: new Date().toISOString(),
+              stale_reason: 'pending_payment_intent_older_than_15_minutes',
+            },
+          })
+          .or(`provider_reference.eq.${existingReference},payment_reference.eq.${existingReference}`);
+
+        if (staleMarkError) {
+          console.warn('[payment-initialize] failed to mark stale pending payment as FAILED:', staleMarkError.message);
+        }
+      }
     }
 
     const { data: walletDebits, error: walletDebitLookupError } = await serviceClient
@@ -157,6 +188,7 @@ serve(async (req) => {
         reference: paymentIntent.reference,
         metadata: paymentIntent.metadata,
         accessCode: paymentIntent.accessCode,
+        authorizationUrl: paymentIntent.authorizationUrl,
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
