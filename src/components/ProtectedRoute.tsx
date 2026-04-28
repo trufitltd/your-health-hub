@@ -13,7 +13,7 @@ interface ProtectedRouteProps {
 const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
 const parseAppRole = (value: unknown): AppRole => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo') {
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink') {
     return normalized;
   }
   return 'patient';
@@ -22,6 +22,7 @@ const roleDefaultPath = (role: AppRole) => {
   if (role === 'doctor') return '/doctor-portal';
   if (role === 'admin') return '/admin';
   if (role === 'coo') return '/coo';
+  if (role === 'healthlink') return '/healthlink';
   return '/patient-portal';
 };
 const isConnectivityIssue = (error: unknown) => {

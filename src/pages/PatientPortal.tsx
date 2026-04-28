@@ -82,6 +82,7 @@ import { formatSpecialtyLabel } from '@/lib/utils';
 import { useLocaleFormatter } from '@/lib/locale';
 import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage, cleanNotesForDisplay, formatConsultationLanguageFromNotes } from '@/lib/consultationLanguage';
 import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
+import { APPOINTMENT_BASE_TIME_ZONE, appointmentLocalToDate } from '@/lib/appointmentDateTime';
 import {
   DEFAULT_BOOKING_DURATION_MINUTES,
   DEFAULT_CONSULTATION_TYPE,
@@ -2475,9 +2476,14 @@ const PatientPortal = () => {
     return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
-  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const getAppointmentDateTime = (apt: { date: string; time: string }) =>
+    appointmentLocalToDate(apt.date, apt.time, APPOINTMENT_BASE_TIME_ZONE)
+    || new Date(`${apt.date}T${apt.time}`);
   const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
     getAppointmentDateTime(apt).getTime() <= Date.now();
+  const formatAppointmentDate = (apt: { date: string; time: string }) => formatDate(getAppointmentDateTime(apt));
+  const formatAppointmentClockTime = (apt: { date: string; time: string }) =>
+    formatTime(getAppointmentDateTime(apt), { hour: '2-digit', minute: '2-digit' }, formatClockTime(apt.time));
   const isPendingRescheduleRequest = (apt: {
     reschedule_request_status?: string | null;
   }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
@@ -2531,7 +2537,9 @@ const PatientPortal = () => {
   }) => {
     const dateValue = getCalendarAppointmentDate(apt);
     const timeValue = getCalendarAppointmentTime(apt);
-    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    const effectiveDateTime =
+      appointmentLocalToDate(dateValue, timeValue, APPOINTMENT_BASE_TIME_ZONE)
+      || new Date(`${dateValue}T${timeValue}`);
     if (!Number.isNaN(effectiveDateTime.getTime())) {
       return effectiveDateTime.getTime() <= Date.now();
     }
@@ -2595,8 +2603,8 @@ const PatientPortal = () => {
 
       if (appointmentStatusFilter === 'confirmed') {
         const nowTs = Date.now();
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const dateTimeA = getAppointmentDateTime(a).getTime();
+        const dateTimeB = getAppointmentDateTime(b).getTime();
         const aIsPast = dateTimeA < nowTs;
         const bIsPast = dateTimeB < nowTs;
 
@@ -2608,13 +2616,13 @@ const PatientPortal = () => {
       }
 
       if (appointmentStatusFilter === 'in_progress') {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const dateTimeA = getAppointmentDateTime(a).getTime();
+        const dateTimeB = getAppointmentDateTime(b).getTime();
         return dateTimeA - dateTimeB;
       }
 
-      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      const dateTimeA = getAppointmentDateTime(a).getTime();
+      const dateTimeB = getAppointmentDateTime(b).getTime();
       return dateTimeB - dateTimeA;
     });
   }, [appointments, appointmentStatusFilter]);
@@ -2942,7 +2950,7 @@ const PatientPortal = () => {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
+                        <span className="text-sm font-medium">{formatAppointmentClockTime(apt)}</span>
                         {getStatusBadge(apt.status)}
                         {getRescheduleRequestBadge(apt as { reschedule_request_status?: string | null; reschedule_requested_by?: string | null })}
                       </div>
@@ -3982,9 +3990,9 @@ const PatientPortal = () => {
                             <div className="flex flex-col gap-2">
                               <div className="flex items-center gap-2">
                                 <Calendar className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</span>
+                                <span className="text-sm">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</span>
                                 <Clock className="w-4 h-4 text-muted-foreground ml-2" />
-                                <span className="text-sm">{formatClockTime(apt.time)}</span>
+                                <span className="text-sm">{formatAppointmentClockTime(apt)}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
@@ -4397,7 +4405,7 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
+                                        {formatAppointmentDate(apt)} at {formatAppointmentClockTime(apt)}
                                       </p>
                                       {pendingReschedule && (
                                         <p className="text-xs font-medium text-blue-700 mt-1">
@@ -4476,8 +4484,8 @@ const PatientPortal = () => {
                                 }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -4552,8 +4560,8 @@ const PatientPortal = () => {
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -4632,8 +4640,8 @@ const PatientPortal = () => {
                                   >
                                     <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                       <div className="text-center w-20">
-                                        <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                        <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                        <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                        <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                       </div>
                                       <div className="w-px h-12 bg-border" />
                                       <Avatar className="w-12 h-12">
@@ -4698,8 +4706,8 @@ const PatientPortal = () => {
                                 >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">

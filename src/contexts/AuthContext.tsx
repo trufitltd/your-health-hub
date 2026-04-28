@@ -7,7 +7,7 @@ import type { AppRole } from './authContextValue';
 
 const parseAppRole = (rawRole: unknown): AppRole => {
   const normalized = String(rawRole || '').trim().toLowerCase();
-  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo') {
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink') {
     return normalized;
   }
   return 'patient';
