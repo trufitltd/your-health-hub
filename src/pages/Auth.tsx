@@ -17,6 +17,7 @@ import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 
 type AuthMode = 'login' | 'register' | 'verify' | 'reset';
 type UserRole = 'patient' | 'doctor';
+type SignInRole = UserRole | 'healthlink';
 type CountryPhoneCode = { iso: string; name: string; dialCode: string };
 import { MIN_SPECIALIST_RATE_NGN } from '@/services/marketplaceTypes';
 
@@ -406,10 +407,11 @@ export default function AuthPage() {
     );
   };
 
-  const getMetadataRole = (user: any): UserRole | null => {
+  const getMetadataRole = (user: any): SignInRole | null => {
     const rawRole = String(user?.user_metadata?.role || user?.app_metadata?.role || '').toLowerCase();
     if (rawRole === 'doctor') return 'doctor';
     if (rawRole === 'patient') return 'patient';
+    if (rawRole === 'healthlink') return 'healthlink';
     return null;
   };
 
@@ -976,16 +978,20 @@ export default function AuthPage() {
         }
 
         if (metadataRole !== role) {
-          setRole(metadataRole);
+          if (metadataRole === 'doctor' || metadataRole === 'patient') {
+            setRole(metadataRole);
+          }
           toast({
             title: 'Portal updated',
             description: metadataRole === 'doctor'
               ? 'Doctor account detected. Redirecting to Doctor Portal.'
+              : metadataRole === 'healthlink'
+              ? 'HealthLink account detected. Redirecting to HealthLink Portal.'
               : 'Patient account detected. Redirecting to Patient Portal.',
           });
         }
 
-        const userRole: UserRole = metadataRole;
+        const userRole: SignInRole = metadataRole;
         let shouldCompleteRegistration = false;
         if (data.user?.id) {
           if (userRole === 'doctor') {
@@ -999,7 +1005,7 @@ export default function AuthPage() {
               .eq('user_id', data.user.id)
               .maybeSingle();
             shouldCompleteRegistration = !isFilled((doctorRow as { medical_license_url?: string | null } | null)?.medical_license_url);
-          } else {
+          } else if (userRole === 'patient') {
             // Ensure patient users always have a patient registration row.
             await ensurePatientRegistrationFallback(data.user);
             const { data: patientRow } = await supabase
@@ -1017,7 +1023,7 @@ export default function AuthPage() {
         toast({ title: 'Signed in', description: 'Welcome back!' });
         setIsLoading(false);
 
-        if (shouldCompleteRegistration) {
+        if (shouldCompleteRegistration && (userRole === 'doctor' || userRole === 'patient')) {
           navigate(`/complete-registration?role=${userRole}`);
           return;
         }
@@ -1029,7 +1035,13 @@ export default function AuthPage() {
         }
 
         // Redirect based on role
-        navigate(userRole === 'doctor' ? '/doctor-portal' : '/patient-portal');
+        navigate(
+          userRole === 'doctor'
+            ? '/doctor-portal'
+            : userRole === 'healthlink'
+            ? '/healthlink'
+            : '/patient-portal'
+        );
       }
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);
