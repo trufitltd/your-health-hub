@@ -83,6 +83,7 @@ import { useLocaleFormatter } from '@/lib/locale';
 import { fetchDoctorConsultationNotesForFolder } from '@/lib/doctorConsultationNotes';
 import { extractConsultationLanguageFromNotes, normalizeConsultationLanguage, cleanNotesForDisplay, formatConsultationLanguageFromNotes } from '@/lib/consultationLanguage';
 import { normalizeTimeHHMM } from '@/lib/appointmentIntervals';
+import { APPOINTMENT_BASE_TIME_ZONE, appointmentLocalToDate } from '@/lib/appointmentDateTime';
 
 const PROFILE_BIO_TRANSLATION_LANGUAGES = [
   { code: 'ha', label: 'Hausa' },
@@ -1503,9 +1504,14 @@ const DoctorPortal = () => {
     }
   };
 
-  const getAppointmentDateTime = (apt: { date: string; time: string }) => new Date(`${apt.date}T${apt.time}`);
+  const getAppointmentDateTime = (apt: { date: string; time: string }) =>
+    appointmentLocalToDate(apt.date, apt.time, APPOINTMENT_BASE_TIME_ZONE)
+    || new Date(`${apt.date}T${apt.time}`);
   const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
     getAppointmentDateTime(apt).getTime() <= Date.now();
+  const formatAppointmentDate = (apt: { date: string; time: string }) => formatDate(getAppointmentDateTime(apt));
+  const formatAppointmentClockTime = (apt: { date: string; time: string }) =>
+    formatTime(getAppointmentDateTime(apt), { hour: '2-digit', minute: '2-digit' }, formatClockTime(apt.time));
   const isPendingRescheduleRequest = (apt: { reschedule_request_status?: string | null }) =>
     normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
   const isPatientRequestedReschedule = (apt: { reschedule_requested_by?: string | null }) =>
@@ -1545,7 +1551,9 @@ const DoctorPortal = () => {
   }) => {
     const dateValue = getCalendarAppointmentDate(apt);
     const timeValue = getCalendarAppointmentTime(apt);
-    const effectiveDateTime = new Date(`${dateValue}T${timeValue}`);
+    const effectiveDateTime =
+      appointmentLocalToDate(dateValue, timeValue, APPOINTMENT_BASE_TIME_ZONE)
+      || new Date(`${dateValue}T${timeValue}`);
     if (!Number.isNaN(effectiveDateTime.getTime())) {
       return effectiveDateTime.getTime() <= Date.now();
     }
@@ -2036,30 +2044,30 @@ ${ePrescription}
   const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   
   const upcomingSchedule = doctorVisibleAppointments.filter(apt => {
-    const aptDateTime = new Date(`${apt.date}T${apt.time}`);
+    const aptDateTime = getAppointmentDateTime(apt);
     return aptDateTime >= now && aptDateTime <= next24Hours && (apt.status === 'confirmed' || apt.status === 'in_progress');
   }).sort((a, b) => {
-    const dateA = new Date(`${a.date}T${a.time}`);
-    const dateB = new Date(`${b.date}T${b.time}`);
+    const dateA = getAppointmentDateTime(a);
+    const dateB = getAppointmentDateTime(b);
     return dateA.getTime() - dateB.getTime();
   });
   
   // Find next appointment
   const upcomingAppointments = doctorVisibleAppointments
     .filter(apt => {
-      const aptDate = new Date(`${apt.date}T${apt.time}`);
+      const aptDate = getAppointmentDateTime(apt);
       return aptDate > now && (apt.status === 'confirmed' || apt.status === 'in_progress');
     })
     .sort((a, b) => {
-      const dateA = new Date(`${a.date}T${a.time}`);
-      const dateB = new Date(`${b.date}T${b.time}`);
+      const dateA = getAppointmentDateTime(a);
+      const dateB = getAppointmentDateTime(b);
       return dateA.getTime() - dateB.getTime();
     });
   
   const nextAppointment = upcomingAppointments[0];
   const getTimeUntilNext = () => {
     if (!nextAppointment) return null;
-    const aptTime = new Date(`${nextAppointment.date}T${nextAppointment.time}`);
+    const aptTime = getAppointmentDateTime(nextAppointment);
     const diffMs = aptTime.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
 
@@ -2193,8 +2201,8 @@ ${ePrescription}
 
       if (appointmentStatusFilter === 'confirmed') {
         const nowTs = Date.now();
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const dateTimeA = getAppointmentDateTime(a).getTime();
+        const dateTimeB = getAppointmentDateTime(b).getTime();
         const aIsPast = dateTimeA < nowTs;
         const bIsPast = dateTimeB < nowTs;
 
@@ -2206,13 +2214,13 @@ ${ePrescription}
       }
 
       if (appointmentStatusFilter === 'in_progress') {
-        const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+        const dateTimeA = getAppointmentDateTime(a).getTime();
+        const dateTimeB = getAppointmentDateTime(b).getTime();
         return dateTimeA - dateTimeB;
       }
 
-      const dateTimeA = new Date(`${a.date}T${a.time}`).getTime();
-      const dateTimeB = new Date(`${b.date}T${b.time}`).getTime();
+      const dateTimeA = getAppointmentDateTime(a).getTime();
+      const dateTimeB = getAppointmentDateTime(b).getTime();
       return dateTimeB - dateTimeA;
     });
   }, [doctorVisibleAppointments, appointmentStatusFilter]);
@@ -2559,7 +2567,7 @@ ${ePrescription}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">{formatClockTime(apt.time)}</span>
+                        <span className="text-sm font-medium">{formatAppointmentClockTime(apt)}</span>
                         {getStatusBadge(apt.status)}
                         {getRescheduleRequestBadge(apt as {
                           reschedule_request_status?: string | null;
@@ -2862,9 +2870,9 @@ ${ePrescription}
           status: apt.status
         });
 
-        const appointmentDateTime = new Date(`${apt.date}T${apt.time}`).getTime();
+        const appointmentDateTime = getAppointmentDateTime(apt).getTime();
         const latestDateTime = patient.latestAppointment
-          ? new Date(`${patient.latestAppointment.date}T${patient.latestAppointment.time}`).getTime()
+          ? getAppointmentDateTime(patient.latestAppointment).getTime()
           : 0;
         if (!patient.latestAppointment || appointmentDateTime > latestDateTime) {
           patient.latestAppointment = apt;
@@ -2876,8 +2884,8 @@ ${ePrescription}
     // Sort appointments for each patient to get the latest one
     patientsMap.forEach(patient => {
       patient.appointments.sort((a: any, b: any) => {
-        const dateA = new Date(`${a.date}T${a.time}`).getTime();
-        const dateB = new Date(`${b.date}T${b.time}`).getTime();
+        const dateA = getAppointmentDateTime(a).getTime();
+        const dateB = getAppointmentDateTime(b).getTime();
         return dateB - dateA;
       });
 	      if (patient.appointments.length > 0 && !patient.lastVisit) {
@@ -3968,7 +3976,7 @@ ${ePrescription}
                                 </div>
                                 <div>
                                   <p className="font-medium text-sm">{apt.patient_name || 'Unknown Patient'}</p>
-                                  <p className="text-xs text-muted-foreground">{formatClockTime(apt.time)}</p>
+                                  <p className="text-xs text-muted-foreground">{formatAppointmentClockTime(apt)}</p>
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
@@ -4209,7 +4217,7 @@ ${ePrescription}
                                     <div>
                                       <p className="font-semibold">{apt.patient_name || 'Unknown Patient'}</p>
                                       <p className="text-sm text-muted-foreground">
-                                        {formatDate(apt.date)} at {formatClockTime(apt.time)}
+                                        {formatAppointmentDate(apt)} at {formatAppointmentClockTime(apt)}
                                       </p>
                                       {pendingReschedule && (
                                         <p className="text-xs font-medium text-blue-700 mt-1">
@@ -4307,8 +4315,8 @@ ${ePrescription}
                                 }`}>
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <div className="relative">
@@ -4434,8 +4442,8 @@ ${ePrescription}
                                   >
                                     <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                       <div className="text-center w-20">
-                                        <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                        <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                        <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                        <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                       </div>
                                       <div className="w-px h-12 bg-border" />
                                       <Avatar className="w-12 h-12">
@@ -4489,8 +4497,8 @@ ${ePrescription}
                                 <div key={apt.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-success/30 bg-success/5">
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">
@@ -4575,8 +4583,8 @@ ${ePrescription}
                                 >
                                   <div className="flex items-center gap-4 mb-3 sm:mb-0">
                                     <div className="text-center w-20">
-                                      <p className="text-sm font-semibold">{formatClockTime(apt.time)}</p>
-                                      <p className="text-xs text-muted-foreground">{formatDate(apt.date, { month: 'short', day: 'numeric' })}</p>
+                                      <p className="text-sm font-semibold">{formatAppointmentClockTime(apt)}</p>
+                                      <p className="text-xs text-muted-foreground">{formatDate(getAppointmentDateTime(apt), { month: 'short', day: 'numeric' })}</p>
                                     </div>
                                     <div className="w-px h-12 bg-border" />
                                     <Avatar className="w-12 h-12">

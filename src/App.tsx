@@ -26,6 +26,8 @@ import AdminLogin from "./pages/AdminLogin";
 import CentralAdmin from "./pages/CentralAdmin";
 import CooLogin from "./pages/CooLogin";
 import COOPortal from "./pages/COOPortal";
+import HealthLinkPortal from "./pages/HealthLinkPortal";
+import HealthLinkLogin from "./pages/HealthLinkLogin";
 import VerifyPrescription from "./pages/VerifyPrescription";
 import NotFound from "./pages/NotFound";
 import CompleteRegistration from "./pages/CompleteRegistration";
@@ -222,6 +224,15 @@ const App = () => (
               <Route path="/admin" element={<CentralAdmin />} />
               <Route path="/coo/login" element={<CooLogin />} />
               <Route path="/coo" element={<COOPortal />} />
+              <Route path="/healthlink/login" element={<HealthLinkLogin />} />
+              <Route
+                path="/healthlink"
+                element={
+                  <ProtectedRoute requiredRole="healthlink">
+                    <HealthLinkPortal />
+                  </ProtectedRoute>
+                }
+              />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
