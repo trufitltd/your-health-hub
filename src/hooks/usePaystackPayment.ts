@@ -152,14 +152,19 @@ export const usePaystackPayment = () => {
       throw new Error('Invalid payment amount for Paystack checkout');
     }
 
-    if (config.preferRedirect) {
-      if (!authorizationUrl) {
-        throw new Error(
-          'Paystack redirect URL is missing. Please try again or refresh payment initialization.',
-        );
-      }
+    const wantsRedirect = Boolean(config.preferRedirect);
+    const canRedirect = wantsRedirect && Boolean(authorizationUrl);
+    const canInlineWithAccessCode = Boolean(accessCode);
+
+    if (wantsRedirect && canRedirect) {
       window.location.assign(authorizationUrl);
       return;
+    }
+
+    if (wantsRedirect && !canRedirect && !canInlineWithAccessCode) {
+      throw new Error(
+        'Paystack redirect URL and access code are missing. Please try again or refresh payment initialization.',
+      );
     }
 
     const paystack = await ensurePaystackSdk();
@@ -175,7 +180,7 @@ export const usePaystackPayment = () => {
       },
     };
 
-    const useAccessCode = Boolean(config.preferAccessCode && accessCode);
+    const useAccessCode = Boolean(accessCode) && (Boolean(config.preferAccessCode) || (wantsRedirect && !canRedirect));
     if (useAccessCode) {
       payload.access_code = accessCode;
     } else {
