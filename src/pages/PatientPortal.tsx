@@ -1456,6 +1456,7 @@ const PatientPortal = () => {
   const [calendarDialogDate, setCalendarDialogDate] = useState<string | null>(null);
   const [calendarFocusedAppointmentId, setCalendarFocusedAppointmentId] = useState<string | null>(null);
   const lastHandledReviewAppointmentRef = useRef<string | null>(null);
+  const confirmedPaymentReferencesRef = useRef<Set<string>>(new Set());
   const appliedPreferredLanguageRef = useRef(false);
   const withdrawalAmountValue = Number(withdrawAmount.replace(/,/g, '').trim());
   const canSubmitWithdrawal = Number.isFinite(withdrawalAmountValue) &&
@@ -1610,6 +1611,37 @@ const PatientPortal = () => {
       }, { replace: true });
     });
   }, [appointments, appointmentsLoading, searchParams, setSearchParams, user?.id]);
+
+  // Auto-confirm successful Paystack return by URL reference (redirect flow).
+  useEffect(() => {
+    const reference = String(searchParams.get('reference') || searchParams.get('trxref') || '').trim();
+    if (!reference) return;
+    if (confirmedPaymentReferencesRef.current.has(reference)) return;
+
+    confirmedPaymentReferencesRef.current.add(reference);
+
+    (async () => {
+      try {
+        const result = await BookingService.confirmPayment(reference);
+        toast({
+          title: 'Payment successful',
+          description: result?.alreadyProcessed
+            ? 'Payment was already processed and appointment remains pending doctor approval.'
+            : 'Payment verified. Appointment is now pending doctor approval.',
+        });
+        await queryClient.invalidateQueries({ queryKey: ['appointments', user?.id], refetchType: 'all' });
+      } catch (error) {
+        console.warn('[PatientPortal] Redirect payment confirmation failed:', error);
+      } finally {
+        setSearchParams((params) => {
+          const next = new URLSearchParams(params);
+          next.delete('reference');
+          next.delete('trxref');
+          return next;
+        }, { replace: true });
+      }
+    })();
+  }, [queryClient, searchParams, setSearchParams, toast, user?.id]);
 
   // Load actual paid amount for the appointment from payments table when reschedule target selected
   useEffect(() => {
