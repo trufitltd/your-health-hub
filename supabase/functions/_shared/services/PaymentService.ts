@@ -64,6 +64,16 @@ export class PaymentService {
       metadata,
     };
 
+    const callbackUrl = String(
+      Deno.env.get('PAYSTACK_CALLBACK_URL')
+      || Deno.env.get('APP_URL')
+      || Deno.env.get('SITE_URL')
+      || ''
+    ).trim();
+    if (callbackUrl) {
+      initializePayload.callback_url = callbackUrl;
+    }
+
     const initializeResponse = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
       headers: {

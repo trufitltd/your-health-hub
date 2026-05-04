@@ -50,6 +50,12 @@ interface Doctor {
   preferred_consultation_languages?: string[] | null;
   is_active?: boolean;
   online_status?: 'online' | 'away' | 'offline';
+  recent_reviews?: Array<{
+    reviewer_name: string;
+    rating: number;
+    comment: string;
+    created_at: string;
+  }>;
 }
 
 type SlotStatusRow = {
@@ -535,6 +541,12 @@ export default function DoctorDiscovery() {
 
       const doctorIds = registrationRows.map((doctor) => doctor.user_id).filter(Boolean);
       let doctorsWithSchedules = new Set<string>();
+      const reviewMap = new Map<string, Array<{
+        reviewer_name: string;
+        rating: number;
+        comment: string;
+        created_at: string;
+      }>>();
       if (doctorIds.length > 0) {
         // Use a broad read + local intersection to avoid false negatives from large IN filters.
         const { data: schedules, error: schedulesError } = await supabase
@@ -553,6 +565,37 @@ export default function DoctorDiscovery() {
               .map((row: any) => String(row.doctor_id || ''))
               .filter((doctorId) => discoveryDoctorIdSet.has(doctorId))
           );
+        }
+
+        const { data: reviews, error: reviewsError } = await supabase
+          .from('appointments')
+          .select('doctor_id, patient_name, rating, review_comment, created_at')
+          .in('doctor_id', doctorIds)
+          .not('rating', 'is', null)
+          .not('review_comment', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(5000);
+
+        if (reviewsError) {
+          console.warn('[DoctorDiscovery] Failed to fetch doctor reviews:', reviewsError);
+        } else {
+          (reviews || []).forEach((row: any) => {
+            const doctorId = String(row.doctor_id || '').trim();
+            if (!doctorId) return;
+            const current = reviewMap.get(doctorId) || [];
+            if (current.length >= 3) return;
+            const rawName = String(row.patient_name || '').trim();
+            const reviewerName = rawName || 'Anonymous patient';
+            const comment = String(row.review_comment || '').trim();
+            if (!comment) return;
+            current.push({
+              reviewer_name: reviewerName,
+              rating: Number(row.rating || 0),
+              comment,
+              created_at: String(row.created_at || ''),
+            });
+            reviewMap.set(doctorId, current);
+          });
         }
       }
 
@@ -589,6 +632,7 @@ export default function DoctorDiscovery() {
           bio_translations: localizedBioTranslations,
           preferred_consultation_languages: preferredConsultationLanguages,
           is_active: hasAvailableSchedules,
+          recent_reviews: reviewMap.get(String(doctor.user_id || '')) || [],
         };
       });
 
@@ -1361,6 +1405,20 @@ export default function DoctorDiscovery() {
                               </div>
                             )}
 
+                            {doctor.recent_reviews && doctor.recent_reviews.length > 0 && (
+                              <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
+                                <div className="flex items-center justify-between gap-2 mb-1">
+                                  <p className="text-xs font-semibold">{doctor.recent_reviews[0].reviewer_name}</p>
+                                  <div className="flex gap-1">
+                                    {renderStars(doctor.recent_reviews[0].rating, 5)}
+                                  </div>
+                                </div>
+                                <p className="text-xs text-muted-foreground line-clamp-2">
+                                  {doctor.recent_reviews[0].comment}
+                                </p>
+                              </div>
+                            )}
+
                             <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
                               <p className="text-sm font-semibold text-success">
                                 {`From ${formatCurrency(startingPrice, discoveryStartingPrices.currency)}`}
@@ -1482,17 +1540,26 @@ export default function DoctorDiscovery() {
                   <div>
                     <h3 className="font-semibold mb-3">Recent Reviews</h3>
                     <div className="space-y-3">
-                      <div className="p-4 rounded-lg border border-border">
-                        <div className="flex items-start justify-between mb-2">
-                          <p className="font-medium">Patient Name</p>
-                          <div className="flex gap-1">
-                            {renderStars(5, 5)}
+                      {selectedDoctor.recent_reviews && selectedDoctor.recent_reviews.length > 0 ? (
+                        selectedDoctor.recent_reviews.map((review, index) => (
+                          <div key={`${selectedDoctor.id}-review-${index}`} className="p-4 rounded-lg border border-border">
+                            <div className="flex items-start justify-between mb-2 gap-2">
+                              <p className="font-medium">{review.reviewer_name}</p>
+                              <div className="flex gap-1">
+                                {renderStars(review.rating, 5)}
+                              </div>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{review.comment}</p>
+                            <p className="text-xs text-muted-foreground mt-2">
+                              {review.created_at
+                                ? formatDate(new Date(review.created_at), { month: 'short', day: 'numeric', year: 'numeric' })
+                                : ''}
+                            </p>
                           </div>
-                        </div>
-                        <p className="text-sm text-muted-foreground">Professional and caring doctor. Highly recommended.</p>
-                        <p className="text-xs text-muted-foreground mt-2">2 weeks ago</p>
-                      </div>
-                      <p className="text-center text-sm text-muted-foreground py-4">View full reviews after booking</p>
+                        ))
+                      ) : (
+                        <p className="text-center text-sm text-muted-foreground py-4">No reviews yet.</p>
+                      )}
                     </div>
                   </div>
 
