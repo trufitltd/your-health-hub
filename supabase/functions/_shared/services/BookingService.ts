@@ -60,7 +60,7 @@ export class BookingService {
   private async getDoctorContext(doctorId: string) {
     const { data: doctorRegistration, error: regError } = await this.supabase
       .from('doctor_registrations')
-      .select('full_name, specialty, experience, doctor_tier_id')
+      .select('full_name, specialty, experience, doctor_tier_id, rate_per_consultation')
       .eq('user_id', doctorId)
       .maybeSingle();
 
@@ -106,11 +106,31 @@ export class BookingService {
       }
     }
 
+    let ratePerConsultation: number | null = null;
+    const registrationRateRaw = Number(doctorRegistration?.rate_per_consultation);
+    if (Number.isFinite(registrationRateRaw) && registrationRateRaw > 0) {
+      ratePerConsultation = roundMoney(registrationRateRaw);
+    } else {
+      const { data: doctorRow, error: doctorLookupError } = await this.supabase
+        .from('doctors')
+        .select('rate_per_consultation')
+        .eq('id', doctorId)
+        .maybeSingle();
+      if (doctorLookupError) {
+        throw new Error(`Failed loading doctor rate: ${doctorLookupError.message}`);
+      }
+      const doctorRateRaw = Number(doctorRow?.rate_per_consultation);
+      if (Number.isFinite(doctorRateRaw) && doctorRateRaw > 0) {
+        ratePerConsultation = roundMoney(doctorRateRaw);
+      }
+    }
+
     return {
       doctorName: doctorRegistration?.full_name || 'Doctor',
       doctorType,
       tierId,
       tierName,
+      ratePerConsultation,
     };
   }
 
@@ -136,6 +156,7 @@ export class BookingService {
       doctorType: DoctorType;
       tierId: string | null;
       tierName: string | null;
+      ratePerConsultation: number | null;
     };
   }) {
     const doctor = input.doctorContext || await this.getDoctorContext(input.doctorId);
@@ -150,6 +171,9 @@ export class BookingService {
 
     // Handle Promotion
     let finalPrice = price.finalPrice;
+    if (doctor.ratePerConsultation !== null && doctor.ratePerConsultation > 0) {
+      finalPrice = doctor.ratePerConsultation;
+    }
     let isPromotion = false;
     let promotionType: string | undefined = undefined;
 
