@@ -159,8 +159,24 @@ serve(async (req) => {
     const walletDebitedTotal = Number((Math.round(((walletDebits || []).reduce((sum: number, row: any) => (
       sum + Number(row.amount || 0)
     ), 0)) * 100) / 100).toFixed(2));
+    const { data: successfulPayments, error: successfulPaymentsError } = await serviceClient
+      .from('payments')
+      .select('amount,status')
+      .eq('appointment_id', appointmentId);
+
+    if (successfulPaymentsError) {
+      console.warn('[payment-initialize] failed to lookup successful appointment payments:', successfulPaymentsError.message);
+    }
+
+    const successfulPaymentStates = new Set(['success', 'successful', 'succeeded', 'paid', 'completed']);
+    const successfulPaymentsTotal = Number((Math.round(((successfulPayments || []).reduce((sum: number, row: any) => {
+      const normalized = String(row?.status || '').trim().toLowerCase();
+      if (!successfulPaymentStates.has(normalized)) return sum;
+      return sum + Number(row?.amount || 0);
+    }, 0)) * 100) / 100).toFixed(2));
+
     const finalPrice = Number(appointment.final_price || appointment.appointment_price || 0);
-    const outstandingAmount = Number((Math.round(Math.max(finalPrice - walletDebitedTotal, 0) * 100) / 100).toFixed(2));
+    const outstandingAmount = Number((Math.round(Math.max(finalPrice - successfulPaymentsTotal, 0) * 100) / 100).toFixed(2));
     const appointmentPrice = outstandingAmount > 0 ? outstandingAmount : Number(appointment.final_price || appointment.appointment_price || 5000);
     const safeAmount = appointmentPrice > 0 ? appointmentPrice : 5000;
 
@@ -178,6 +194,7 @@ serve(async (req) => {
         type: 'appointment_confirmation',
         outstanding_amount: safeAmount,
         wallet_applied_amount: walletDebitedTotal,
+        successful_payments_total: successfulPaymentsTotal,
       },
     });
 

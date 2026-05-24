@@ -1576,6 +1576,48 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleRequestAppointmentTopUp = async (appointmentId: string) => {
+    setIsProcessing(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_request_appointment_topup', {
+        p_appointment_id: appointmentId,
+        p_target_amount: null,
+        p_note: 'Top-up requested from Central Admin',
+      });
+      if (error) throw error;
+
+      const result = (data || {}) as {
+        status?: string;
+        target_amount?: number;
+        paid_total?: number;
+        shortfall?: number;
+      };
+
+      if (result.status === 'already_fully_paid') {
+        toast({
+          title: 'No top-up required',
+          description: 'This appointment is already fully paid.',
+        });
+      } else {
+        toast({
+          title: 'Top-up requested',
+          description: `Patient now needs to pay ₦${Number(result.shortfall || 0).toLocaleString()} (target ₦${Number(result.target_amount || 0).toLocaleString()}, already paid ₦${Number(result.paid_total || 0).toLocaleString()}).`,
+        });
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['admin-appointments-feed'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-appointment-payment-timestamps'] });
+    } catch (error: any) {
+      toast({
+        title: 'Top-up request failed',
+        description: error?.message || 'Could not request top-up for this appointment.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleRejectDoctor = async (doctor: Doctor) => {
     if (!selectedDoctor) return;
     setIsProcessing(true);
@@ -2768,6 +2810,15 @@ const CentralAdmin = () => {
                                       <Copy className="w-3 h-3" />
                                     </Button>
                                     <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 px-2 text-[10px]"
+                                      onClick={() => handleRequestAppointmentTopUp(apt.id)}
+                                      disabled={isProcessing}
+                                    >
+                                      Top-up
+                                    </Button>
+                                    <Button
                                       size="icon"
                                       variant="ghost"
                                       className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10"
@@ -2825,6 +2876,15 @@ const CentralAdmin = () => {
                                       title="Copy full appointment ID"
                                     >
                                       <Copy className="w-3 h-3" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 px-2 text-[10px]"
+                                      onClick={() => handleRequestAppointmentTopUp(apt.id)}
+                                      disabled={isProcessing}
+                                    >
+                                      Top-up
                                     </Button>
                                     <Button
                                       size="icon"
