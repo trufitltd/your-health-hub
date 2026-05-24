@@ -203,6 +203,32 @@ export class PaymentService {
       .or(`provider_reference.eq.${reference},payment_reference.eq.${reference}`);
 
     if (error) throw new Error(`Failed to mark payment success: ${error.message}`);
+
+    // Keep appointment state in sync with successful payment in case webhook/client
+    // confirmation path misses explicit appointment promotion.
+    const appointmentId = existing?.appointment_id ? String(existing.appointment_id) : '';
+    if (appointmentId) {
+      const { error: appointmentUpdateError } = await this.supabase
+        .from('appointments')
+        .update({
+          status: 'pending_approval',
+          slot_locked_until: null,
+        })
+        .eq('id', appointmentId)
+        .in('status', [
+          'pending_payment',
+          'pending payment',
+          'pending-payment',
+          'payment_processing',
+          'payment processing',
+          'payment-processing',
+          'pending',
+        ]);
+
+      if (appointmentUpdateError) {
+        throw new Error(`Failed to sync appointment status after payment success: ${appointmentUpdateError.message}`);
+      }
+    }
   }
 
   async markPaymentFailed(reference: string, reason: string) {
