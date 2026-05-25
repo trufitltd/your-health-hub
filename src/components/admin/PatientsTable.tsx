@@ -39,7 +39,13 @@ interface PatientWithStats {
 const isIncompletePatient = (p: { post_auth_prompt_completed?: boolean | null }) =>
   p.post_auth_prompt_completed !== true;
 
-export function PatientsTable({ filter = 'all' }: { filter?: 'all' | 'complete' | 'incomplete' }) {
+export function PatientsTable({
+  filter = 'all',
+  searchTerm = '',
+}: {
+  filter?: 'all' | 'complete' | 'incomplete';
+  searchTerm?: string;
+}) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [deletePatientId, setDeletePatientId] = useState<string | null>(null);
@@ -123,10 +129,24 @@ export function PatientsTable({ filter = 'all' }: { filter?: 'all' | 'complete' 
     refetchInterval: 30000,
   });
 
+  const normalizedSearch = String(searchTerm || '').trim().toLowerCase();
+
   const filteredPatients = patients.filter((p) => {
     if (filter === 'complete') return p.registration_complete;
     if (filter === 'incomplete') return !p.registration_complete;
     return true;
+  }).filter((p) => {
+    if (!normalizedSearch) return true;
+    return [
+      p.full_name,
+      p.email,
+      p.phone_number,
+      p.city,
+      p.state,
+      p.gender,
+    ]
+      .map((value) => String(value || '').toLowerCase())
+      .some((value) => value.includes(normalizedSearch));
   });
 
   if (isLoading) {

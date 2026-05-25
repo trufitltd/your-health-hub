@@ -417,6 +417,7 @@ const CentralAdmin = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'incomplete'>('all');
   const [patientFilter, setPatientFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
+  const [patientSearchQuery, setPatientSearchQuery] = useState('');
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
@@ -3597,7 +3598,16 @@ const CentralAdmin = () => {
                           {patientFilter === 'complete' ? 'Showing complete registrations only' : patientFilter === 'incomplete' ? 'Showing incomplete registrations only' : 'All registered patients and their appointment history'}
                         </CardDescription>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <div className="relative">
+                          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            placeholder="Search patients by name, email, phone..."
+                            value={patientSearchQuery}
+                            onChange={(e) => setPatientSearchQuery(e.target.value)}
+                            className="pl-10 w-full sm:w-[280px]"
+                          />
+                        </div>
                         <Button variant={patientFilter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('all')}>All</Button>
                         <Button variant={patientFilter === 'complete' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('complete')}>Complete</Button>
                         <Button variant={patientFilter === 'incomplete' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('incomplete')}>Incomplete</Button>
@@ -3609,7 +3619,7 @@ const CentralAdmin = () => {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <PatientsTable filter={patientFilter} />
+                    <PatientsTable filter={patientFilter} searchTerm={patientSearchQuery} />
                   </CardContent>
                 </Card>
               </TabsContent>
