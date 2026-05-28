@@ -823,6 +823,31 @@ export class BookingService {
     const webhookVerification = paymentMetadata.verification;
     const paymentVerifiedAt = payment.verified_at ? String(payment.verified_at) : '';
 
+    // If payment is already marked successful in DB (by webhook or prior confirm), trust it
+    const isAlreadySuccessfulInDb = (
+      paymentStatus === 'success'
+      || paymentStatus === 'successful'
+      || paymentStatus === 'succeeded'
+      || paymentStatus === 'paid'
+      || paymentStatus === 'completed'
+    );
+
+    if (isAlreadySuccessfulInDb) {
+      // Payment already verified — just ensure appointment is promoted
+      try {
+        await this.moveAppointmentToApprovalReady(appointment.id);
+      } catch (confirmError: any) {
+        throw new Error(`Failed to confirm appointment after payment: ${confirmError?.message || confirmError}`);
+      }
+      await this.walletService.addPendingEarning({
+        id: appointment.id,
+        doctor_id: appointment.doctor_id,
+        final_price: Number(appointment.final_price || 0),
+        price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+      });
+      return { appointmentId: appointment.id, alreadyProcessed: false };
+    }
+
     let verified: { ok: boolean; status: string; amountInKobo: number; raw: Record<string, unknown> } = {
       ok: false,
       status: 'unverified',
