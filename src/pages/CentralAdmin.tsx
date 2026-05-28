@@ -5,7 +5,7 @@ import {
   BarChart3, Users, FileText, CheckCircle, XCircle, Clock,
   AlertCircle, LogOut, ChevronRight, Search, Filter, Download,
   Star, TrendingUp, Shield, Award, Eye, Trash2, Mail, Loader2, Send,
-  Badge as BadgeIcon, Settings, Gift, Copy
+  Badge as BadgeIcon, Settings, Gift, Copy, Wallet
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -46,6 +46,7 @@ import { cn, formatSpecialtyLabel } from '@/lib/utils';
 import { PricingManagementPanel } from '@/components/admin/PricingManagementPanel';
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
 import { ConsultationMonitor } from '@/components/admin/ConsultationMonitor';
+import AdminPatientWalletPanel from '@/components/admin/AdminPatientWalletPanel';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
@@ -126,6 +127,11 @@ interface AdminAppointmentPaymentRow {
   created_at: string | null;
   verified_at: string | null;
 }
+type AppointmentEntityFilter = {
+  type: 'doctor' | 'patient';
+  id: string;
+  name: string;
+} | null;
 
 interface AdminPatientFolderRow {
   id: string;
@@ -418,6 +424,7 @@ const CentralAdmin = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'incomplete'>('all');
   const [patientFilter, setPatientFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
   const [patientSearchQuery, setPatientSearchQuery] = useState('');
+  const [appointmentEntityFilter, setAppointmentEntityFilter] = useState<AppointmentEntityFilter>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNotes>({});
@@ -991,6 +998,24 @@ const CentralAdmin = () => {
     });
   }, [adminAppointments]);
 
+  const filteredAdminAppointments = useMemo(() => {
+    if (!appointmentEntityFilter) return adminAppointments;
+    return adminAppointments.filter((apt) => (
+      appointmentEntityFilter.type === 'doctor'
+        ? String(apt.doctor_id || '') === appointmentEntityFilter.id
+        : String(apt.patient_id || '') === appointmentEntityFilter.id
+    ));
+  }, [adminAppointments, appointmentEntityFilter]);
+
+  const filteredNewAppointments = useMemo(() => {
+    if (!appointmentEntityFilter) return newAppointments;
+    return newAppointments.filter((apt) => (
+      appointmentEntityFilter.type === 'doctor'
+        ? String(apt.doctor_id || '') === appointmentEntityFilter.id
+        : String(apt.patient_id || '') === appointmentEntityFilter.id
+    ));
+  }, [newAppointments, appointmentEntityFilter]);
+
   useEffect(() => {
     setUnreadAppointmentCount(activeTab === 'appointments' ? 0 : newAppointments.length);
   }, [activeTab, newAppointments]);
@@ -1455,6 +1480,24 @@ const CentralAdmin = () => {
     
     return matchesSearch && matchesStatus;
   });
+
+  const openAppointmentsForDoctor = (doctor: Doctor) => {
+    setAppointmentEntityFilter({
+      type: 'doctor',
+      id: doctor.user_id,
+      name: `Dr. ${doctor.full_name}`,
+    });
+    setActiveTab('appointments');
+  };
+
+  const openAppointmentsForPatient = (patient: { id: string; full_name: string }) => {
+    setAppointmentEntityFilter({
+      type: 'patient',
+      id: patient.id,
+      name: patient.full_name || 'Patient',
+    });
+    setActiveTab('appointments');
+  };
 
   const handleApproveDoctor = async (doctor: Doctor) => {
     if (!selectedDoctor) return;
@@ -2347,6 +2390,7 @@ const CentralAdmin = () => {
                     { id: 'quality', label: 'Quality Assurance', icon: Shield },
                     { id: 'monitoring', label: 'Monitoring', icon: Eye },
                     { id: 'payments', label: 'Payments', icon: BadgeIcon },
+                    { id: 'patient-wallets', label: 'Patient Wallets', icon: Wallet },
                     { id: 'pricing', label: 'Pricing', icon: TrendingUp },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
@@ -2532,6 +2576,7 @@ const CentralAdmin = () => {
                 <TabsTrigger value="messages">Messages</TabsTrigger>
                 <TabsTrigger value="patient-folders">Patient Folders</TabsTrigger>
                 <TabsTrigger value="payments">Payments</TabsTrigger>
+                <TabsTrigger value="patient-wallets">Patient Wallets</TabsTrigger>
                 <TabsTrigger value="pricing">Pricing</TabsTrigger>
                 <TabsTrigger value="monitoring">Monitoring</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -2748,6 +2793,16 @@ const CentralAdmin = () => {
                         <CardDescription>
                           View new and all appointments with patient/doctor names and booked timing.
                         </CardDescription>
+                        {appointmentEntityFilter && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <Badge className="bg-primary/10 text-primary border-primary/20">
+                              Filtered by {appointmentEntityFilter.type}: {appointmentEntityFilter.name}
+                            </Badge>
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setAppointmentEntityFilter(null)}>
+                              Clear filter
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <Button variant="outline" size="sm" onClick={exportAppointments} disabled={isExporting !== null}>
                         {isExporting === 'appointments' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
@@ -2759,11 +2814,11 @@ const CentralAdmin = () => {
                     <div className="grid sm:grid-cols-3 gap-3">
                       <div className="p-3 rounded-lg border border-border bg-muted/40">
                         <p className="text-xs text-muted-foreground">New (Unread)</p>
-                        <p className="text-xl font-bold">{newAppointments.length}</p>
+                        <p className="text-xl font-bold">{filteredNewAppointments.length}</p>
                       </div>
                       <div className="p-3 rounded-lg border border-border bg-muted/40">
                         <p className="text-xs text-muted-foreground">All Tracked</p>
-                        <p className="text-xl font-bold">{adminAppointments.length}</p>
+                        <p className="text-xl font-bold">{filteredAdminAppointments.length}</p>
                       </div>
                       <div className="p-3 rounded-lg border border-border bg-muted/40">
                         <p className="text-xs text-muted-foreground">Last Updated</p>
@@ -2777,10 +2832,10 @@ const CentralAdmin = () => {
                         <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
                           {adminAppointmentsLoading ? (
                             <p className="text-sm text-muted-foreground">Loading appointments...</p>
-                          ) : newAppointments.length === 0 ? (
+                          ) : filteredNewAppointments.length === 0 ? (
                             <p className="text-sm text-muted-foreground">No new appointments.</p>
                           ) : (
-                            newAppointments.map((apt) => (
+                            filteredNewAppointments.map((apt) => (
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
                                 {(() => {
                                   const payment = adminAppointmentPaymentById.get(apt.id);
@@ -2845,10 +2900,10 @@ const CentralAdmin = () => {
                         <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
                           {adminAppointmentsLoading ? (
                             <p className="text-sm text-muted-foreground">Loading appointments...</p>
-                          ) : adminAppointments.length === 0 ? (
+                          ) : filteredAdminAppointments.length === 0 ? (
                             <p className="text-sm text-muted-foreground">No appointments found.</p>
                           ) : (
-                            adminAppointments.map((apt) => (
+                            filteredAdminAppointments.map((apt) => (
                               <div key={apt.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
                                 {(() => {
                                   const payment = adminAppointmentPaymentById.get(apt.id);
@@ -3496,6 +3551,13 @@ const CentralAdmin = () => {
                               </Button>
                               <Button
                                 size="sm"
+                                variant="outline"
+                                onClick={() => openAppointmentsForDoctor(doctor)}
+                              >
+                                Appointments
+                              </Button>
+                              <Button
+                                size="sm"
                                 variant="ghost"
                                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
                                 onClick={() => setDeleteDoctorId(doctor.user_id)}
@@ -3619,7 +3681,11 @@ const CentralAdmin = () => {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <PatientsTable filter={patientFilter} searchTerm={patientSearchQuery} />
+                    <PatientsTable
+                      filter={patientFilter}
+                      searchTerm={patientSearchQuery}
+                      onViewAppointments={openAppointmentsForPatient}
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -3821,6 +3887,21 @@ const CentralAdmin = () => {
               {/* Payments Tab */}
               <TabsContent value="payments" className="space-y-6">
                 <PaymentsManagementPanel />
+              </TabsContent>
+
+              {/* Patient Wallets Tab */}
+              <TabsContent value="patient-wallets" className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Wallet className="w-5 h-5" />
+                      Patient Wallets
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <AdminPatientWalletPanel />
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               {/* Pricing Tab */}

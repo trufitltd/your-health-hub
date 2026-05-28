@@ -42,9 +42,11 @@ const isIncompletePatient = (p: { post_auth_prompt_completed?: boolean | null })
 export function PatientsTable({
   filter = 'all',
   searchTerm = '',
+  onViewAppointments,
 }: {
   filter?: 'all' | 'complete' | 'incomplete';
   searchTerm?: string;
+  onViewAppointments?: (patient: { id: string; full_name: string }) => void;
 }) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
@@ -230,6 +232,13 @@ export function PatientsTable({
                   </div>
                 </div>
               )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onViewAppointments?.({ id: patient.id, full_name: patient.full_name })}
+              >
+                View Appointments
+              </Button>
               <Button
                 size="icon"
                 variant="ghost"
