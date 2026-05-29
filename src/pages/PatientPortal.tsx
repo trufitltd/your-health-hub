@@ -365,6 +365,17 @@ const PatientPortal = () => {
   useRealtimeNotifications(user?.id, 'patient', user?.email);
   useAppointmentReminders(appointments || [], user?.id);
 
+  // Force refetch when PWA comes back to foreground
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        invalidateAppointments();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [invalidateAppointments]);
+
   const { data: patientWallet } = useQuery({
     queryKey: ['patient-wallet', user?.id],
     queryFn: () => PatientWalletService.getPatientWallet(user!.id),
