@@ -2085,18 +2085,8 @@ ${ePrescription}
 
   // Pending doctor-approval queue (only paid appointments).
   const pendingRequests = doctorVisibleAppointments.filter(apt => {
-    const isPending = apt.status === 'pending_approval' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
-    if (!isPending) return false;
-    if ((apt as any).date && (apt as any).time) {
-      return !hasEffectiveAppointmentTimePassed(apt as {
-        date: string;
-        time: string;
-        reschedule_request_status?: string | null;
-        reschedule_proposed_date?: string | null;
-        reschedule_proposed_time?: string | null;
-      });
-    }
-    return true;
+    const isPending = apt.status === 'pending_approval' || apt.status === 'pending_payment' || isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null });
+    return isPending;
     }).map(apt => ({
     id: apt.id,
     appointment: apt,

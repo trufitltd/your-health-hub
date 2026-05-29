@@ -37,23 +37,23 @@ BEGIN
 
   RETURN QUERY
   SELECT
-    pw.patient_id,
+    pr.user_id,
     COALESCE(pr.full_name, 'Unknown')::TEXT,
     COALESCE(pr.email, '')::TEXT,
     ROUND(COALESCE(pw.available_balance, 0), 2),
     ROUND(COALESCE(SUM(CASE WHEN wt.direction = 'credit' THEN wt.amount ELSE 0 END), 0), 2),
     ROUND(COALESCE(SUM(CASE WHEN wt.direction = 'debit'  THEN wt.amount ELSE 0 END), 0), 2),
     MAX(wt.created_at)
-  FROM public.patient_wallet pw
-  LEFT JOIN public.patient_registrations pr ON pr.user_id = pw.patient_id
-  LEFT JOIN public.patient_wallet_transactions wt ON wt.patient_id = pw.patient_id
+  FROM public.patient_registrations pr
+  LEFT JOIN public.patient_wallet pw ON pw.patient_id = pr.user_id
+  LEFT JOIN public.patient_wallet_transactions wt ON wt.patient_id = pr.user_id
   WHERE (
     p_search IS NULL OR p_search = '' OR
     pr.full_name ILIKE '%' || p_search || '%' OR
     pr.email ILIKE '%' || p_search || '%'
   )
-  GROUP BY pw.patient_id, pr.full_name, pr.email, pw.available_balance
-  ORDER BY pw.available_balance DESC
+  GROUP BY pr.user_id, pr.full_name, pr.email, pw.available_balance
+  ORDER BY COALESCE(pw.available_balance, 0) DESC, pr.full_name ASC
   LIMIT LEAST(p_limit, 200)
   OFFSET p_offset;
 END;
