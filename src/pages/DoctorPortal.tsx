@@ -1373,6 +1373,17 @@ const DoctorPortal = () => {
     enabled: !!user?.id,
   });
 
+  // Force refetch when PWA comes back to foreground
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refetch();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [refetch]);
+
   // Realtime notifications for messages and appointments
   useRealtimeNotifications(user?.id, 'doctor', user?.email);
   useAppointmentReminders(fetchedAppointments, user?.id);
