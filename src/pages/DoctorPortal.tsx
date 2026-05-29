@@ -1279,6 +1279,8 @@ const DoctorPortal = () => {
   // Fetch appointments for this doctor
   const { data: fetchedAppointments = [], isLoading: appointmentsLoading, refetch } = useQuery({
     queryKey: ['doctor-appointments', user?.id],
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       if (!user?.id) return [];
 
