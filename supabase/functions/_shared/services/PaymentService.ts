@@ -19,16 +19,19 @@ export class PaymentService {
     doctorId: string;
     email: string;
     amount: number;
+    currency?: string;
     metadata?: Record<string, unknown>;
   }): Promise<PaymentIntentResult> {
     const reference = `APT-${Date.now()}-${input.appointmentId.slice(0, 8)}`;
     const amount = Number(input.amount || 0);
     const amountInKobo = Math.round(amount * 100);
+    const currency = input.currency || 'NGN';
 
     const metadata = {
       appointment_id: input.appointmentId,
       patient_id: input.patientId,
       doctor_id: input.doctorId,
+      currency,
       ...(input.metadata || {}),
     };
 
@@ -36,6 +39,7 @@ export class PaymentService {
       appointment_id: input.appointmentId,
       patient_id: input.patientId,
       amount,
+      currency,
       status: 'PENDING',
       provider_reference: reference,
       provider: 'paystack',
@@ -60,7 +64,7 @@ export class PaymentService {
       email: input.email,
       amount: amountInKobo,
       reference,
-      currency: 'NGN',
+      currency,
       metadata,
     };
 
@@ -122,6 +126,7 @@ export class PaymentService {
     return {
       reference,
       amountInKobo,
+      currency,
       email: input.email,
       metadata,
       accessCode,

@@ -64,6 +64,7 @@ import {
   normalizeRescheduleRequestStatus,
   type AppointmentStatus,
   MIN_SPECIALIST_RATE_NGN,
+  MIN_SPECIALIST_RATE_USD,
 } from '@/services/marketplaceTypes';
 import { WalletService } from '@/services/WalletService';
 import { PatientWalletService } from '@/services/PatientWalletService';
@@ -822,6 +823,7 @@ const DoctorPortal = () => {
     country: '',
     specialty: '',
     consultationRate: '',
+    consultationCurrency: 'NGN',
     experience: '',
     bio: '',
     bankAccountName: '',
@@ -833,10 +835,11 @@ const DoctorPortal = () => {
   const specialistProfileSelected = !!effectiveProfileSpecialty && !isGeneralPracticeSpecialty(effectiveProfileSpecialty);
   const gpProfileSelected = !!effectiveProfileSpecialty && isGeneralPracticeSpecialty(effectiveProfileSpecialty);
   const parsedConsultationRate = Number(String(profileFormData.consultationRate || '').replace(/,/g, '').trim());
+  const minSpecialistRate = profileFormData.consultationCurrency === 'USD' ? MIN_SPECIALIST_RATE_USD : MIN_SPECIALIST_RATE_NGN;
   const hasPositiveConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate > 0;
-  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate >= MIN_SPECIALIST_RATE_NGN;
+  const hasValidConsultationRate = Number.isFinite(parsedConsultationRate) && parsedConsultationRate >= minSpecialistRate;
   const currentRegisteredRate = Number((doctorRegistration as { rate_per_consultation?: number | null } | null)?.rate_per_consultation || 0);
-  const showMissingSpecialistRateBanner = specialistProfileSelected && currentRegisteredRate < MIN_SPECIALIST_RATE_NGN;
+  const showMissingSpecialistRateBanner = specialistProfileSelected && hasPositiveConsultationRate && !hasValidConsultationRate;
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
@@ -1208,6 +1211,7 @@ const DoctorPortal = () => {
           Number((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation) > 0
             ? String((doctorRegistration as { rate_per_consultation?: number | null }).rate_per_consultation)
             : '',
+        consultationCurrency: (doctorRegistration as { consultation_currency?: string | null })?.consultation_currency || 'NGN',
         experience: clearPlaceholder(doctorRegistration.experience),
         bio: clearPlaceholder(doctorRegistration.bio),
         bankAccountName: clearPlaceholder((doctorRegistration as any).bank_account_name),
@@ -3178,7 +3182,7 @@ ${ePrescription}
       if (specialistProfileSelected && !hasValidConsultationRate) {
         toast({
           title: t('auth.toast.consultationRateRequiredTitle', 'Consultation rate required'),
-          description: `Please enter a valid specialist consultation rate of at least NGN ${MIN_SPECIALIST_RATE_NGN.toLocaleString()}.`,
+          description: `Please enter a valid specialist consultation rate of at least ${profileFormData.consultationCurrency} ${minSpecialistRate.toLocaleString()}.`,
           variant: 'destructive',
         });
         return;
@@ -3193,13 +3197,14 @@ ${ePrescription}
         return;
       }
 
+      const normalizedConsultationCurrency = profileFormData.consultationCurrency || 'NGN';
       const normalizedRateChangeReason = rateChangeReason.trim();
       const specialistRateChanged = specialistProfileSelected
         && hasValidConsultationRate
-        && Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009;
+        && (Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009 || normalizedConsultationCurrency !== (doctorRegistration as any)?.consultation_currency);
       const gpRateChanged = gpProfileSelected
         && hasPositiveConsultationRate
-        && Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009;
+        && (Math.abs(parsedConsultationRate - currentRegisteredRate) > 0.009 || normalizedConsultationCurrency !== (doctorRegistration as any)?.consultation_currency);
 
       if (specialistRateChanged && normalizedRateChangeReason.length < 5) {
         toast({
@@ -5226,30 +5231,46 @@ ${ePrescription}
                               />
                             </div>
                             <div>
-                              <label className="text-sm font-medium">{t('auth.fields.consultationRateNgn', 'Consultation Rate (NGN)')}</label>
-                              <Input
-                                value={profileFormData.consultationRate}
-                                onChange={(e) => setProfileFormData({
-                                  ...profileFormData,
-                                  consultationRate: e.target.value.replace(/[^0-9.,]/g, ''),
-                                })}
-                                placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
-                                className="mt-1"
-                                inputMode="decimal"
-                              />
+                              <label className="text-sm font-medium">{t('auth.fields.consultationRate', 'Consultation Rate')}</label>
+                              <div className="flex gap-2">
+                                <div className="w-1/3">
+                                  <Select
+                                    value={profileFormData.consultationCurrency}
+                                    onValueChange={(val) => setProfileFormData({ ...profileFormData, consultationCurrency: val })}
+                                  >
+                                    <SelectTrigger className="mt-1"><SelectValue placeholder="Currency" /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="NGN">NGN</SelectItem>
+                                      <SelectItem value="USD">USD</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="flex-1">
+                                  <Input
+                                    value={profileFormData.consultationRate}
+                                    onChange={(e) => setProfileFormData({
+                                      ...profileFormData,
+                                      consultationRate: e.target.value.replace(/[^0-9.,]/g, ''),
+                                    })}
+                                    placeholder={t('auth.fields.consultationRatePlaceholder', 'Enter your rate per consultation')}
+                                    className="mt-1"
+                                    inputMode="decimal"
+                                  />
+                                </div>
+                              </div>
                               {specialistProfileSelected ? (
                                 <p className="mt-1 text-xs text-muted-foreground">
-                                  Minimum specialist rate: NGN {MIN_SPECIALIST_RATE_NGN.toLocaleString()}.{' '}
+                                  Minimum specialist rate: {profileFormData.consultationCurrency} {minSpecialistRate.toLocaleString()}.{' '}
                                   Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
                                   {hasValidConsultationRate && (
-                                    <> You keep {formatCurrency(parsedConsultationRate * 0.7)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3)}.</>
+                                    <> You keep {formatCurrency(parsedConsultationRate * 0.7, profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3, profileFormData.consultationCurrency)}.</>
                                   )}
                                 </p>
                               ) : (
                                 <p className="mt-1 text-xs text-muted-foreground">
                                   Revenue sharing: You receive 60% and MyE-Doctor receives 40%.
                                   {hasPositiveConsultationRate && (
-                                    <> You keep {formatCurrency(parsedConsultationRate * 0.6)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4)}.</>
+                                    <> You keep {formatCurrency(parsedConsultationRate * 0.6, profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4, profileFormData.consultationCurrency)}.</>
                                   )}
                                 </p>
                               )}

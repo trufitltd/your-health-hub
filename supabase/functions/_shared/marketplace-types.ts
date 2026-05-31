@@ -52,6 +52,7 @@ export interface BookingInitiateInput {
   consultationLanguage?: string;
   paymentMethod?: 'paystack' | 'wallet' | 'hybrid';
   notes?: string;
+  currency?: string;
 }
 
 export interface SlotResult {
@@ -63,6 +64,7 @@ export interface SlotResult {
 export interface PaymentIntentResult {
   reference: string;
   amountInKobo: number;
+  currency: string;
   email: string;
   metadata: Record<string, unknown>;
   accessCode?: string;
@@ -72,6 +74,7 @@ export interface PaymentIntentResult {
 export interface BookingInitiateResult {
   appointmentId: string;
   finalPrice: number;
+  currency: string;
   slot: SlotResult;
   paymentInitialization: PaymentIntentResult | null;
   paymentMethod: 'paystack' | 'wallet' | 'hybrid';
@@ -89,6 +92,7 @@ export interface PricePreviewInput {
 
 export interface PricePreviewResult {
   finalPrice: number;
+  currency: string;
   base: number;
   modifiers: PriceModifierResult[];
   pricingProfileId: string;

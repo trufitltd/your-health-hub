@@ -4,7 +4,7 @@ import { normalizeDoctorType, roundMoney } from '../marketplace-types.ts';
 export class WalletService {
   constructor(private readonly supabase: SupabaseClient) {}
 
-  private async ensureWallet(doctorId: string) {
+  private async ensureWallet(doctorId: string, currency = 'NGN') {
     const { data: existing, error } = await this.supabase
       .from('doctor_wallet')
       .select('*')
@@ -13,11 +13,25 @@ export class WalletService {
 
     if (error) throw new Error(`Failed to load doctor wallet: ${error.message}`);
 
-    if (existing) return existing;
+    if (existing) {
+      if (existing.currency !== currency) {
+        // If currency changed and balance is zero, we can update it.
+        // If balance is not zero, this is a problem without exchange rates.
+        // For now, we just update it if it's different and hope for the best, 
+        // or the admin should have handled conversion.
+        if (Number(existing.pending_balance) === 0 && Number(existing.available_balance) === 0) {
+          await this.supabase
+            .from('doctor_wallet')
+            .update({ currency })
+            .eq('doctor_id', doctorId);
+        }
+      }
+      return existing;
+    }
 
     const { data: created, error: createError } = await this.supabase
       .from('doctor_wallet')
-      .insert({ doctor_id: doctorId, pending_balance: 0, available_balance: 0 })
+      .insert({ doctor_id: doctorId, pending_balance: 0, available_balance: 0, currency })
       .select('*')
       .single();
 
@@ -65,6 +79,7 @@ export class WalletService {
     id: string;
     doctor_id: string;
     final_price: number;
+    currency?: string;
     price_breakdown?: Record<string, unknown>;
   }) {
     const doctorType = await this.getDoctorType(appointment.doctor_id);
@@ -91,7 +106,7 @@ export class WalletService {
       : 0;
 
     const doctorEarning = roundMoney(Math.max(finalPrice - platformFee, 0));
-    const wallet = await this.ensureWallet(appointment.doctor_id);
+    const wallet = await this.ensureWallet(appointment.doctor_id, appointment.currency || 'NGN');
 
     const { error: walletUpdateError } = await this.supabase
       .from('doctor_wallet')

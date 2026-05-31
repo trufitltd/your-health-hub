@@ -300,3 +300,5 @@ export const getDoctorTypeFromSpecialty = (specialty?: string | null): DoctorTyp
 
 export const GP_RATE_NGN = 5000;
 export const MIN_SPECIALIST_RATE_NGN = 10000;
+export const GP_RATE_USD = 5;
+export const MIN_SPECIALIST_RATE_USD = 10;

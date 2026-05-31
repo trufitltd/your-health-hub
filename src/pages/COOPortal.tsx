@@ -53,6 +53,7 @@ type DoctorRow = {
   verification_status: string | null;
   medical_license_url?: string | null;
   rate_per_consultation?: number | null;
+  consultation_currency?: string | null;
   bank_name?: string | null;
   bank_account_name?: string | null;
   bank_account_number?: string | null;
@@ -74,6 +75,7 @@ type PaymentRow = {
   appointment_id?: string | null;
   patient_id?: string | null;
   amount: number | null;
+  currency?: string | null;
   status: string | null;
   created_at: string | null;
   verified_at?: string | null;
@@ -292,7 +294,7 @@ export default function COOPortal() {
    queryFn: async () => {
      const { data, error } = await supabase
        .from('doctor_registrations')
-       .select('user_id, full_name, email, phone_number, city, state, verification_status, medical_license_url, rate_per_consultation, bank_name, bank_account_name, bank_account_number')
+       .select('user_id, full_name, email, phone_number, city, state, verification_status, medical_license_url, rate_per_consultation, consultation_currency, bank_name, bank_account_name, bank_account_number')
        .order('created_at', { ascending: false });
      if (error) throw error;
      return (data || []) as DoctorRow[];
@@ -332,7 +334,7 @@ export default function COOPortal() {
 
       const { data, error } = await supabase
         .from('payments')
-        .select('id, appointment_id, patient_id, amount, status, created_at, verified_at, payment_method, provider')
+        .select('id, appointment_id, patient_id, amount, currency, status, created_at, verified_at, payment_method, provider')
         .order('created_at', { ascending: false })
         .limit(2000);
       if (error) throw error;
@@ -1518,7 +1520,7 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
                           <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
-                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation), doctor.consultation_currency || 'NGN') : 'Not set'}
                           </p>
                           {(doctor.bank_name || doctor.bank_account_number) && (
                             <div className="mt-1 pt-1 border-t border-border/50">
@@ -1604,7 +1606,7 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
                           <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
-                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation), doctor.consultation_currency || 'NGN') : 'Not set'}
                           </p>
                           {(doctor.bank_name || doctor.bank_account_number) && (
                             <div className="mt-1 pt-1 border-t border-border/50">
@@ -1659,7 +1661,7 @@ export default function COOPortal() {
                           <p className="text-xs text-muted-foreground">{doctor.phone_number || 'No phone'}</p>
                           <p className="text-xs text-muted-foreground">Location: {doctor.city || 'N/A'}, {doctor.state || 'N/A'}</p>
                           <p className="text-xs text-muted-foreground">
-                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                            Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation), doctor.consultation_currency || 'NGN') : 'Not set'}
                           </p>
                           {(doctor.bank_name || doctor.bank_account_number) && (
                             <div className="mt-1 pt-1 border-t border-border/50">
@@ -1830,7 +1832,7 @@ export default function COOPortal() {
                     return (
                     <div key={payment.id} className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3">
                       <div className="min-w-0 space-y-1">
-                        <p className="text-sm font-medium">{formatCurrency(Number(payment.amount || 0))}</p>
+                        <p className="text-sm font-medium">{formatCurrency(Number(payment.amount || 0), payment.currency || 'NGN')}</p>
                         <p className="text-xs text-muted-foreground">{formatExactDateTime(payment.created_at || null)}</p>
                         <p className="text-xs text-muted-foreground">
                           <span className="font-medium text-foreground">Booked at:</span>{' '}
