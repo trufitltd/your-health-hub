@@ -84,6 +84,7 @@ interface Doctor {
   rating: number;
   total_reviews: number;
   rate_per_consultation?: number | null;
+  consultation_currency?: string | null;
   proposed_rate_per_consultation?: number | null;
   rate_change_reason?: string | null;
   rate_change_requested_at?: string | null;
@@ -3506,8 +3507,9 @@ const CentralAdmin = () => {
                                   Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                  Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                                  Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation), doctor.consultation_currency || 'NGN') : 'Not set'}
                                 </p>
+
                                 {(doctor.bank_name || (doctor as any).bank_account_number) && (
                                   <div className="mt-1 pt-1 border-t border-border/50">
                                     <p className="text-[10px] font-semibold text-success uppercase tracking-wider">Bank Details</p>
@@ -3746,8 +3748,9 @@ const CentralAdmin = () => {
                                       Location: {doctor.city || 'N/A'}, {(doctor as any).state || 'N/A'}
                                     </p>
                                     <p className="text-xs text-muted-foreground">
-                                      Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation)) : 'Not set'}
+                                      Rate: {Number(doctor.rate_per_consultation || 0) > 0 ? formatCurrency(Number(doctor.rate_per_consultation), doctor.consultation_currency || 'NGN') : 'Not set'}
                                     </p>
+
                                     {(doctor.bank_name || (doctor as any).bank_account_number) && (
                                       <div className="mt-1 pt-1 border-t border-border/50">
                                         <p className="text-[10px] font-semibold text-success uppercase tracking-wider">Bank Details</p>
@@ -4384,10 +4387,11 @@ const CentralAdmin = () => {
                     <p className="text-muted-foreground text-xs mb-1">Current Specialist Rate</p>
                     <p className="font-medium">
                       {Number(selectedDoctor.rate_per_consultation || 0) > 0
-                        ? formatCurrency(Number(selectedDoctor.rate_per_consultation))
+                        ? formatCurrency(Number(selectedDoctor.rate_per_consultation), selectedDoctor.consultation_currency || 'NGN')
                         : 'Not set'}
                     </p>
                   </div>
+
                 </div>
               </div>
 
@@ -4473,13 +4477,14 @@ const CentralAdmin = () => {
                   <p className="text-sm">
                     <span className="font-medium">Current Rate:</span>{' '}
                     {Number(selectedDoctor.rate_per_consultation || 0) > 0
-                      ? formatCurrency(Number(selectedDoctor.rate_per_consultation))
+                      ? formatCurrency(Number(selectedDoctor.rate_per_consultation), selectedDoctor.consultation_currency || 'NGN')
                       : 'Not set'}
                   </p>
                   <p className="text-sm">
                     <span className="font-medium">Requested Rate:</span>{' '}
-                    {formatCurrency(Number((selectedDoctor as any).proposed_rate_per_consultation))}
+                    {formatCurrency(Number((selectedDoctor as any).proposed_rate_per_consultation), selectedDoctor.consultation_currency || 'NGN')}
                   </p>
+
                   {(selectedDoctor as any).rate_change_requested_at && (
                     <p className="text-sm">
                       <span className="font-medium">Requested At:</span>{' '}

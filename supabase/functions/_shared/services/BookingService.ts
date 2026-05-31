@@ -60,7 +60,7 @@ export class BookingService {
   private async getDoctorContext(doctorId: string) {
     const { data: doctorRegistration, error: regError } = await this.supabase
       .from('doctor_registrations')
-      .select('full_name, specialty, experience, doctor_tier_id, rate_per_consultation')
+      .select('full_name, specialty, experience, doctor_tier_id, rate_per_consultation, consultation_currency')
       .eq('user_id', doctorId)
       .maybeSingle();
 
@@ -107,13 +107,15 @@ export class BookingService {
     }
 
     let ratePerConsultation: number | null = null;
+    let consultationCurrency = doctorRegistration?.consultation_currency || 'NGN';
+
     const registrationRateRaw = Number(doctorRegistration?.rate_per_consultation);
     if (Number.isFinite(registrationRateRaw) && registrationRateRaw > 0) {
       ratePerConsultation = roundMoney(registrationRateRaw);
     } else {
       const { data: doctorRow, error: doctorLookupError } = await this.supabase
         .from('doctors')
-        .select('rate_per_consultation')
+        .select('rate_per_consultation, consultation_currency')
         .eq('id', doctorId)
         .maybeSingle();
       if (doctorLookupError) {
@@ -123,6 +125,9 @@ export class BookingService {
       if (Number.isFinite(doctorRateRaw) && doctorRateRaw > 0) {
         ratePerConsultation = roundMoney(doctorRateRaw);
       }
+      if (doctorRow?.consultation_currency) {
+        consultationCurrency = doctorRow.consultation_currency;
+      }
     }
 
     return {
@@ -131,6 +136,7 @@ export class BookingService {
       tierId,
       tierName,
       ratePerConsultation,
+      consultationCurrency,
     };
   }
 
@@ -157,6 +163,7 @@ export class BookingService {
       tierId: string | null;
       tierName: string | null;
       ratePerConsultation: number | null;
+      consultationCurrency: string;
     };
   }) {
     const doctor = input.doctorContext || await this.getDoctorContext(input.doctorId);
@@ -191,7 +198,8 @@ export class BookingService {
       consultationType, 
       price: { ...price, finalPrice },
       isPromotion,
-      promotionType
+      promotionType,
+      currency: doctor.consultationCurrency
     };
   }
 
@@ -215,7 +223,7 @@ export class BookingService {
       ? input.consultationType
       : DEFAULT_CONSULTATION_TYPE;
 
-    const { consultationType, price, isPromotion, promotionType } = await this.calculatePriceForDoctor({
+    const { consultationType, price, isPromotion, promotionType, currency } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
       patientId: input.patientId,
       duration: durationMinutes,
@@ -224,6 +232,7 @@ export class BookingService {
 
     return {
       finalPrice: price.finalPrice,
+      currency,
       base: price.base,
       modifiers: price.modifiers,
       pricingProfileId: price.pricingProfileId,
@@ -341,7 +350,7 @@ export class BookingService {
       ? input.consultationType
       : DEFAULT_CONSULTATION_TYPE;
 
-    const { consultationType, price, isPromotion, promotionType } = await this.calculatePriceForDoctor({
+    const { consultationType, price, isPromotion, promotionType, currency } = await this.calculatePriceForDoctor({
       doctorId: input.doctorId,
       patientId: input.patientId,
       duration: slot.durationMinutes,
@@ -366,6 +375,7 @@ export class BookingService {
       base: price.base,
       modifiers: price.modifiers,
       final_price: price.finalPrice,
+      currency,
       doctor_type: doctor.doctorType,
       consultation_type: consultationType,
       consultation_language: normalizeConsultationLanguage(input.consultationLanguage),
@@ -389,6 +399,7 @@ export class BookingService {
         notes: input.notes || null,
         status: 'pending_payment',
         final_price: price.finalPrice,
+        currency,
         price_breakdown: breakdown,
         pricing_profile_id: price.pricingProfileId,
         slot_locked_until: lockUntil,
@@ -414,6 +425,7 @@ export class BookingService {
         return {
           appointmentId: appointment.id,
           finalPrice: 0,
+          currency,
           slot,
           paymentInitialization: null,
           paymentMethod: 'paystack', // Default
@@ -523,12 +535,14 @@ export class BookingService {
           id: appointment.id,
           doctor_id: appointment.doctor_id,
           final_price: amount,
+          currency,
           price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
         });
 
         return {
           appointmentId: appointment.id,
           finalPrice: amount,
+          currency,
           slot,
           paymentInitialization: null,
           paymentMethod: 'wallet',
@@ -701,12 +715,14 @@ export class BookingService {
             id: appointment.id,
             doctor_id: appointment.doctor_id,
             final_price: amount,
+            currency,
             price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
           });
 
           return {
             appointmentId: appointment.id,
             finalPrice: amount,
+            currency,
             slot,
             paymentInitialization: null,
             paymentMethod: 'wallet',
@@ -720,6 +736,7 @@ export class BookingService {
           ...basePaymentMetadata,
           type: 'booking_hybrid_paystack',
           total_amount: amount,
+          currency,
           wallet_applied_amount: walletChargedAmount,
           balance_due_amount: paystackAmountDue,
           ...(walletChargedAmount > 0 ? { wallet_payment_reference: walletReference } : {}),
@@ -731,12 +748,14 @@ export class BookingService {
           doctorId: input.doctorId,
           email: input.patientEmail,
           amount: paystackAmountDue,
+          currency,
           metadata: paystackMetadata,
         });
 
         return {
           appointmentId: appointment.id,
           finalPrice: amount,
+          currency,
           slot,
           paymentInitialization,
           paymentMethod: 'hybrid',
@@ -783,12 +802,14 @@ export class BookingService {
       doctorId: input.doctorId,
       email: input.patientEmail,
       amount,
-      metadata: basePaymentMetadata,
+      currency,
+      metadata: { ...basePaymentMetadata, currency },
     });
 
     return {
       appointmentId: appointment.id,
       finalPrice: amount,
+      currency,
       slot,
       paymentInitialization,
       paymentMethod: 'paystack',
@@ -843,6 +864,7 @@ export class BookingService {
         id: appointment.id,
         doctor_id: appointment.doctor_id,
         final_price: Number(appointment.final_price || 0),
+        currency: appointment.currency,
         price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
       });
       return { appointmentId: appointment.id, alreadyProcessed: false };
@@ -933,9 +955,9 @@ export class BookingService {
       id: appointment.id,
       doctor_id: appointment.doctor_id,
       final_price: Number(appointment.final_price || 0),
+      currency: appointment.currency,
       price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
     });
-
     return {
       appointmentId: appointment.id,
       alreadyProcessed: false,

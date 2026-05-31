@@ -14,12 +14,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { formatAppointmentStatusLabel } from '@/services/marketplaceTypes';
+import { useLocaleFormatter } from '@/lib/locale';
 
 type PaymentRow = {
   id: string;
   appointment_id: string | null;
   patient_id: string | null;
   amount: number;
+  currency?: string | null;
   status: string | null;
   provider: string | null;
   payment_method: string | null;
@@ -187,6 +189,7 @@ const WithdrawalStatusBadge = ({ status }: { status: WithdrawalRequestRow['statu
 };
 
 export const PaymentsManagementPanel = () => {
+  const { formatCurrency } = useLocaleFormatter();
   const queryClient = useQueryClient();
 
   const [selectedPatientId, setSelectedPatientId] = useState('all');
@@ -936,7 +939,7 @@ export const PaymentsManagementPanel = () => {
             <div className="rounded-lg border p-3 bg-success/5 border-success/20">
               <p className="text-xs text-muted-foreground">Successful Payments</p>
               <p className="text-xl font-semibold text-success">{paymentMetrics.successfulCount}</p>
-              <p className="text-xs text-muted-foreground">₦{paymentMetrics.successfulValue.toLocaleString()} collected</p>
+              <p className="text-xs text-muted-foreground">{formatCurrency(paymentMetrics.successfulValue)} collected</p>
             </div>
             <div className="rounded-lg border p-3 bg-destructive/5 border-destructive/20">
               <p className="text-xs text-muted-foreground">Failed Payments</p>
@@ -947,25 +950,26 @@ export const PaymentsManagementPanel = () => {
               <p className="text-xl font-semibold text-warning">{paymentMetrics.pendingCount}</p>
             </div>
             <div className="rounded-lg border p-3 bg-primary/5 border-primary/20">
-              <p className="text-xs text-muted-foreground">Refund Credits</p>
-              <p className="text-xl font-semibold text-primary">₦{paymentMetrics.refundCredits.toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground">Credits / Refunds</p>
+              <p className="text-xl font-semibold text-primary">{formatCurrency(paymentMetrics.refundCredits)}</p>
+
             </div>
           </div>
 
           <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="rounded-lg border p-3 bg-emerald-50 border-emerald-200">
               <p className="text-xs text-muted-foreground">Recognized Revenue</p>
-              <p className="text-xl font-semibold text-emerald-700">₦{paymentMetrics.recognizedRevenueGross.toLocaleString()}</p>
+              <p className="text-xl font-semibold text-emerald-700">{formatCurrency(paymentMetrics.recognizedRevenueGross)}</p>
               <p className="text-xs text-muted-foreground">Completed appointments only</p>
             </div>
             <div className="rounded-lg border p-3 bg-teal-50 border-teal-200">
               <p className="text-xs text-muted-foreground">Net Recognized Revenue</p>
-              <p className="text-xl font-semibold text-teal-700">₦{paymentMetrics.netRecognizedRevenue.toLocaleString()}</p>
+              <p className="text-xl font-semibold text-teal-700">{formatCurrency(paymentMetrics.netRecognizedRevenue)}</p>
               <p className="text-xs text-muted-foreground">Recognized less refunds</p>
             </div>
             <div className="rounded-lg border p-3 bg-amber-50 border-amber-200">
               <p className="text-xs text-muted-foreground">Escrow Liability</p>
-              <p className="text-xl font-semibold text-amber-700">₦{paymentMetrics.escrowLiability.toLocaleString()}</p>
+              <p className="text-xl font-semibold text-amber-700">{formatCurrency(paymentMetrics.escrowLiability)}</p>
               <p className="text-xs text-muted-foreground">Collected but not yet completed</p>
             </div>
             <div className="rounded-lg border p-3 bg-muted/30">
@@ -1054,14 +1058,14 @@ export const PaymentsManagementPanel = () => {
                             {metadataType ? <Badge variant="secondary">{metadataType}</Badge> : null}
                             {paymentMode === 'hybrid' ? <Badge className="bg-primary/10 text-primary border-primary/20">hybrid</Badge> : null}
                           </div>
-                          <p className="text-sm font-semibold">₦{Number(payment.amount || 0).toLocaleString()}</p>
+                          <p className="text-sm font-semibold">{formatCurrency(Number(payment.amount || 0), payment.currency || 'NGN')}</p>
                         </div>
 
                         {paymentMode === 'hybrid' && provider === 'paystack' ? (
                           <div className="mt-2 rounded-md border border-primary/20 bg-primary/5 p-2 text-xs text-primary">
                             <span className="font-medium">Hybrid split:</span>{' '}
-                            Wallet ₦{walletAppliedAmount.toLocaleString()} + Paystack ₦{paystackLegAmount.toLocaleString()}
-                            {totalUpgradeAmount !== null ? ` = Total ₦${totalUpgradeAmount.toLocaleString()}` : ''}
+                            Wallet {formatCurrency(walletAppliedAmount)} + Paystack {formatCurrency(paystackLegAmount)}
+                            {totalUpgradeAmount !== null ? ` = Total ${formatCurrency(totalUpgradeAmount)}` : ''}
                           </div>
                         ) : null}
 
@@ -1151,8 +1155,9 @@ export const PaymentsManagementPanel = () => {
                             <Badge variant="secondary">{tx.status}</Badge>
                           </div>
                           <p className={`text-sm font-semibold ${isCredit ? 'text-success' : 'text-warning'}`}>
-                            {isCredit ? '+' : '-'}₦{Number(tx.amount || 0).toLocaleString()}
+                            {isCredit ? '+' : '-'}{formatCurrency(Number(tx.amount || 0))}
                           </p>
+
                         </div>
 
                         <div className="mt-2 grid md:grid-cols-2 gap-2 text-xs text-muted-foreground">
@@ -1241,7 +1246,8 @@ export const PaymentsManagementPanel = () => {
                               <Badge className="bg-destructive/10 text-destructive border-destructive/20">Overdue</Badge>
                             ) : null}
                           </div>
-                          <p className="text-sm font-semibold">₦{Number(request.amount || 0).toLocaleString()}</p>
+                          <p className="text-sm font-semibold">{formatCurrency(Number(request.amount || 0))}</p>
+
                         </div>
 
                         <div className="mt-2 grid md:grid-cols-2 gap-2 text-xs text-muted-foreground">
@@ -1349,8 +1355,9 @@ export const PaymentsManagementPanel = () => {
                     || 'N/A'}
                 </p>
                 <p>
-                  <span className="font-medium">Amount:</span> ₦{Number(selectedWithdrawal.amount || 0).toLocaleString()}
+                  <span className="font-medium">Amount:</span> {formatCurrency(Number(selectedWithdrawal.amount || 0))}
                 </p>
+
               </div>
 
               {withdrawalActionStatus === 'completed' ? (

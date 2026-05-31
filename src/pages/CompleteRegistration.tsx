@@ -27,6 +27,7 @@ type DoctorRow = {
   specialty: string | null;
   experience: string | null;
   rate_per_consultation: number | null;
+  consultation_currency: string | null;
   preferred_consultation_languages: string[] | null;
   profile_picture_url: string | null;
   medical_license_url: string | null;
@@ -174,6 +175,7 @@ export default function CompleteRegistration() {
   const [doctorFellowshipNumber, setDoctorFellowshipNumber] = useState('');
   const [doctorResidencyTrainingEvidenceFile, setDoctorResidencyTrainingEvidenceFile] = useState<File | null>(null);
   const [doctorConsultationRate, setDoctorConsultationRate] = useState('');
+  const [doctorConsultationCurrency, setDoctorConsultationCurrency] = useState('NGN');
   const [doctorExperience, setDoctorExperience] = useState('');
   const [doctorConsultationLanguages, setDoctorConsultationLanguages] = useState<string[]>([]);
   const [doctorIdentificationType, setDoctorIdentificationType] = useState('');
@@ -277,6 +279,7 @@ export default function CompleteRegistration() {
         const safeSpecialistLevel = clearPlaceholder(d?.specialist_level).toLowerCase();
         const safeFellowshipNumber = clearPlaceholder(d?.fellowship_number);
         const safeRate = d?.rate_per_consultation && Number(d.rate_per_consultation) !== 5000 ? String(d.rate_per_consultation) : '';
+        const safeCurrency = d?.consultation_currency || 'NGN';
         const safeExperience = clearPlaceholder(d?.experience);
         const safeConsultationLanguages = Array.isArray(d?.preferred_consultation_languages)
           ? d.preferred_consultation_languages
@@ -320,6 +323,7 @@ export default function CompleteRegistration() {
             : ''
         );
         setDoctorConsultationRate(safeRate);
+        setDoctorConsultationCurrency(safeCurrency);
         setDoctorExperience(safeExperience);
         setDoctorConsultationLanguages(safeConsultationLanguages);
         setDoctorFellowshipNumber(safeFellowshipNumber);
@@ -396,6 +400,7 @@ export default function CompleteRegistration() {
         specialty: resolvedDoctorSpecialty,
         fellowshipNumber: doctorFellowshipNumber.trim(),
         ratePerConsultation: parsedConsultationRate,
+        consultationCurrency: doctorConsultationCurrency,
         experience: doctorExperience.trim(),
         consultationLanguages: doctorConsultationLanguages,
         identificationType: doctorIdentificationType.trim(),
@@ -454,12 +459,15 @@ export default function CompleteRegistration() {
         return;
       }
 
-      if (!isGeneralPracticeDoctor && requiredDoctorFields.ratePerConsultation < 10000) {
-        toast({
-          title: 'Invalid consultation rate',
-          description: 'Minimum specialist rate is NGN 10,000.',
-        });
-        return;
+      if (!isGeneralPracticeDoctor) {
+        const minRate = requiredDoctorFields.consultationCurrency === 'USD' ? 10 : 10000;
+        if (requiredDoctorFields.ratePerConsultation < minRate) {
+          toast({
+            title: 'Invalid consultation rate',
+            description: `Minimum specialist rate is ${requiredDoctorFields.consultationCurrency} ${minRate.toLocaleString()}.`,
+          });
+          return;
+        }
       }
 
       if (needsDoctorLicense && !licenseFile) {
@@ -517,6 +525,7 @@ export default function CompleteRegistration() {
           fellowship_number: requiresConsultantFellowshipNumber ? requiredDoctorFields.fellowshipNumber : null,
           residency_training_evidence_url: requiresResidencyTrainingEvidence ? residencyTrainingEvidenceUrl : null,
           rate_per_consultation: requiredDoctorFields.ratePerConsultation,
+          consultation_currency: requiredDoctorFields.consultationCurrency,
           experience: requiredDoctorFields.experience,
           preferred_consultation_languages: requiredDoctorFields.consultationLanguages,
           profile_picture_url: profileUrl,
@@ -812,23 +821,36 @@ export default function CompleteRegistration() {
                 </div>
               )}
 
-              <div>
-                <Label htmlFor="doctorConsultationRate">Consultation Rate (NGN) *</Label>
-                <Input
-                  id="doctorConsultationRate"
-                  type="number"
-                  min={1}
-                  step="1"
-                  placeholder="Enter consultation rate"
-                  className="h-12 mt-1.5"
-                  value={doctorConsultationRate}
-                  onChange={(e) => setDoctorConsultationRate(e.target.value)}
-                  required
-                />
+              <div className="space-y-2">
+                <Label htmlFor="doctorConsultationRate">Consultation Rate *</Label>
+                <div className="flex gap-2">
+                  <div className="w-1/3">
+                    <Select value={doctorConsultationCurrency} onValueChange={setDoctorConsultationCurrency}>
+                      <SelectTrigger className="h-12 mt-1.5"><SelectValue placeholder="Currency" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="NGN">NGN</SelectItem>
+                        <SelectItem value="USD">USD</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex-1">
+                    <Input
+                      id="doctorConsultationRate"
+                      type="number"
+                      min={1}
+                      step="1"
+                      placeholder="Enter rate"
+                      className="h-12 mt-1.5"
+                      value={doctorConsultationRate}
+                      onChange={(e) => setDoctorConsultationRate(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
                 <p className="mt-2 text-xs text-muted-foreground">
                   {selectedDoctorIsGeneralPractice
-                    ? 'Revenue sharing: You receive 60% and MyE-Doctor receives 40%.'
-                    : 'Minimum specialist rate: NGN 10,000. Revenue sharing: You receive 70% and MyE-Doctor receives 30%.'}
+                    ? `Revenue sharing: You receive 60% and MyE-Doctor receives 40%.`
+                    : `Minimum specialist rate: ${doctorConsultationCurrency === 'NGN' ? 'NGN 10,000' : 'USD 10'}. Revenue sharing: You receive 70% and MyE-Doctor receives 30%.`}
                 </p>
               </div>
 
