@@ -650,7 +650,7 @@ export default function SpecialistsPage() {
                 transition={{ duration: 0.3, delay: index * 0.05 }}
                 className="bg-card rounded-2xl border border-border p-6 hover:shadow-card hover:border-primary/20 transition-all duration-300"
               >
-                <div className="flex items-start gap-4 mb-4">
+                <div className="flex flex-col sm:flex-row items-center sm:items-start text-center sm:text-left gap-4 mb-4">
                   <div className="w-20 h-20 rounded-2xl bg-muted overflow-hidden flex-shrink-0 border border-border">
                     <img
                       src={doctor.avatar_url || '/placeholder.svg'}
@@ -658,16 +658,8 @@ export default function SpecialistsPage() {
                       className="w-full h-full object-cover object-top"
                     />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold truncate">{formatDoctorName(doctor.name)}</h3>
-                    {/* <p className="text-sm text-primary">
-                      {getLocalizedSpecialty(
-                        doctor.registration,
-                        doctor.specialty,
-                        language,
-                        t('specialists.defaults.generalPractice', 'General Practice')
-                      )}
-                    </p> */}
+                  <div className="flex-1 min-w-0 w-full">
+                    <h3 className="font-semibold truncate w-full">{formatDoctorName(doctor.name)}</h3>
                     <p className="text-sm text-primary">
                       {formatSpecialtyLabel(
                         translateSpecialty(toCanonicalSpecialty(doctor.specialty) || doctor.specialty)
@@ -679,13 +671,13 @@ export default function SpecialistsPage() {
                       </p>
                     )}
                     <div className="text-xs text-muted-foreground mt-1">
-                      <p className={isBioExpanded ? '' : 'line-clamp-2'}>
+                      <p className={cn(isBioExpanded ? '' : 'line-clamp-2', "text-center sm:text-left")}>
                         {localizedBio || t('specialists.defaults.noBio', 'No bio provided.')}
                       </p>
                       {hasLongBio && (
                         <button
                           type="button"
-                          className="mt-1 text-[11px] font-medium text-primary hover:underline"
+                          className="mt-1 text-[11px] font-medium text-primary hover:underline mx-auto sm:mx-0 block"
                           onClick={() => {
                             setExpandedBios((prev) => {
                               const next = new Set(prev);
@@ -707,7 +699,7 @@ export default function SpecialistsPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 mb-4 text-sm">
+                <div className="flex items-center justify-center sm:justify-start gap-4 mb-4 text-sm">
                   <div className="flex items-center gap-1">
                     <Star className="w-4 h-4 text-warning fill-warning" />
                     <span className="font-medium">{rating ?? t('specialists.defaults.notAvailable', 'N/A')}</span>
@@ -715,22 +707,22 @@ export default function SpecialistsPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
+                <div className="flex items-center justify-center sm:justify-start gap-2 text-sm text-muted-foreground mb-4">
                   <Clock className="w-4 h-4" />
                   <span>
                     {t('specialists.card.next', 'Next')}: {nextAvailable || t('specialists.card.checkAvailability', 'Check availability')}
                   </span>
                 </div>
 
-                <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
+                <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-center sm:text-left">
                   <p className="text-xs font-semibold text-orange-700">
                     Only {marketingSlotsLeft} slot{marketingSlotsLeft === 1 ? '' : 's'} left for booking with {doctorDisplayName}
                   </p>
                 </div>
 
-                <div className="flex items-center justify-end pt-4 border-t border-border">
-                  <Link to={`/booking/${doctor.id}`}>
-                    <Button variant="gradient" size="sm">
+                <div className="flex items-center justify-center sm:justify-end pt-4 border-t border-border">
+                  <Link to={`/booking/${doctor.id}`} className="w-full sm:w-auto">
+                    <Button variant="gradient" size="sm" className="w-full sm:w-auto">
                       <Video className="w-4 h-4" />
                       {t('common.bookNow', 'Book Now')}
                     </Button>

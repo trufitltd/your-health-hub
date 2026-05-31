@@ -1696,8 +1696,6 @@ const PATIENT_PORTAL_TRANSLATIONS: Record<AppLanguage, Record<string, string>> =
     "patientPortal.loading.consultations": "Loading consultations...",
     "patientPortal.loading.notifications": "Loading notifications...",
     "patientPortal.loading.prescriptions": "Loading prescriptions...",
-    "patientPortal.recordsTab": "Investigations",
-    "patientPortal.headers.healthRecordsDescription": "View required investigations and upload investigation files",
     "patientPortal.loading.records": "Loading investigations...",
     "patientPortal.empty.noUpcomingAppointments": "No upcoming appointments",
     "patientPortal.empty.noRecentConsultations": "No recent consultations",
