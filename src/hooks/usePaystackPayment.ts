@@ -2,9 +2,10 @@ import { useCallback } from 'react';
 
 interface PaystackConfig {
   email: string;
-  amount: number; // in kobo (multiply naira by 100)
+  amount: number; // in the smallest currency unit used by Paystack
   reference: string;
   publicKey: string;
+  currency?: string;
   accessCode?: string;
   authorizationUrl?: string;
   preferRedirect?: boolean;
@@ -142,6 +143,7 @@ export const usePaystackPayment = () => {
     const email = String(config.email || '').trim();
     const reference = String(config.reference || '').trim();
     const amountInKobo = Math.round(Number(config.amount || 0));
+    const currency = String(config.currency || 'NGN').trim().toUpperCase() || 'NGN';
     const accessCode = String(config.accessCode || '').trim();
     const authorizationUrl = String(config.authorizationUrl || '').trim();
 
@@ -171,7 +173,7 @@ export const usePaystackPayment = () => {
 
     const payload: Record<string, unknown> = {
       key,
-      currency: 'NGN',
+      currency,
       callback: (response: unknown) => {
         config.onSuccess(response);
       },

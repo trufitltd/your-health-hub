@@ -10,6 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
+import { useAuth } from '@/hooks/useAuth';
 
 interface DoctorCard {
   id: string;
@@ -32,6 +33,9 @@ const normalizeDoctorNameForVisibility = (value: string | null | undefined) =>
 
 const isExcludedDoctorName = (value: string | null | undefined) =>
   normalizeDoctorNameForVisibility(value) === 'test doctor';
+
+const isTestPatientName = (value: string | null | undefined) =>
+  String(value || '').trim().toLowerCase() === 'test patient';
 
 interface DoctorScheduleRow {
   doctor_id: string;
@@ -419,6 +423,7 @@ const getLocalizedSpecialty = (
 };
 
 export default function SpecialistsPage() {
+  const { user } = useAuth();
   const { t, language } = useLanguage();
   const { data: promotion } = useActivePatientPromotion();
   const [searchQuery, setSearchQuery] = useState('');
@@ -440,8 +445,23 @@ export default function SpecialistsPage() {
     window.scrollTo(0, 0);
   }, []);
 
+  const { data: canViewTestDoctor = false } = useQuery({
+    queryKey: ['specialists-can-view-test-doctor', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return false;
+      if (isTestPatientName(user.user_metadata?.full_name)) return true;
+      const [patientResult, profileResult] = await Promise.all([
+        supabase.from('patient_registrations').select('full_name').eq('user_id', user.id).maybeSingle(),
+        supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+      ]);
+      return isTestPatientName(patientResult.data?.full_name) || isTestPatientName(profileResult.data?.full_name);
+    },
+    enabled: !!user?.id,
+    staleTime: 60 * 1000,
+  });
+
   const { data: doctors = [], isLoading: doctorsLoading } = useQuery({
-    queryKey: ['specialists-doctors'],
+    queryKey: ['specialists-doctors', canViewTestDoctor],
     queryFn: async () => {
       const { data, error } = await supabase.rpc('list_public_doctors', {
         p_limit: 1000,
@@ -454,7 +474,7 @@ export default function SpecialistsPage() {
       }
 
       return ((data || []) as Array<Record<string, unknown>>)
-        .filter((doctor) => !isExcludedDoctorName(String(doctor.full_name || '')))
+        .filter((doctor) => !isExcludedDoctorName(String(doctor.full_name || '')) || canViewTestDoctor)
         .map((doctor) => ({
           id: String(doctor.user_id || ''),
           name: String(doctor.full_name || 'Doctor'),
