@@ -10,7 +10,7 @@ import {
   Calendar, Clock, Video, MessageSquare, FileText,
   User, Bell, Settings, LogOut, ChevronRight, Star,
   Heart, Activity, Users, Phone, Banknote,
-  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List, Download
+  TrendingUp, CheckCircle, XCircle, BarChart3, Menu, X, List, Download, AlertCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -50,6 +50,7 @@ import { usePatientPresence } from '@/hooks/usePatientPresence';
 import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
 import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
 import { usePwaInstall } from '@/hooks/usePwaInstall';
+import { usePlatformFeeRules } from '@/hooks/usePlatformFeeRules';
 import {
   triggerNotificationAlert,
   getNotificationAlertIntensity,
@@ -285,6 +286,7 @@ const countAdminReplyMarkers = (body: string) => {
 };
 
 const DoctorPortal = () => {
+  const { data: feeRates = { gpDoctorPct: 60, gpPlatformPct: 40, specialistDoctorPct: 70, specialistPlatformPct: 30 } } = usePlatformFeeRules();
   const [activeTab, setActiveTab] = useState('overview');
   const [isAvailable, setIsAvailable] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -3225,6 +3227,7 @@ ${ePrescription}
         bank_account_name: profileFormData.bankAccountName.trim(),
         bank_account_number: profileFormData.bankAccountNumber.trim(),
         bank_name: profileFormData.bankName.trim(),
+        consultation_currency: normalizedConsultationCurrency,
         ...legacyBioColumnPayload,
         bio_translations: bioTranslationsPayload,
         specialty_translations: specialtyTranslationsPayload,
@@ -5257,16 +5260,16 @@ ${ePrescription}
                               {specialistProfileSelected ? (
                                 <p className="mt-1 text-xs text-muted-foreground">
                                   Minimum specialist rate: {profileFormData.consultationCurrency} {minSpecialistRate.toLocaleString()}.{' '}
-                                  Revenue sharing: You receive 70% and MyE-Doctor receives 30%.
+                                  Revenue sharing: You receive {feeRates.specialistDoctorPct}% and MyE-Doctor receives {feeRates.specialistPlatformPct}%.
                                   {hasValidConsultationRate && (
-                                    <> You keep {formatCurrency(parsedConsultationRate * 0.7, profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.3, profileFormData.consultationCurrency)}.</>
+                                    <> You keep {formatCurrency(parsedConsultationRate * (feeRates.specialistDoctorPct / 100), profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * (feeRates.specialistPlatformPct / 100), profileFormData.consultationCurrency)}.</>
                                   )}
                                 </p>
                               ) : (
                                 <p className="mt-1 text-xs text-muted-foreground">
-                                  Revenue sharing: You receive 60% and MyE-Doctor receives 40%.
+                                  Revenue sharing: You receive {feeRates.gpDoctorPct}% and MyE-Doctor receives {feeRates.gpPlatformPct}%.
                                   {hasPositiveConsultationRate && (
-                                    <> You keep {formatCurrency(parsedConsultationRate * 0.6, profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * 0.4, profileFormData.consultationCurrency)}.</>
+                                    <> You keep {formatCurrency(parsedConsultationRate * (feeRates.gpDoctorPct / 100), profileFormData.consultationCurrency)} and MyE-Doctor gets {formatCurrency(parsedConsultationRate * (feeRates.gpPlatformPct / 100), profileFormData.consultationCurrency)}.</>
                                   )}
                                 </p>
                               )}

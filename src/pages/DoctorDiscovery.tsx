@@ -35,7 +35,7 @@ interface Doctor {
   specialty: string;
   experience?: string | null;
   rate_per_consultation?: number | null;
-  hospital_affiliation: string;
+  consultation_currency?: string | null;
   profile_picture_url?: string;
   medical_license_url?: string | null;
   age: number;
@@ -526,6 +526,7 @@ export default function DoctorDiscovery() {
         full_name: string;
         specialty: string;
         rate_per_consultation?: number | null;
+        consultation_currency?: string | null;
         hospital_affiliation: string;
         profile_picture_url?: string | null;
         city: string;
@@ -629,6 +630,7 @@ export default function DoctorDiscovery() {
           total_reviews: Number(doctor.total_reviews || 0),
           experience_years: doctor.experience ? Number(doctor.experience) : null,
           rate_per_consultation: doctor.rate_per_consultation ? Number(doctor.rate_per_consultation) : null,
+          consultation_currency: (doctor as any).consultation_currency || 'NGN',
           bio_translations: localizedBioTranslations,
           preferred_consultation_languages: preferredConsultationLanguages,
           is_active: hasAvailableSchedules,
@@ -1328,8 +1330,15 @@ export default function DoctorDiscovery() {
                 {filteredDoctors.map(doctor => {
                   const localizedDoctorBio = getLocalizedDoctorBio(doctor);
                   const isGeneralPracticeDoctor = isGeneralPracticeSpecialty(doctor.specialty || '');
-                  const startingPrice = getStartingPriceForDoctor(doctor);
-                  const pricingVariationMessage = getPricingVariationMessage(doctor);
+                  const doctorCurrency = doctor.consultation_currency || 'NGN';
+                  // Use the doctor's own rate when available; fall back to the global starting price.
+                  const doctorOwnRate = Number(doctor.rate_per_consultation);
+                  const startingPrice = (Number.isFinite(doctorOwnRate) && doctorOwnRate > 0)
+                    ? doctorOwnRate
+                    : getStartingPriceForDoctor(doctor);
+                  const pricingVariationMessage = (Number.isFinite(doctorOwnRate) && doctorOwnRate > 0)
+                    ? 'Fixed price.'
+                    : getPricingVariationMessage(doctor);
                   const marketingSlotsLeft = getMarketingSlotsLeft(doctor.user_id || doctor.id);
                   const doctorDisplayName = formatDoctorName(doctor.full_name);
                   return (
@@ -1421,7 +1430,7 @@ export default function DoctorDiscovery() {
 
                             <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
                               <p className="text-sm font-semibold text-success">
-                                {`From ${formatCurrency(startingPrice, discoveryStartingPrices.currency)}`}
+                                {`From ${formatCurrency(startingPrice, doctorCurrency)}`}
                               </p>
                               <p className="text-xs text-muted-foreground">{pricingVariationMessage}</p>
                             </div>

@@ -168,18 +168,30 @@ export class BookingService {
   }) {
     const doctor = input.doctorContext || await this.getDoctorContext(input.doctorId);
     const consultationType = input.consultationType || DEFAULT_CONSULTATION_TYPE;
-    const price = await this.pricingService.calculatePrice({
-      doctorType: doctor.doctorType,
-      duration: input.duration,
-      consultationType,
-      tierId: doctor.tierId,
-      tierName: doctor.tierName,
-    });
 
-    // Handle Promotion
-    let finalPrice = price.finalPrice;
+    // When the doctor has their own rate, use it directly and skip the pricing
+    // rule engine entirely, avoiding a 400 crash when base rules are disabled.
+    let price: Awaited<ReturnType<PricingService['calculatePrice']>>;
+    let finalPrice: number;
+
     if (doctor.ratePerConsultation !== null && doctor.ratePerConsultation > 0) {
       finalPrice = doctor.ratePerConsultation;
+      price = {
+        base: finalPrice,
+        modifiers: [],
+        finalPrice,
+        pricingProfileId: '',
+        featureFlags: await this.pricingService.getFeatureFlags(),
+      };
+    } else {
+      price = await this.pricingService.calculatePrice({
+        doctorType: doctor.doctorType,
+        duration: input.duration,
+        consultationType,
+        tierId: doctor.tierId,
+        tierName: doctor.tierName,
+      });
+      finalPrice = price.finalPrice;
     }
     let isPromotion = false;
     let promotionType: string | undefined = undefined;

@@ -495,17 +495,20 @@ export default function SlotSelection() {
 
   const fallbackDoctorRate = Number(doctorInfo?.rate_per_consultation || 0);
   const displayedPrice = finalPrice ?? previewPrice?.finalPrice ?? (fallbackDoctorRate > 0 ? fallbackDoctorRate : null);
+  const displayedCurrency = previewPrice?.currency || doctorCurrency;
   const isPromotion = previewPrice?.isPromotion || false;
   const isPreviewingPrice = summaryReady && finalPrice === null && (previewPriceLoading || previewPriceFetching);
+  const walletCurrency = (patientWallet?.currency || 'NGN').toUpperCase();
+  const walletCurrencyMatches = displayedCurrency.toUpperCase() === walletCurrency;
   const patientWalletBalance = Number(patientWallet?.available_balance || 0);
-  const autoHybridForWallet = paymentMethod === 'wallet' && displayedPrice !== null && patientWalletBalance < displayedPrice;
+  const autoHybridForWallet = paymentMethod === 'wallet' && walletCurrencyMatches && displayedPrice !== null && patientWalletBalance < displayedPrice;
   const effectivePaymentMethod: 'paystack' | 'wallet' | 'hybrid' | 'promotion' = useMemo(() => {
     if (isPromotion && displayedPrice === 0) return 'promotion';
     if (paymentMethod === 'wallet' && autoHybridForWallet) return 'hybrid';
     return paymentMethod as 'paystack' | 'wallet';
   }, [paymentMethod, autoHybridForWallet, isPromotion, displayedPrice]);
 
-  // Update payment method when promotion status changes
+  // Update payment method when promotion status or wallet currency compatibility changes
   useEffect(() => {
     console.log('[SlotSelection] Checking promotion status for payment method:', { isPromotion, displayedPrice, paymentMethod });
     if (isPromotion && displayedPrice === 0) {
@@ -516,8 +519,10 @@ export default function SlotSelection() {
     } else if (paymentMethod === 'promotion') {
       console.log('[SlotSelection] Resetting payment method to paystack');
       setPaymentMethod('paystack');
+    } else if (paymentMethod === 'wallet' && !walletCurrencyMatches) {
+      setPaymentMethod('paystack');
     }
-  }, [isPromotion, displayedPrice, paymentMethod]);
+  }, [isPromotion, displayedPrice, paymentMethod, walletCurrencyMatches]);
 
   const walletAppliedForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
     ? Math.min(patientWalletBalance, displayedPrice)
@@ -665,7 +670,7 @@ export default function SlotSelection() {
           description: effectivePaymentMethod === 'promotion' 
             ? t('slotSelection.toast.promotionBookingSuccessDescription', 'Your free promotional consultation has been booked and is now pending doctor approval.')
             : walletChargedAmount > 0
-            ? `Wallet charged ${formatCurrency(walletChargedAmount, doctorCurrency)}. Your booking is now pending doctor approval.`
+            ? `Wallet charged ${formatCurrency(walletChargedAmount, displayedCurrency)}. Your booking is now pending doctor approval.`
 
             : t(
               'slotSelection.toast.walletBookingSuccessDescription',
@@ -703,6 +708,7 @@ export default function SlotSelection() {
         await initializePayment({
           email: paymentInit.email || user.email || '',
           amount: paymentInit.amountInKobo,
+          currency: paymentInit.currency || displayedCurrency,
           reference: paymentInit.reference,
           accessCode: paymentInit.accessCode,
           authorizationUrl: paymentInit.authorizationUrl,
@@ -744,7 +750,7 @@ export default function SlotSelection() {
               toast({
                 title: t('booking.paymentSuccessTitle', 'Payment successful'),
                 description: walletChargedAmount > 0
-                  ? `Wallet applied ${formatCurrency(walletChargedAmount, doctorCurrency)} and Paystack paid ${formatCurrency(paystackAmountDue, doctorCurrency)}. Your appointment is pending doctor approval.`
+                  ? `Wallet applied ${formatCurrency(walletChargedAmount, displayedCurrency)} and Paystack paid ${formatCurrency(paystackAmountDue, displayedCurrency)}. Your appointment is pending doctor approval.`
 
                   : confirmResult.alreadyProcessed
                   ? t(
@@ -761,7 +767,7 @@ export default function SlotSelection() {
               toast({
                 title: t('booking.paymentSuccessTitle', 'Payment successful'),
                 description: walletChargedAmount > 0
-                  ? `Wallet applied ${formatCurrency(walletChargedAmount, doctorCurrency)} and Paystack paid ${formatCurrency(paystackAmountDue, doctorCurrency)}. Your appointment will appear after payment confirmation processing completes.`
+                  ? `Wallet applied ${formatCurrency(walletChargedAmount, displayedCurrency)} and Paystack paid ${formatCurrency(paystackAmountDue, displayedCurrency)}. Your appointment will appear after payment confirmation processing completes.`
 
                   : t(
                     'slotSelection.toast.paymentSuccessPendingWebhook',
@@ -1213,7 +1219,7 @@ export default function SlotSelection() {
                           {isPromotion ? (
                             <div className="flex flex-col items-end">
                               <span className="text-xs line-through text-muted-foreground">
-                                {previewPrice?.base ? formatCurrency(previewPrice.base, doctorCurrency) : ''}
+                                {previewPrice?.base ? formatCurrency(previewPrice.base, displayedCurrency) : ''}
                               </span>
 
                               <span className="text-success font-bold uppercase tracking-wider">
@@ -1221,7 +1227,7 @@ export default function SlotSelection() {
                               </span>
                             </div>
                           ) : displayedPrice !== null ? (
-                            formatCurrency(displayedPrice, doctorCurrency)
+                            formatCurrency(displayedPrice, displayedCurrency)
                           ) : isPreviewingPrice ? (
 
                             t('slotSelection.summary.calculating', 'Calculating...')
@@ -1269,19 +1275,24 @@ export default function SlotSelection() {
                                   className="accent-primary"
                                 />
                               </label>
-                              <label className="flex items-center justify-between rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors">
+                              <label className={`flex items-center justify-between rounded-md border px-3 py-2 transition-colors ${walletCurrencyMatches ? 'cursor-pointer hover:bg-muted/30' : 'opacity-50 cursor-not-allowed'}`}>
                                 <div className="flex items-center gap-2">
                                   <Wallet className="w-4 h-4 text-muted-foreground" />
                                   <span>
-                                    {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance, 'NGN')})
+                                    {t('slotSelection.summary.wallet', 'Wallet')} ({formatCurrency(patientWalletBalance, walletCurrency)})
+                                    {!walletCurrencyMatches && (
+                                      <span className="ml-1 text-xs text-muted-foreground">
+                                        — {walletCurrency} wallet unavailable for {displayedCurrency} payments
+                                      </span>
+                                    )}
                                   </span>
-
                                 </div>
                                 <input
                                   type="radio"
                                   name="booking-payment-method"
                                   checked={paymentMethod === 'wallet'}
-                                  onChange={() => setPaymentMethod('wallet')}
+                                  onChange={() => walletCurrencyMatches && setPaymentMethod('wallet')}
+                                  disabled={!walletCurrencyMatches}
                                   className="accent-primary"
                                 />
                               </label>
@@ -1293,17 +1304,17 @@ export default function SlotSelection() {
                             {paystackDueForHybrid > 0 ? (
                               <>
                                 <p>
-                                  <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid, doctorCurrency)}
+                                  <span className="font-medium">From wallet:</span> {formatCurrency(walletAppliedForHybrid, displayedCurrency)}
                                 </p>
 
                                 <p>
-                                  <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid, doctorCurrency)}
+                                  <span className="font-medium">Paystack balance:</span> {formatCurrency(paystackDueForHybrid, displayedCurrency)}
                                 </p>
 
                               </>
                             ) : (
                               <p>
-                                <span className="font-medium">Wallet covers full amount:</span> {formatCurrency(displayedPrice, doctorCurrency)}
+                                <span className="font-medium">Wallet covers full amount:</span> {formatCurrency(displayedPrice, displayedCurrency)}
                               </p>
 
                             )}

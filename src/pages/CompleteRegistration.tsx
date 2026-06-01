@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Upload, User, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { usePlatformFeeRules } from '@/hooks/usePlatformFeeRules';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -147,6 +148,7 @@ const clearPlaceholder = (value: string | null | undefined) => {
 
 export default function CompleteRegistration() {
   const { user, isLoading: authLoading } = useAuth();
+  const { data: feeRates = { gpDoctorPct: 60, gpPlatformPct: 40, specialistDoctorPct: 70, specialistPlatformPct: 30 } } = usePlatformFeeRules();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
@@ -849,8 +851,8 @@ export default function CompleteRegistration() {
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
                   {selectedDoctorIsGeneralPractice
-                    ? `Revenue sharing: You receive 60% and MyE-Doctor receives 40%.`
-                    : `Minimum specialist rate: ${doctorConsultationCurrency === 'NGN' ? 'NGN 10,000' : 'USD 10'}. Revenue sharing: You receive 70% and MyE-Doctor receives 30%.`}
+                    ? `Revenue sharing: You receive ${feeRates.gpDoctorPct}% and MyE-Doctor receives ${feeRates.gpPlatformPct}%.`
+                    : `Minimum specialist rate: ${doctorConsultationCurrency === 'NGN' ? 'NGN 10,000' : 'USD 10'}. Revenue sharing: You receive ${feeRates.specialistDoctorPct}% and MyE-Doctor receives ${feeRates.specialistPlatformPct}%.`}
                 </p>
               </div>
 

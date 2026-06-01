@@ -82,6 +82,7 @@ export interface DoctorWallet {
 export interface PatientWallet {
   patient_id: string;
   available_balance: number;
+  currency?: string | null;
   updated_at: string;
 }
 
@@ -129,6 +130,7 @@ export interface BookingInitiateRequest {
 export interface BookingInitiateResponse {
   appointmentId: string;
   finalPrice: number;
+  currency: string;
   slot: {
     date: string;
     time: string;
@@ -183,12 +185,15 @@ export interface PricePreviewRequest {
 
 export interface PricePreviewResponse {
   finalPrice: number;
+  currency: string;
   base: number;
   modifiers: PriceModifierResult[];
   pricingProfileId: string;
   featureFlags: Record<FeatureFlagName, boolean>;
   durationMinutes: number;
   consultationType: 'chat' | 'voice' | 'video';
+  isPromotion?: boolean;
+  promotionType?: string;
 }
 
 export type AppointmentStatus =
