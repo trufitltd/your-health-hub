@@ -74,6 +74,7 @@ import { DoctorMessagesTab } from '@/components/doctor-portal/DoctorMessagesTab'
 import { CooThreadChat } from '@/components/coo/CooThreadChat';
 import { CLERKING_PANEL_TEXT } from '@/components/consultation/DoctorNotesPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ContactMyEDoctorForm } from '@/components/ContactMyEDoctorForm';
 import {
   DEFAULT_BOOKING_DURATION_MINUTES,
@@ -122,11 +123,6 @@ const CONSULTATION_LANGUAGE_VALUES = [
   'spanish',
   'portuguese',
 ] as const;
-
-const normalizeConsultationLanguage = (value: string | null | undefined) => {
-  if (!value) return '';
-  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
-};
 
 const normalizeBioLanguageCode = (value: string | null | undefined) => {
   if (!value) return '';
