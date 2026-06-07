@@ -2519,17 +2519,28 @@ const PatientPortal = () => {
     return <span className={`inline-block w-3 h-3 rounded-full ${colors[status]} ring-2 ring-white`} title={status} />;
   };
 
-  const getAppointmentDateTime = (apt: { date: string; time: string }) =>
-    appointmentLocalToDate(apt.date, apt.time, APPOINTMENT_BASE_TIME_ZONE)
-    || new Date(`${apt.date}T${apt.time}`);
+  const getAppointmentDateTime = (apt: {
+    date: string;
+    time: string;
+    reschedule_request_status?: string | null;
+    reschedule_proposed_date?: string | null;
+    reschedule_proposed_time?: string | null;
+  }) => {
+    const dateValue = isPendingRescheduleRequest(apt) ? String(apt.reschedule_proposed_date || apt.date) : apt.date;
+    const timeValue = isPendingRescheduleRequest(apt) ? String(apt.reschedule_proposed_time || apt.time) : apt.time;
+    return (
+      appointmentLocalToDate(dateValue, timeValue, APPOINTMENT_BASE_TIME_ZONE) ||
+      new Date(`${dateValue}T${timeValue}`)
+    );
+  };
   const hasAppointmentTimePassed = (apt: { date: string; time: string }) =>
     getAppointmentDateTime(apt).getTime() <= Date.now();
   const formatAppointmentDate = (apt: { date: string; time: string }) => formatDate(getAppointmentDateTime(apt));
   const formatAppointmentClockTime = (apt: { date: string; time: string }) =>
     formatTime(getAppointmentDateTime(apt), { hour: '2-digit', minute: '2-digit' }, formatClockTime(apt.time));
-  const isPendingRescheduleRequest = (apt: {
+  const isPendingRescheduleRequest = useCallback((apt: {
     reschedule_request_status?: string | null;
-  }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending';
+  }) => normalizeRescheduleRequestStatus(apt.reschedule_request_status) === 'pending', []);
   const isPendingTabAppointment = (apt: {
     status?: string | null;
     reschedule_request_status?: string | null;
@@ -2605,8 +2616,7 @@ const PatientPortal = () => {
       case 'confirmed':
         filtered = appointments.filter(
           (apt) =>
-            (apt.status === 'confirmed' || apt.status === 'in_progress') &&
-            !isPendingRescheduleRequest(apt as { reschedule_request_status?: string | null }),
+            (apt.status === 'confirmed' || apt.status === 'in_progress'),
         );
         break;
       case 'in_progress':
@@ -4039,17 +4049,35 @@ const PatientPortal = () => {
                               </div>
                               <div className="flex items-center gap-2">
                                 {getStatusBadge(apt.status)}
+                                {getRescheduleRequestBadge(apt as any)}
                               </div>
-                              {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
-                                <JoinConsultationButton
-                                  appointmentId={apt.id}
-                                  participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                                  status={apt.status}
-                                  consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
-                                  variant="default"
-                                  size="sm"
-                                  className="w-full sm:w-auto"
-                                />
+                              {isPendingRescheduleRequest(apt as any) && isDoctorRequestedReschedule(apt as any) ? (
+                                <div className="flex flex-col gap-2 mt-1">
+                                  <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking} className="w-full sm:w-auto gradient-primary">
+                                    Accept New Slot
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-destructive border-destructive/30 w-full sm:w-auto"
+                                    onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                    disabled={isBooking}
+                                  >
+                                    Decline
+                                  </Button>
+                                </div>
+                              ) : (
+                                (apt.status === 'confirmed' || apt.status === 'in_progress') && (
+                                  <JoinConsultationButton
+                                    appointmentId={apt.id}
+                                    participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                    status={apt.status}
+                                    consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
+                                    variant="default"
+                                    size="sm"
+                                    className="w-full sm:w-auto"
+                                  />
+                                )
                               )}
                               {(apt.status === 'confirmed' || apt.status === 'in_progress') && (
                                 <Button
@@ -4549,7 +4577,17 @@ const PatientPortal = () => {
                                     <div>
                                       <p className="font-semibold">{getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}</p>
                                       <p className="text-sm text-muted-foreground">Appointment</p>
-                                      {isPastConfirmed && (
+                                      {isPendingRescheduleRequest(apt as any) && (
+                                        <div className="mt-2 space-y-1">
+                                          <p className="text-xs font-medium text-blue-700">
+                                            Reschedule Proposed: {new Date(
+                                              String((apt as any).reschedule_proposed_date || apt.date)
+                                            ).toLocaleDateString()} at {(apt as any).reschedule_proposed_time || apt.time}
+                                          </p>
+                                          {getRescheduleRequestBadge(apt as any)}
+                                        </div>
+                                      )}
+                                      {isPastConfirmed && !isPendingRescheduleRequest(apt as any) && (
                                         <p className="text-xs font-medium text-amber-700 mt-1">
                                           Appointment time passed. Waiting for doctor action (no-show or follow-up).
                                         </p>
@@ -4557,15 +4595,32 @@ const PatientPortal = () => {
                                     </div>
                                   </div>
                                   <div className="flex flex-col sm:flex-row gap-2">
-                                    <JoinConsultationButton
-                                      appointmentId={apt.id}
-                                      participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
-                                      status={apt.status}
-                                      consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
-                                      variant="default"
-                                      size="sm"
-                                      className="gradient-primary"
-                                    />
+                                    {isPendingRescheduleRequest(apt as any) && isDoctorRequestedReschedule(apt as any) ? (
+                                      <>
+                                        <Button size="sm" onClick={() => respondToRescheduleRequest(apt.id, 'approve')} disabled={isBooking} className="gradient-primary">
+                                          Accept New Slot
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-destructive border-destructive/30"
+                                          onClick={() => respondToRescheduleRequest(apt.id, 'decline')}
+                                          disabled={isBooking}
+                                        >
+                                          Decline
+                                        </Button>
+                                      </>
+                                    ) : (
+                                      <JoinConsultationButton
+                                        appointmentId={apt.id}
+                                        participantName={getDoctorNameById((apt as unknown as { doctor_id?: string }).doctor_id, apt.specialist_name)}
+                                        status={apt.status}
+                                        consultationLanguage={getConsultationLanguageForAppointment(apt as any)}
+                                        variant="default"
+                                        size="sm"
+                                        className="gradient-primary"
+                                      />
+                                    )}
                                     <Button
                                       size="sm"
                                       variant="outline"
