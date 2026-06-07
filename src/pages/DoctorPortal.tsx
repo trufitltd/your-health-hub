@@ -2711,8 +2711,7 @@ ${ePrescription}
                       {t('doctorPortal.actions.message', 'Message')}
                     </Button>
                   )}
-                  {!isPendingRescheduleRequest(calendarFocusedAppointment as { reschedule_request_status?: string | null }) &&
-                    (calendarFocusedAppointment.status === 'in_progress' || calendarFocusedAppointment.status === 'completed') && (
+                  {calendarFocusedAppointment.patient_id && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -4366,28 +4365,6 @@ ${ePrescription}
                                       <MessageSquare className="w-4 h-4 mr-2" />
                                       {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
-                                    {apt.status === 'in_progress' && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="w-full sm:w-auto"
-                                        onClick={() => openClinicalNotesDialog(apt)}
-                                        disabled={isPreparingClinicalNotes}
-                                      >
-                                        <FileText className="w-4 h-4 mr-2" />
-                                        {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
-                                      </Button>
-                                    )}
-                                    {apt.patient_id && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="w-full sm:w-auto"
-                                        onClick={() => handleViewPatientFolder(apt)}
-                                      >
-                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
-                                      </Button>
-                                    )}
                                     {!isPastConfirmed && apt.status !== 'completed' && (
                                       <Button
                                         size="sm"
@@ -4470,11 +4447,22 @@ ${ePrescription}
                                         {formatConsultationLanguageFromNotes(apt.notes) && <p className="text-xs text-muted-foreground">{formatConsultationLanguageFromNotes(apt.notes)}</p>}
                                       </div>
                                     </div>
-                                    <div className="flex gap-2">
+                                    <div className="flex flex-wrap gap-2">
                                       {apt.patient_id && (
-                                        <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                          {t('doctorPortal.actions.viewFolder', 'View Folder')}
-                                        </Button>
+                                        <>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => openClinicalNotesDialog(apt)}
+                                            disabled={isPreparingClinicalNotes}
+                                          >
+                                            <FileText className="w-4 h-4 mr-2" />
+                                            {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
+                                          </Button>
+                                          <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                            {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                          </Button>
+                                        </>
                                       )}
                                       <Badge variant={isNoShow ? 'destructive' : 'secondary'}>
                                         {isNoShow ? t('appointmentStatus.noShow', 'No Show') : t('appointmentStatus.cancelled', 'Cancelled')}
@@ -4542,17 +4530,6 @@ ${ePrescription}
                                       <MessageSquare className="w-4 h-4 mr-2" />
                                       {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
-                                    {(apt.status === 'in_progress' || apt.status === 'completed') && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => openClinicalNotesDialog(apt)}
-                                        disabled={isPreparingClinicalNotes}
-                                      >
-                                        <FileText className="w-4 h-4 mr-2" />
-                                        {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
-                                      </Button>
-                                    )}
                                     {apt.patient_id && (
                                       <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
                                         {t('doctorPortal.actions.viewFolder', 'View Folder')}
@@ -4646,21 +4623,22 @@ ${ePrescription}
                                       {t('doctorPortal.actions.message', 'Message')}
                                     </Button>
                                   )}
-                                  {!pendingReschedule && (apt.status === 'in_progress' || apt.status === 'completed') && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => openClinicalNotesDialog(apt)}
-                                      disabled={isPreparingClinicalNotes}
-                                    >
-                                      <FileText className="w-4 h-4 mr-2" />
-                                      {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
-                                    </Button>
-                                  )}
+                                  {/* Add Clinical Notes button rendered below with View Folder; avoid duplicate here */}
                                   {apt.patient_id && (
-                                    <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
-                                      {t('doctorPortal.actions.viewFolder', 'View Folder')}
-                                    </Button>
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => openClinicalNotesDialog(apt)}
+                                        disabled={isPreparingClinicalNotes}
+                                      >
+                                        <FileText className="w-4 h-4 mr-2" />
+                                        {t('doctorPortal.actions.addClinicalNotes', 'Add Clinical Notes')}
+                                      </Button>
+                                      <Button size="sm" variant="outline" onClick={() => handleViewPatientFolder(apt)}>
+                                        {t('doctorPortal.actions.viewFolder', 'View Folder')}
+                                      </Button>
+                                    </>
                                   )}
                                   {!pendingReschedule && (apt.status === 'pending_approval' || apt.status === 'pending_payment') && (
                                     <div className="flex gap-2">
