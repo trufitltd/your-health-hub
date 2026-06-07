@@ -317,8 +317,8 @@ const DoctorPortal = () => {
     notes: string | null;
   }>>([]);
   const [doctorNamesById, setDoctorNamesById] = useState<Record<string, string>>({});
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all' | 'closed'>('confirmed');
-  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('calendar');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatus | 'all' | 'closed'>('all');
+  const [appointmentViewMode, setAppointmentViewMode] = useState<'list' | 'calendar'>('list');
   const [isMobileAppointmentsLayout, setIsMobileAppointmentsLayout] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 767px)').matches;
