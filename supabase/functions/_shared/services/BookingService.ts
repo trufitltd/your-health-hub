@@ -180,7 +180,7 @@ export class BookingService {
         base: finalPrice,
         modifiers: [],
         finalPrice,
-        pricingProfileId: '',
+        pricingProfileId: null,
         featureFlags: await this.pricingService.getFeatureFlags(),
       };
     } else {
