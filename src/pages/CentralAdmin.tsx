@@ -1663,6 +1663,60 @@ const CentralAdmin = () => {
     }
   };
 
+  const handleEnableClinicalNotes = async (appointment: AdminAppointmentRow) => {
+    if (!appointment.patient_id || !appointment.doctor_id) {
+      toast({
+        title: 'Unable to enable clinical notes',
+        description: 'This appointment is missing the doctor or patient assignment.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from('consultation_sessions')
+        .select('id')
+        .eq('appointment_id', appointment.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSessionError) throw existingSessionError;
+
+      if (existingSession?.id) {
+        toast({
+          title: 'Clinical notes already enabled',
+          description: 'A consultation session already exists for this appointment.',
+        });
+        return;
+      }
+
+      const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_consultation_session', {
+        p_appointment_id: appointment.id,
+        p_patient_id: appointment.patient_id,
+        p_doctor_id: appointment.doctor_id,
+        p_consultation_type: 'video',
+      });
+
+      if (rpcError) throw rpcError;
+
+      toast({
+        title: 'Clinical notes enabled',
+        description: 'Doctors can now add clinical notes for this appointment.',
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin-appointments-feed'] });
+    } catch (error: any) {
+      toast({
+        title: 'Failed to enable clinical notes',
+        description: error?.message || 'Please try again later.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleRejectDoctor = async (doctor: Doctor) => {
     if (!selectedDoctor) return;
     setIsProcessing(true);
@@ -2958,6 +3012,15 @@ const CentralAdmin = () => {
                                       disabled={isProcessing}
                                     >
                                       Top-up
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 px-2 text-[10px]"
+                                      onClick={() => handleEnableClinicalNotes(apt)}
+                                      disabled={isProcessing}
+                                    >
+                                      Enable Notes
                                     </Button>
                                     <Button
                                       size="icon"
