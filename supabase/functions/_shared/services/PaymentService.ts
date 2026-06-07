@@ -68,14 +68,18 @@ export class PaymentService {
       metadata,
     };
 
-    const callbackUrl = String(
+    const callbackUrlRaw = String(
       Deno.env.get('PAYSTACK_CALLBACK_URL')
       || Deno.env.get('APP_URL')
       || Deno.env.get('SITE_URL')
       || ''
     ).trim();
+    
+    // Ensure the base URL doesn't end with a slash to avoid //patient-portal redirect issues
+    const callbackUrl = callbackUrlRaw.replace(/\/+$/, '');
+    
     if (callbackUrl) {
-      initializePayload.callback_url = callbackUrl;
+      initializePayload.callback_url = `${callbackUrl}/patient-portal`;
     }
 
     const initializeResponse = await fetch('https://api.paystack.co/transaction/initialize', {

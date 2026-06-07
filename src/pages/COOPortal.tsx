@@ -462,7 +462,14 @@ export default function COOPortal() {
       || (['success', 'successful', 'succeeded', 'paid', 'completed'].includes(paymentStatus)
         ? payment?.created_at || null
         : null);
-    const activityDate = paymentMadeAt || apt.updated_at || apt.created_at || null;
+    
+    const dates = [
+      paymentMadeAt ? new Date(paymentMadeAt).getTime() : 0,
+      apt.updated_at ? new Date(apt.updated_at).getTime() : 0,
+      apt.created_at ? new Date(apt.created_at).getTime() : 0
+    ].filter(t => t > 0);
+    
+    const activityDate = dates.length > 0 ? new Date(Math.max(...dates)).toISOString() : null;
     return (
       <div className="rounded-md bg-muted/40 p-2 space-y-1">
         <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Created:</span> {formatExactDateTime(apt.created_at)}</p>
