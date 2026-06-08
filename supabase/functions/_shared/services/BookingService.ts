@@ -889,6 +889,8 @@ export class BookingService {
       raw: {},
     };
 
+    const incomingStatus = String(paystackVerification?.status || '').trim().toLowerCase();
+    const incomingAmount = Number(paystackVerification?.amount || 0);
     const hasWebhookSuccessMarker = (
       (
         paymentStatus === 'success'
@@ -900,16 +902,25 @@ export class BookingService {
       && (!!webhookVerification || paymentVerifiedAt.length > 0)
     );
 
-    if (hasWebhookSuccessMarker) {
-      // Webhook has already verified and marked payment success; avoid re-verification failures here.
+    if (hasWebhookSuccessMarker || incomingStatus === 'success') {
       verified = {
         ok: true,
         status: 'success',
-        amountInKobo: Math.round(Number(payment.amount || 0) * 100),
-        raw: typeof webhookVerification === 'object' && webhookVerification !== null
+        amountInKobo: incomingAmount > 0
+          ? Math.round(incomingAmount)
+          : Math.round(Number(payment.amount || 0) * 100),
+        raw: typeof paystackVerification === 'object' && paystackVerification !== null
+          ? paystackVerification
+          : typeof webhookVerification === 'object' && webhookVerification !== null
           ? (webhookVerification as Record<string, unknown>)
           : { source: 'payment.metadata.verification' },
       };
+
+      const expectedKobo = Math.round(Number(payment.amount || 0) * 100);
+      if (verified.amountInKobo !== 0 && verified.amountInKobo !== expectedKobo) {
+        await this.failPayment(reference, 'Amount mismatch');
+        throw new Error('Payment amount mismatch');
+      }
     } else {
       verified = await this.paymentService.verifyPayment(reference);
       if (!verified.ok) {
