@@ -1,12 +1,22 @@
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 
 const NotFound = () => {
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
+    // If the path contains double slashes, it's a malformed redirect.
+    // Automatically fix it and redirect to the clean path.
+    if (location.pathname.includes("//")) {
+      const cleanPath = location.pathname.replace(/\/+/g, "/");
+      console.log(`[NotFound] Fixing malformed path: ${location.pathname} -> ${cleanPath}`);
+      navigate(cleanPath + location.search, { replace: true });
+      return;
+    }
+
     console.error("404 Error: User attempted to access non-existent route:", location.pathname);
-  }, [location.pathname]);
+  }, [location.pathname, location.search, navigate]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted">

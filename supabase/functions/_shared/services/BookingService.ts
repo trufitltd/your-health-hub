@@ -857,13 +857,13 @@ export class BookingService {
     const paymentVerifiedAt = payment.verified_at ? String(payment.verified_at) : '';
 
     // If payment is already marked successful in DB (by webhook or prior confirm), trust it
-    const isAlreadySuccessfulInDb = (
-      paymentStatus === 'success'
-      || paymentStatus === 'successful'
-      || paymentStatus === 'succeeded'
-      || paymentStatus === 'paid'
-      || paymentStatus === 'completed'
-    );
+    const isAlreadySuccessfulInDb = [
+      'success',
+      'successful',
+      'succeeded',
+      'paid',
+      'completed'
+    ].includes(paymentStatus);
 
     if (isAlreadySuccessfulInDb) {
       // Payment already verified — just ensure appointment is promoted

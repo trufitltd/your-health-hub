@@ -353,7 +353,10 @@ serve(async (req) => {
     const eventName = String(event?.event || '');
     const reference = String(event?.data?.reference || '');
 
+    console.log(`[Paystack Webhook] Received ${eventName} for reference: ${reference}`);
+
     if (!reference) {
+      console.error('[Paystack Webhook] Missing reference in payload');
       return new Response(JSON.stringify({ error: 'Missing payment reference' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -361,22 +364,32 @@ serve(async (req) => {
     }
 
     if (eventName === 'charge.success') {
-      // Fetch payment to check if it's a reschedule payment
       const payment = await paymentService.getPaymentByReference(reference);
+      if (!payment) {
+        console.error(`[Paystack Webhook] Payment record not found for reference: ${reference}`);
+        // Return 200 to Paystack to stop retries, but log the error
+        return new Response(JSON.stringify({ error: 'Payment record not found' }), {
+          status: 200, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       const paymentType = String((payment?.metadata as Record<string, unknown> | undefined)?.type || '')
         .trim()
         .toLowerCase();
 
+      console.log(`[Paystack Webhook] Finalizing successful payment. Type: ${paymentType}`);
+
       if (paymentType === 'reschedule_upgrade') {
-        // Handle reschedule payment
         const result = await finalizeReschedulePayment(serviceClient, reference, event?.data || {}, paymentService);
+        console.log('[Paystack Webhook] Reschedule finalize result:', result);
         return new Response(JSON.stringify({ success: true, event: eventName, type: 'reschedule', ...result }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       } else {
-        // Handle regular booking payment
         const result = await bookingService.finalizeSuccessfulPayment(reference, event?.data || {});
+        console.log('[Paystack Webhook] Booking finalize result:', result);
         return new Response(JSON.stringify({ success: true, event: eventName, ...result }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

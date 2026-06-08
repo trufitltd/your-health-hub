@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import { useEffect, useState } from "react";
@@ -172,6 +172,20 @@ if (typeof window !== 'undefined') {
   window.addEventListener('error', handlePaystackCrossOriginError, true);
   window.addEventListener('unhandledrejection', handlePaystackUnhandledRejection, true);
 }
+const DoubleSlashFixer = () => {
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (pathname.includes('//')) {
+      const cleanPath = pathname.replace(/\/+/g, '/');
+      console.log(`[Router] Fixing double slash: ${pathname} -> ${cleanPath}`);
+      navigate(cleanPath + search, { replace: true });
+    }
+  }, [pathname, search, navigate]);
+
+  return null;
+};
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -183,7 +197,9 @@ const App = () => (
           <BrowserRouter>
             <PwaManifestHandler />
             <NotificationPromptBanner />
+            <DoubleSlashFixer />
             <Routes>
+...
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
