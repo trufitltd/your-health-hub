@@ -537,6 +537,22 @@ export default function SlotSelection() {
   const paystackDueForHybrid = effectivePaymentMethod === 'hybrid' && displayedPrice !== null
     ? Math.max(displayedPrice - walletAppliedForHybrid, 0)
     : 0;
+  const confirmButtonIcon = effectivePaymentMethod === 'promotion'
+    ? <Gift className="w-4 h-4" />
+    : effectivePaymentMethod === 'wallet'
+    ? <Wallet className="w-4 h-4" />
+    : <CreditCard className="w-4 h-4" />;
+  const confirmButtonLabel = effectivePaymentMethod === 'promotion'
+    ? t('slotSelection.bookForFree', 'Book for Free')
+    : isConfirming
+    ? t('slotSelection.processing', 'Processing...')
+    : effectivePaymentMethod === 'wallet'
+    ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+    : effectivePaymentMethod === 'hybrid'
+    ? paystackDueForHybrid > 0
+      ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
+      : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
+    : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking');
   const availableDateSet = useMemo(() => new Set(availableDates), [availableDates]);
   const selectedCalendarDate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : undefined;
   const minCalendarDate = useMemo(() => {
@@ -1376,25 +1392,10 @@ export default function SlotSelection() {
                   disabled={!summaryReady || isConfirming || patientNameInvalid}
                   className="gap-2"
                 >
-                {effectivePaymentMethod === 'promotion' 
-                  ? <Gift className="w-4 h-4" /> 
-                  : effectivePaymentMethod === 'wallet' 
-                  ? <Wallet className="w-4 h-4" /> 
-                  : <CreditCard className="w-4 h-4" />
-                }
-                {effectivePaymentMethod === 'promotion'
-                  ? t('slotSelection.bookForFree', 'Book for Free')
-                  : isConfirming
-                  ? t('slotSelection.processing', 'Processing...')
-                  : effectivePaymentMethod === 'wallet'
-                  ? t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
-                  : effectivePaymentMethod === 'hybrid'
-                  ? paystackDueForHybrid > 0
-                  ? t('slotSelection.confirmHybrid', 'Pay Balance & Confirm')
-                  : t('slotSelection.confirmWithWallet', 'Confirm with Wallet')
-                  : t('slotSelection.payAndConfirmBooking', 'Pay & Confirm Booking')}
-                <ChevronRight className="w-4 h-4" />
-              </Button>
+                  {confirmButtonIcon}
+                  {confirmButtonLabel}
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
             </motion.div>
           </div>
         </div>
