@@ -1643,8 +1643,12 @@ const PatientPortal = () => {
         const paymentType = String((paymentData?.metadata as any)?.type || '').toLowerCase();
         
         if (paymentType === 'reschedule_upgrade' || paymentType === 'reschedule_hybrid_wallet') {
+          const { data: { session } } = await supabase.auth.getSession();
           const { data: result, error } = await supabase.functions.invoke('reschedule-payment-confirm', {
             body: { reference },
+            headers: session?.access_token ? {
+              Authorization: `Bearer ${session.access_token}`,
+            } : undefined,
           });
           if (error) throw error;
           
