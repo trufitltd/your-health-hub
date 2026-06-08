@@ -70,18 +70,19 @@ export class PaymentService {
 
     const explicitCallback = Deno.env.get('PAYSTACK_CALLBACK_URL');
     if (explicitCallback && explicitCallback.trim().startsWith('http')) {
-      initializePayload.callback_url = explicitCallback.trim();
+      const trimmedCallback = explicitCallback.trim().replace(/\/+$/, '');
+      // If the secret already includes /patient-portal, use it as is.
+      // Otherwise, append it.
+      if (trimmedCallback.endsWith('/patient-portal')) {
+        initializePayload.callback_url = trimmedCallback;
+      } else {
+        initializePayload.callback_url = `${trimmedCallback}/patient-portal`;
+      }
     } else {
-      const baseUrl = (Deno.env.get('APP_URL') || Deno.env.get('SITE_URL') || '').trim();
+      const baseUrl = (Deno.env.get('APP_URL') || Deno.env.get('SITE_URL') || '').trim().replace(/\/+$/, '');
       if (baseUrl && baseUrl.startsWith('http')) {
-        try {
-          const url = new URL(baseUrl);
-          url.pathname = '/patient-portal';
-          // Ensure no double slashes in the path
-          initializePayload.callback_url = url.toString().replace(/([^:])\/\//g, '$1/');
-        } catch (e) {
-          console.warn('[PaymentService] Failed to parse baseUrl for callback:', e);
-        }
+        // Fallback to base domain + portal path
+        initializePayload.callback_url = `${baseUrl}/patient-portal`;
       }
     }
 

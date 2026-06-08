@@ -177,9 +177,23 @@ const DoubleSlashFixer = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (pathname.includes('//')) {
-      const cleanPath = pathname.replace(/\/+/g, '/');
-      console.log(`[Router] Fixing double slash: ${pathname} -> ${cleanPath}`);
+    let cleanPath = pathname;
+    let needsRedirect = false;
+
+    // Fix double slashes
+    if (cleanPath.includes('//')) {
+      cleanPath = cleanPath.replace(/\/+/g, '/');
+      needsRedirect = true;
+    }
+
+    // Fix duplicate /patient-portal/patient-portal
+    if (cleanPath.includes('/patient-portal/patient-portal')) {
+      cleanPath = cleanPath.replace('/patient-portal/patient-portal', '/patient-portal');
+      needsRedirect = true;
+    }
+
+    if (needsRedirect) {
+      console.log(`[Router] Fixing malformed path: ${pathname} -> ${cleanPath}`);
       navigate(cleanPath + search, { replace: true });
     }
   }, [pathname, search, navigate]);
