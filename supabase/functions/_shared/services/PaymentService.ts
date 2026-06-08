@@ -68,18 +68,21 @@ export class PaymentService {
       metadata,
     };
 
-    const callbackUrlRaw = String(
-      Deno.env.get('PAYSTACK_CALLBACK_URL')
-      || Deno.env.get('APP_URL')
-      || Deno.env.get('SITE_URL')
-      || ''
-    ).trim();
-    
-    // Ensure the base URL doesn't end with a slash to avoid //patient-portal redirect issues
-    const callbackUrl = callbackUrlRaw.replace(/\/+$/, '');
-    
-    if (callbackUrl) {
-      initializePayload.callback_url = `${callbackUrl}/patient-portal`;
+    const explicitCallback = Deno.env.get('PAYSTACK_CALLBACK_URL');
+    if (explicitCallback && explicitCallback.trim().startsWith('http')) {
+      initializePayload.callback_url = explicitCallback.trim();
+    } else {
+      const baseUrl = (Deno.env.get('APP_URL') || Deno.env.get('SITE_URL') || '').trim();
+      if (baseUrl && baseUrl.startsWith('http')) {
+        try {
+          const url = new URL(baseUrl);
+          url.pathname = '/patient-portal';
+          // Ensure no double slashes in the path
+          initializePayload.callback_url = url.toString().replace(/([^:])\/\//g, '$1/');
+        } catch (e) {
+          console.warn('[PaymentService] Failed to parse baseUrl for callback:', e);
+        }
+      }
     }
 
     const initializeResponse = await fetch('https://api.paystack.co/transaction/initialize', {
@@ -202,7 +205,7 @@ export class PaymentService {
     const { error } = await this.supabase
       .from('payments')
       .update({
-        status: 'SUCCESS',
+        status: 'success',
         verified_at: new Date().toISOString(),
         metadata: {
           ...(existing?.metadata || {}),
@@ -222,6 +225,7 @@ export class PaymentService {
         .update({
           status: 'pending_approval',
           slot_locked_until: null,
+          updated_at: new Date().toISOString()
         })
         .eq('id', appointmentId)
         .in('status', [

@@ -2915,10 +2915,10 @@ const CentralAdmin = () => {
                                     </div>
                                   );
                                 })()}
-                                <div className="flex items-center justify-between gap-2">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                   {getAppointmentStatusBadge(apt.status)}
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-muted-foreground">{apt.id.slice(0, 8)}...</span>
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-xs text-muted-foreground break-words">{apt.id.slice(0, 8)}...</span>
                                     <Button
                                       size="icon"
                                       variant="ghost"
@@ -2991,10 +2991,10 @@ const CentralAdmin = () => {
                                     </div>
                                   );
                                 })()}
-                                <div className="flex items-center justify-between gap-2">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                   {getAppointmentStatusBadge(apt.status)}
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-muted-foreground">{apt.id.slice(0, 8)}...</span>
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-xs text-muted-foreground break-words">{apt.id.slice(0, 8)}...</span>
                                     <Button
                                       size="icon"
                                       variant="ghost"
