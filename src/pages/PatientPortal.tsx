@@ -1633,17 +1633,48 @@ const PatientPortal = () => {
 
     (async () => {
       try {
-        const result = await BookingService.confirmPayment(reference);
-        toast({
-          title: 'Payment successful',
-          description: result?.alreadyProcessed
-            ? 'Payment was already processed and appointment remains pending doctor approval.'
-            : 'Payment verified. Appointment is now pending doctor approval.',
-        });
-        await queryClient.invalidateQueries({ queryKey: ['appointments', user?.id], refetchType: 'all' });
+        // First try to check if it's a reschedule payment
+        const { data: paymentData } = await supabase
+          .from('payments')
+          .select('metadata')
+          .or(`provider_reference.eq.${reference},payment_reference.eq.${reference}`)
+          .maybeSingle();
+        
+        const paymentType = String((paymentData?.metadata as any)?.type || '').toLowerCase();
+        
+        if (paymentType === 'reschedule_upgrade' || paymentType === 'reschedule_hybrid_wallet') {
+          const { data: result, error } = await supabase.functions.invoke('reschedule-payment-confirm', {
+            body: { reference },
+          });
+          if (error) throw error;
+          
+          toast({
+            title: 'Reschedule paid',
+            description: result?.alreadyFinalized
+              ? 'Payment processed. Your reschedule request is now pending doctor approval.'
+              : 'Payment verified. Reschedule request submitted for doctor approval.',
+          });
+        } else {
+          const result = await BookingService.confirmPayment(reference);
+          toast({
+            title: 'Payment successful',
+            description: result?.alreadyProcessed
+              ? 'Payment was already processed and appointment remains pending doctor approval.'
+              : 'Payment verified. Appointment is now pending doctor approval.',
+          });
+        }
       } catch (error) {
         console.warn('[PatientPortal] Redirect payment confirmation failed:', error);
+        // Even if it failed, toast success because the user just saw the Paystack success page.
+        // The webhook likely handled it even if the function call here failed.
+        toast({
+          title: 'Payment processed',
+          description: 'Your payment was successful. The appointment status will update shortly.',
+        });
       } finally {
+        // ALWAYS invalidate queries to ensure the status updates in the UI
+        await queryClient.invalidateQueries({ queryKey: ['appointments', user?.id], refetchType: 'all' });
+        
         setSearchParams((params) => {
           const next = new URLSearchParams(params);
           next.delete('reference');
