@@ -1665,11 +1665,9 @@ const PatientPortal = () => {
         }
       } catch (error) {
         console.warn('[PatientPortal] Redirect payment confirmation failed:', error);
-        // Even if it failed, toast success because the user just saw the Paystack success page.
-        // The webhook likely handled it even if the function call here failed.
         toast({
-          title: 'Payment processed',
-          description: 'Your payment was successful. The appointment status will update shortly.',
+          title: 'Payment processing',
+          description: 'Your payment was received. We are verifying the appointment status and it may update shortly.',
         });
       } finally {
         // ALWAYS invalidate queries to ensure the status updates in the UI

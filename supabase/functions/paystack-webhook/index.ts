@@ -364,10 +364,16 @@ serve(async (req) => {
     }
 
     if (eventName === 'charge.success') {
-      const payment = await paymentService.getPaymentByReference(reference);
+      let payment;
+      try {
+        payment = await paymentService.getPaymentByReference(reference);
+      } catch (err) {
+        console.error(`[Paystack Webhook] Database error fetching payment ${reference}:`, err);
+        throw err;
+      }
+
       if (!payment) {
         console.error(`[Paystack Webhook] Payment record not found for reference: ${reference}`);
-        // Return 200 to Paystack to stop retries, but log the error
         return new Response(JSON.stringify({ error: 'Payment record not found' }), {
           status: 200, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -378,22 +384,50 @@ serve(async (req) => {
         .trim()
         .toLowerCase();
 
-      console.log(`[Paystack Webhook] Finalizing successful payment. Type: ${paymentType}`);
+      console.log(`[Paystack Webhook] Finalizing successful payment. Reference: ${reference}, Type: ${paymentType}`);
 
-      if (paymentType === 'reschedule_upgrade') {
-        const result = await finalizeReschedulePayment(serviceClient, reference, event?.data || {}, paymentService);
-        console.log('[Paystack Webhook] Reschedule finalize result:', result);
-        return new Response(JSON.stringify({ success: true, event: eventName, type: 'reschedule', ...result }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      } else {
-        const result = await bookingService.finalizeSuccessfulPayment(reference, event?.data || {});
-        console.log('[Paystack Webhook] Booking finalize result:', result);
-        return new Response(JSON.stringify({ success: true, event: eventName, ...result }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+      try {
+        if (paymentType === 'reschedule_upgrade' || paymentType === 'reschedule_hybrid_wallet') {
+          const result = await finalizeReschedulePayment(serviceClient, reference, event?.data || {}, paymentService);
+          console.log('[Paystack Webhook] Reschedule finalize success:', result);
+          return new Response(JSON.stringify({ success: true, event: eventName, type: 'reschedule', ...result }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        } else {
+          const result = await bookingService.finalizeSuccessfulPayment(reference, event?.data || {});
+          console.log('[Paystack Webhook] Booking finalize success:', result);
+          return new Response(JSON.stringify({ success: true, event: eventName, ...result }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      } catch (finalizeErr) {
+        console.error(`[Paystack Webhook] Finalization failed for ${reference}:`, finalizeErr);
+
+        try {
+          const fallbackPayment = await paymentService.getPaymentByReference(reference);
+          if (fallbackPayment?.appointment_id) {
+            const { data: fallbackAppointment } = await serviceClient
+              .from('appointments')
+              .select('status')
+              .eq('id', fallbackPayment.appointment_id)
+              .maybeSingle();
+
+            const status = String(fallbackAppointment?.status || '').trim().toLowerCase();
+            if (['pending_approval', 'confirmed', 'in_progress', 'completed'].includes(status)) {
+              console.warn(`[Paystack Webhook] Appointment already in final state after failed finalize: ${fallbackPayment.appointment_id}`);
+              return new Response(JSON.stringify({ success: true, event: eventName, alreadyProcessed: true }), {
+                status: 200,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+              });
+            }
+          }
+        } catch (fallbackErr) {
+          console.error('[Paystack Webhook] Fallback appointment status check failed:', fallbackErr);
+        }
+
+        throw finalizeErr;
       }
     }
 
