@@ -206,7 +206,7 @@ export class PaymentService {
     const { error } = await this.supabase
       .from('payments')
       .update({
-        status: 'success',
+        status: 'SUCCESS',
         verified_at: new Date().toISOString(),
         metadata: {
           ...(existing?.metadata || {}),

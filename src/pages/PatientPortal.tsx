@@ -500,6 +500,7 @@ const PatientPortal = () => {
     bloodType: '',
     preferredLanguage: language as AppLanguage,
   });
+  const profileNameInvalid = String(profileFormData.fullName || '').trim().toLowerCase() === 'user';
   const [passwordFormData, setPasswordFormData] = useState({
     newPassword: '',
     confirmPassword: '',
@@ -2414,6 +2415,17 @@ const PatientPortal = () => {
 
   const handleSaveProfile = async () => {
     if (!user?.id) return;
+    if (profileNameInvalid) {
+      toast({
+        title: t('patientPortal.toast.invalidProfileNameTitle', 'Invalid name'),
+        description: t(
+          'patientPortal.toast.invalidProfileNameDescription',
+          'Please use a real name instead of "User" before saving your profile.',
+        ),
+        variant: 'destructive',
+      });
+      return;
+    }
     setIsSavingProfile(true);
     
     try {
@@ -5308,6 +5320,14 @@ const PatientPortal = () => {
                             onChange={(e) => setProfileFormData({...profileFormData, fullName: e.target.value})}
                             className="mt-1" 
                           />
+                          {profileNameInvalid && (
+                            <p className="mt-2 text-sm text-destructive">
+                              {t(
+                                'patientPortal.validation.invalidFullName',
+                                'Please use a real name before saving. "User" is not allowed.',
+                              )}
+                            </p>
+                          )}
                         </div>
                         <div>
                           <label className="text-sm font-medium">{t('common.email', 'Email')}</label>
@@ -5389,7 +5409,7 @@ const PatientPortal = () => {
                         </div>
                       </div>
 
-                      <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                      <Button onClick={handleSaveProfile} disabled={isSavingProfile || profileNameInvalid}>
                         {isSavingProfile
                           ? t('patientPortal.actions.saving', 'Saving...')
                           : t('patientPortal.actions.saveChanges', 'Save Changes')}

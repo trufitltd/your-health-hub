@@ -152,6 +152,11 @@ export class BookingService {
     };
   }
 
+  private isDisallowedPatientName(name: string | null | undefined) {
+    const normalized = String(name || '').trim().toLowerCase();
+    return normalized === 'user';
+  }
+
   private async calculatePriceForDoctor(input: {
     doctorId: string;
     patientId?: string;
@@ -325,6 +330,10 @@ export class BookingService {
     const patient = await this.getPatientContext(input.patientId);
     const pricingFeatureFlags = await this.pricingService.getFeatureFlags();
     console.log('[BookingService] Context fetched', { doctorName: doctor.doctorName, patientName: patient.patientName });
+
+    if (this.isDisallowedPatientName(patient.patientName)) {
+      throw new Error('Invalid patient name. Please update your profile before booking.');
+    }
 
     const requestedDuration = pricingFeatureFlags.duration_pricing
       ? Math.max(5, Number(input.duration || DEFAULT_BOOKING_DURATION_MINUTES))
