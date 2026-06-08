@@ -381,7 +381,7 @@ export class BookingService {
       : input.paymentMethod === 'hybrid'
       ? 'hybrid'
       : 'paystack';
-    const lockUntil = new Date(Date.now() + (5 * 60 * 1000)).toISOString();
+    const lockUntil = new Date(Date.now() + (30 * 60 * 1000)).toISOString();
 
     const breakdown = {
       base: price.base,
