@@ -6,10 +6,22 @@ const NotFound = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // If the path contains double slashes, it's a malformed redirect.
-    // Automatically fix it and redirect to the clean path.
-    if (location.pathname.includes("//")) {
-      const cleanPath = location.pathname.replace(/\/+/g, "/");
+    let cleanPath = location.pathname;
+    let needsRedirect = false;
+
+    // Fix double slashes
+    if (cleanPath.includes("//")) {
+      cleanPath = cleanPath.replace(/\/+/g, "/");
+      needsRedirect = true;
+    }
+
+    // Fix duplicate /patient-portal/patient-portal
+    if (cleanPath.includes("/patient-portal/patient-portal")) {
+      cleanPath = cleanPath.replace("/patient-portal/patient-portal", "/patient-portal");
+      needsRedirect = true;
+    }
+
+    if (needsRedirect) {
       console.log(`[NotFound] Fixing malformed path: ${location.pathname} -> ${cleanPath}`);
       navigate(cleanPath + location.search, { replace: true });
       return;
