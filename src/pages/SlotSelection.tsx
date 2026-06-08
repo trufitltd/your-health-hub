@@ -80,6 +80,11 @@ const getMarketingSlotsLeft = (doctorKey: string): 1 | 2 | 3 => {
   return ((hash % 3) + 1) as 1 | 2 | 3;
 };
 
+const isDisallowedPatientName = (name?: string | null) => {
+  const normalized = String(name || '').trim().toLowerCase();
+  return normalized === 'user';
+};
+
 const calendarClassNames = {
   cell:
     "h-9 w-9 text-center text-sm p-0 relative first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20 [&:has([aria-selected].day-outside)]:bg-primary/10 [&:has([aria-selected])]:bg-primary/15",
@@ -98,6 +103,8 @@ export default function SlotSelection() {
   const { t } = useLanguage();
   const { formatDate: formatLocaleDate, formatClockTime, formatCurrency } = useLocaleFormatter();
   const { data: promotion } = useActivePatientPromotion();
+  const patientFullName = String(user?.user_metadata?.full_name || '').trim();
+  const patientNameInvalid = isDisallowedPatientName(patientFullName);
   const state = location.state as LocationState | null;
   const queryDoctorId = new URLSearchParams(location.search).get('doctor') || undefined;
   const selectedDoctorId = state?.doctorId || queryDoctorId;
@@ -604,6 +611,19 @@ export default function SlotSelection() {
       toast({
         title: t('slotSelection.toast.missingSelectionTitle', 'Missing selection'),
         description: t('slotSelection.toast.selectAppointmentDate', 'Please select an appointment date.')
+      });
+      return;
+    }
+
+    const patientFullName = String(user.user_metadata?.full_name || '').trim();
+    if (isDisallowedPatientName(patientFullName)) {
+      toast({
+        title: t('slotSelection.toast.invalidPatientNameTitle', 'Invalid profile name'),
+        description: t(
+          'slotSelection.toast.invalidPatientNameDescription',
+          'Please update your profile name before booking. "User" is not allowed.',
+        ),
+        variant: 'destructive',
       });
       return;
     }
@@ -1332,16 +1352,30 @@ export default function SlotSelection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.5 }}
-              className="flex gap-4 justify-end"
+              className="flex flex-col gap-4"
             >
-              <Button variant="outline" onClick={() => navigate(-1)}>
-                {t('common.cancel', 'Cancel')}
-              </Button>
-              <Button
-                onClick={handleConfirm}
-                disabled={!summaryReady || isConfirming}
-                className="gap-2"
-              >
+              {patientNameInvalid && (
+                <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="mt-0.5 h-4 w-4" />
+                    <div>
+                      {t(
+                        'slotSelection.patientNameWarning',
+                        'Your profile name is currently set to "User". Please update your profile before booking.',
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-4 justify-end">
+                <Button variant="outline" onClick={() => navigate(-1)}>
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+                <Button
+                  onClick={handleConfirm}
+                  disabled={!summaryReady || isConfirming || patientNameInvalid}
+                  className="gap-2"
+                >
                 {effectivePaymentMethod === 'promotion' 
                   ? <Gift className="w-4 h-4" /> 
                   : effectivePaymentMethod === 'wallet' 
