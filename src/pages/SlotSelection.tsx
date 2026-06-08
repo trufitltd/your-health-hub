@@ -1396,6 +1396,7 @@ export default function SlotSelection() {
                   {confirmButtonLabel}
                   <ChevronRight className="w-4 h-4" />
                 </Button>
+              </div>
             </motion.div>
           </div>
         </div>
