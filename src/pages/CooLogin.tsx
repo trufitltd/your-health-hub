@@ -72,7 +72,7 @@ export default function CooLogin() {
       >
         <div className="bg-card rounded-2xl shadow-lg p-8 border border-border">
           <div className="flex flex-col items-center mb-8">
-            <img src={logoImage} alt="MyE-Doctor Logo" className="h-16 w-auto mb-4" />
+            <img src={logoImage} alt="MyE-Doctor Logo" className="h-16 w-auto mb-4 shrink-0 object-contain" />
             <div className="flex flex-col items-center gap-1 mb-2">
               <div className="flex items-center gap-2">
                 <BriefcaseBusiness className="w-6 h-6 text-primary" />
