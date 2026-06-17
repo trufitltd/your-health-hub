@@ -3500,7 +3500,7 @@ ${ePrescription}
         <div className="container mx-auto px-2 sm:px-4">
           <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2 shrink-0">
-              <img src={logoImage} alt="MyE-Doctor Logo" className="h-8 md:h-10 w-auto shrink-0 object-contain" />
+              <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto shrink-0 object-contain" />
               <div className="flex flex-col">
                 <span className="text-xl font-bold leading-tight">
                   MyE-<span className="text-primary">Doctor</span>

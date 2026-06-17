@@ -37,7 +37,7 @@ const VerifyPrescription = () => {
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
-            <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto" />
+            <img src={logoImage} alt="MyE-Doctor Logo" className="h-10 w-auto shrink-0 object-contain" />
             <span className="text-lg font-bold">Prescription Verification</span>
           </Link>
           <Button asChild variant="outline" size="sm">
