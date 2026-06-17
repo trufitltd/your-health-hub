@@ -2428,10 +2428,10 @@ const CentralAdmin = () => {
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-6 md:py-8">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0 overflow-y-auto`}>
             <Card className="lg:sticky lg:top-24 rounded-lg">
-              <CardContent className="p-3 sm:p-4">
-                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+              <CardContent className="p-3 sm:p-4 flex flex-col max-h-[calc(100vh-80px)] lg:max-h-none overflow-y-auto">
+                <nav className="space-y-1">
                   {[
                     { id: 'overview', label: t('common.dashboard', 'Dashboard'), icon: BarChart3 },
                     { id: 'appointments', label: 'Appointments', icon: Clock, badge: unreadAppointmentCount > 0 ? (unreadAppointmentCount > 99 ? '99+' : unreadAppointmentCount) : undefined, badgeTone: 'danger' as const },

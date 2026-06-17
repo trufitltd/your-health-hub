@@ -43,7 +43,9 @@ export function Footer() {
           {/* Brand */}
           <div className="lg:col-span-2">
             <Link to="/" className="flex items-center gap-2 mb-4">
-              <img src={logoImage} alt={t('footer.logoAlt', 'MyE-Doctor Logo')} className="h-10 w-auto" />
+              <div className="bg-white p-2 rounded-lg flex items-center justify-center shadow-sm">
+                <img src={logoImage} alt={t('footer.logoAlt', 'MyE-Doctor Logo')} className="h-8 w-auto object-contain" />
+              </div>
               <span className="text-xl font-bold">
                 MyE-<span className="text-primary">Doctor</span>
               </span>
