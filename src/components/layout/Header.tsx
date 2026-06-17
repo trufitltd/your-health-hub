@@ -78,8 +78,8 @@ export function Header() {
       <div className="container mx-auto px-4">
         <nav className="flex items-center justify-between">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 group">
-            <img src={logoImage} alt={t('header.logoAlt', 'MyE-Doctor Logo')} className="h-10 w-auto" />
+          <Link to="/" className="flex items-center gap-2 group shrink-0">
+            <img src={logoImage} alt={t('header.logoAlt', 'MyE-Doctor Logo')} className="h-8 md:h-10 w-auto shrink-0 object-contain" />
             <div className="flex flex-col">
               <span className="text-xl font-bold text-foreground leading-tight">
                 MyE-<span className="text-primary">Doctor</span>

@@ -42,9 +42,9 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-12">
           {/* Brand */}
           <div className="lg:col-span-2">
-            <Link to="/" className="flex items-center gap-2 mb-4">
-              <div className="bg-white p-2 rounded-lg flex items-center justify-center shadow-sm">
-                <img src={logoImage} alt={t('footer.logoAlt', 'MyE-Doctor Logo')} className="h-8 w-auto object-contain" />
+            <Link to="/" className="flex items-center gap-2 mb-4 shrink-0">
+              <div className="bg-white p-1.5 md:p-2 rounded-lg flex items-center justify-center shadow-sm shrink-0">
+                <img src={logoImage} alt={t('footer.logoAlt', 'MyE-Doctor Logo')} className="h-6 md:h-8 w-auto shrink-0 object-contain" />
               </div>
               <span className="text-xl font-bold">
                 MyE-<span className="text-primary">Doctor</span>
