@@ -3543,9 +3543,9 @@ const PatientPortal = () => {
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-6 md:py-8">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 md:gap-8">
           {/* Sidebar */}
-          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0 overflow-y-auto`}>
             <Card className="lg:sticky lg:top-24 rounded-lg">
-              <CardContent className="p-3 sm:p-4">
+              <CardContent className="p-3 sm:p-4 flex flex-col max-h-[calc(100vh-80px)] lg:max-h-none overflow-y-auto">
                 {/* User Profile Section - Visible on mobile when sidebar is open */}
                 <div className="lg:hidden mb-4 pb-4 border-b border-border">
                   <div className="flex items-center gap-3">
@@ -3560,7 +3560,7 @@ const PatientPortal = () => {
                   </div>
                 </div>
 
-                <nav className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto lg:max-h-none">
+                <nav className="space-y-1">
                   {[
                     { id: 'overview', label: t('common.overview', 'Overview'), icon: Activity },
                     { id: 'appointments', label: t('common.appointments', 'Appointments'), icon: Calendar },

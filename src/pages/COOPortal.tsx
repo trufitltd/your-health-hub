@@ -791,9 +791,9 @@ export default function COOPortal() {
 
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0`}>
+          <aside className={`lg:col-span-1 ${sidebarOpen ? 'block' : 'hidden lg:block'} fixed lg:static inset-0 lg:inset-auto top-16 z-40 bg-background lg:bg-transparent p-2 lg:p-0 overflow-y-auto`}>
             <Card className="lg:sticky lg:top-24">
-              <CardContent className="p-3">
+              <CardContent className="p-3 flex flex-col max-h-[calc(100vh-80px)] lg:max-h-none overflow-y-auto">
                 <nav className="space-y-1">
                   {cooNavItems.map((item) => (
                     <button
