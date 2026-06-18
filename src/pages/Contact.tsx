@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { Layout } from '@/components/layout';
 import { Mail, Phone, Clock, Send, MessageSquare, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -79,11 +80,6 @@ export default function ContactPage() {
       ),
     },
   ];
-
-  // Scroll to top when page mounts
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -308,9 +304,11 @@ export default function ContactPage() {
                 <p className="text-muted-foreground mb-4">
                   {t('contact.faq.notFound', "Didn't find what you're looking for?")}
                 </p>
-                <Button variant="outline">
-                  {t('contact.faq.viewAll', 'View All FAQs')}
-                </Button>
+                <Link to="/faq">
+                  <Button variant="outline">
+                    {t('contact.faq.viewAll', 'View All FAQs')}
+                  </Button>
+                </Link>
               </div>
             </motion.div>
           </div>
