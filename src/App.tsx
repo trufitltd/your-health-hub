@@ -36,6 +36,7 @@ import HelpCenter from "./pages/HelpCenter";
 import FAQ from "./pages/FAQ";
 import AboutUs from "./pages/AboutUs";
 import Careers from "./pages/Careers";
+import AgentAuth from "./pages/AgentAuth";
 import NotFound from "./pages/NotFound";
 import CompleteRegistration from "./pages/CompleteRegistration";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -260,6 +261,7 @@ const App = () => (
               <Route path="/privacy" element={<PrivacyPolicy />} />
               <Route path="/about" element={<AboutUs />} />
               <Route path="/careers" element={<Careers />} />
+              <Route path="/careers/agent" element={<AgentAuth />} />
               <Route path="/for-doctors" element={<ForDoctors />} />
               <Route path="/help" element={<HelpCenter />} />
               <Route path="/faq" element={<FAQ />} />

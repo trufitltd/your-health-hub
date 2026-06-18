@@ -16,7 +16,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 
 type AuthMode = 'login' | 'register' | 'verify' | 'reset';
-type UserRole = 'patient' | 'doctor';
+type UserRole = 'patient' | 'doctor' | 'agent';
 type SignInRole = UserRole | 'healthlink';
 type CountryPhoneCode = { iso: string; name: string; dialCode: string };
 import { MIN_SPECIALIST_RATE_NGN } from '@/services/marketplaceTypes';
@@ -1307,25 +1307,32 @@ export default function AuthPage() {
       </div>
 
       {/* Right Panel - Benefits */}
-      <div className="hidden lg:flex flex-1 gradient-hero items-center justify-center p-12 relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 right-20 w-64 h-64 bg-primary-foreground rounded-full blur-3xl" />
-          <div className="absolute bottom-20 left-20 w-96 h-96 bg-primary-foreground rounded-full blur-3xl" />
-        </div>
+      <div className="hidden lg:flex flex-1 items-center justify-center p-12 relative overflow-hidden bg-gradient-to-br from-[#0d9d7e] via-[#0c8870] to-[#065f4a]">
+        {/* Decorative blobs */}
+        <div className="absolute top-0 right-0 w-80 h-80 rounded-full bg-white/5 -mr-32 -mt-32 pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-64 h-64 rounded-full bg-white/5 -ml-24 -mb-24 pointer-events-none" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-white/[0.03] pointer-events-none" />
 
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="relative z-10 max-w-md"
+          className="relative z-10 max-w-md w-full"
         >
-          <h2 className="text-3xl font-bold text-primary-foreground mb-6">
+          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 text-white/90 text-sm font-medium mb-6">
+            <Stethoscope className="w-4 h-4" />
             {mode === 'register' && role === 'patient'
               ? t('auth.rightPanel.completeRegistration', 'Complete Your Registration')
-              : t('auth.rightPanel.tagline', '-Your Doctor, Anytime, Anywhere')}
+              : 'MyE-Doctor Platform'}
+          </span>
+
+          <h2 className="text-3xl xl:text-4xl font-bold text-white mb-5 leading-tight">
+            {mode === 'register' && role === 'patient'
+              ? t('auth.rightPanel.taglineRegister', 'Your health journey\nstarts here.')
+              : t('auth.rightPanel.tagline', 'Your Doctor,\nAnytime, Anywhere.')}
           </h2>
-          <p className="text-primary-foreground/80 mb-8">
-            {mode === 'register' && role === 'patient' 
+          <p className="text-white/70 mb-10 leading-relaxed">
+            {mode === 'register' && role === 'patient'
               ? t('auth.rightPanel.completeRegistrationDescription', 'Fill in your details to create your patient profile and start accessing quality healthcare services.')
               : t('auth.rightPanel.generalDescription', 'Join MyEdoctor and experience healthcare reimagined. Connect with top specialists, manage appointments, and access your health records — all in one place.')}
           </p>
@@ -1339,13 +1346,35 @@ export default function AuthPage() {
                 transition={{ duration: 0.3, delay: 0.4 + index * 0.1 }}
                 className="flex items-center gap-3"
               >
-                <div className="w-6 h-6 rounded-full bg-primary-foreground/20 flex items-center justify-center">
-                  <Check className="w-4 h-4 text-primary-foreground" />
+                <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                  <Check className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-primary-foreground">{benefit}</span>
+                <span className="text-white/90 text-sm font-medium">{benefit}</span>
               </motion.li>
             ))}
           </ul>
+
+          {/* Bottom trust badge */}
+          <div className="mt-12 pt-6 border-t border-white/10 flex items-center gap-3">
+            <div className="flex -space-x-2">
+              {[
+                { initials: 'AK', bg: '#059669' },
+                { initials: 'FM', bg: '#0d9d7e' },
+                { initials: 'NB', bg: '#0891b2' },
+              ].map(({ initials, bg }) => (
+                <div
+                  key={initials}
+                  className="w-8 h-8 rounded-full border-2 border-white/30 flex items-center justify-center text-white text-[10px] font-bold"
+                  style={{ background: bg }}
+                >
+                  {initials}
+                </div>
+              ))}
+            </div>
+            <p className="text-sm text-white/70">
+              Trusted by <span className="text-white font-semibold">1,000+</span> patients
+            </p>
+          </div>
         </motion.div>
       </div>
     </div>
