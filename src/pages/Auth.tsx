@@ -268,7 +268,7 @@ export default function AuthPage() {
     { value: 'portuguese', label: t('auth.values.languages.portuguese', 'Portuguese') },
   ];
   const benefits = [
-    `${t('auth.benefits.specialistsAccessPrefix', 'Access to')} ${formatNumber(50)}+ ${t('auth.benefits.certifiedSpecialists', 'certified specialists')}`,
+    `${t('auth.benefits.specialistsAccessPrefix', 'Access to')} ${formatNumber(100)}+ ${t('auth.benefits.certifiedSpecialists', 'certified specialists')}`,
     t('auth.benefits.secureConsultations', 'Secure video & audio consultations'),
     t('auth.benefits.easyBooking', 'Easy appointment booking'),
     t('auth.benefits.digitalRecords', 'Digital prescriptions & records'),
