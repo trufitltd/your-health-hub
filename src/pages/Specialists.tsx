@@ -440,11 +440,6 @@ export default function SpecialistsPage() {
     t('specialists.days.sat', 'Sat'),
   ];
 
-  // Scroll to top when page mounts
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, []);
-
   const { data: canViewTestDoctor = false } = useQuery({
     queryKey: ['specialists-can-view-test-doctor', user?.id],
     queryFn: async () => {

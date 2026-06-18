@@ -29,9 +29,17 @@ import COOPortal from "./pages/COOPortal";
 import HealthLinkPortal from "./pages/HealthLinkPortal";
 import HealthLinkLogin from "./pages/HealthLinkLogin";
 import VerifyPrescription from "./pages/VerifyPrescription";
+import Blog from "./pages/Blog";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import ForDoctors from "./pages/ForDoctors";
+import HelpCenter from "./pages/HelpCenter";
+import FAQ from "./pages/FAQ";
+import AboutUs from "./pages/AboutUs";
+import Careers from "./pages/Careers";
 import NotFound from "./pages/NotFound";
 import CompleteRegistration from "./pages/CompleteRegistration";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import ScrollToTop from "@/components/ScrollToTop";
 
 const queryClient = new QueryClient();
 
@@ -209,6 +217,7 @@ const App = () => (
       <AuthProvider>
         <LanguageProvider>
           <BrowserRouter>
+            <ScrollToTop />
             <PwaManifestHandler />
             <NotificationPromptBanner />
             <DoubleSlashFixer />
@@ -247,6 +256,13 @@ const App = () => (
               <Route path="/specialists" element={<Specialists />} />
               <Route path="/booking/:doctorId?" element={<Booking />} />
               <Route path="/contact" element={<Contact />} />
+              <Route path="/blog" element={<Blog />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Route path="/about" element={<AboutUs />} />
+              <Route path="/careers" element={<Careers />} />
+              <Route path="/for-doctors" element={<ForDoctors />} />
+              <Route path="/help" element={<HelpCenter />} />
+              <Route path="/faq" element={<FAQ />} />
               <Route path="/install" element={<Install />} />
               <Route path="/consultation/:appointmentId" element={<Consultation />} />
               <Route path="/verify/:code" element={<VerifyPrescription />} />

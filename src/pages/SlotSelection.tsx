@@ -168,11 +168,6 @@ export default function SlotSelection() {
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
-  // Scroll to top when page loads
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, []);
-
   // Redirect if no doctor selected
   if (!selectedDoctorId) {
     return (
