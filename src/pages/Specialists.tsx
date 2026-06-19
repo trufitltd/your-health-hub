@@ -12,6 +12,13 @@ import { type AppLanguage, useLanguage } from '@/contexts/LanguageContext';
 import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 import { useAuth } from '@/hooks/useAuth';
 
+interface DoctorReview {
+  reviewer_name: string;
+  rating: number;
+  comment: string;
+  created_at: string;
+}
+
 interface DoctorCard {
   id: string;
   name: string;
@@ -22,6 +29,7 @@ interface DoctorCard {
   rating?: number | null;
   total_reviews?: number;
   registration?: Record<string, unknown> | null;
+  recent_reviews?: DoctorReview[];
 }
 
 const normalizeDoctorNameForVisibility = (value: string | null | undefined) =>
@@ -515,6 +523,44 @@ export default function SpecialistsPage() {
     return map;
   }, [schedules]);
 
+  const { data: reviewsByDoctor = new Map<string, DoctorReview[]>() } = useQuery({
+    queryKey: ['specialists-doctor-reviews', doctors.map((d) => d.id)],
+    enabled: doctors.length > 0,
+    queryFn: async () => {
+      const doctorIds = doctors.map((d) => d.id).filter(Boolean);
+      if (doctorIds.length === 0) return new Map<string, DoctorReview[]>();
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('doctor_id, patient_name, rating, review_comment, created_at')
+        .in('doctor_id', doctorIds)
+        .not('rating', 'is', null)
+        .not('review_comment', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(5000);
+      if (error) {
+        console.warn('[Specialists] Failed to fetch reviews:', error);
+        return new Map<string, DoctorReview[]>();
+      }
+      const map = new Map<string, DoctorReview[]>();
+      (data || []).forEach((row: any) => {
+        const doctorId = String(row.doctor_id || '').trim();
+        if (!doctorId) return;
+        const comment = String(row.review_comment || '').trim();
+        if (!comment) return;
+        const current = map.get(doctorId) || [];
+        if (current.length >= 3) return;
+        current.push({
+          reviewer_name: String(row.patient_name || '').trim() || 'Anonymous patient',
+          rating: Number(row.rating || 0),
+          comment,
+          created_at: String(row.created_at || ''),
+        });
+        map.set(doctorId, current);
+      });
+      return map;
+    },
+  });
+
   const specialties = useMemo(() => {
     const values = Array.from(
       new Set(
@@ -656,6 +702,7 @@ export default function SpecialistsPage() {
               const hasLongBio = (localizedBio || '').trim().length > 140;
               const marketingSlotsLeft = getMarketingSlotsLeft(doctor.id);
               const doctorDisplayName = formatDoctorName(doctor.name);
+              const doctorReviews = reviewsByDoctor.get(doctor.id) || [];
 
             return (
               <motion.div
@@ -721,6 +768,27 @@ export default function SpecialistsPage() {
                     <span className="text-muted-foreground">({reviews})</span>
                   </div>
                 </div>
+
+                {doctorReviews.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    {doctorReviews.map((review, i) => (
+                      <div key={i} className="rounded-lg border border-border bg-muted/30 p-3">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-xs font-semibold truncate">{review.reviewer_name}</p>
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            {[...Array(5)].map((_, s) => (
+                              <Star
+                                key={s}
+                                className={`w-3 h-3 ${s < Math.round(review.rating) ? 'text-warning fill-warning' : 'text-muted'}`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground line-clamp-2">{review.comment}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div className="flex items-center justify-center sm:justify-start gap-2 text-sm text-muted-foreground mb-4">
                   <Clock className="w-4 h-4" />
