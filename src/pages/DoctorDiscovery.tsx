@@ -239,6 +239,7 @@ export default function DoctorDiscovery() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+  const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
 
   const { data: canViewTestDoctor = false } = useQuery({
     queryKey: ['doctor-discovery-can-view-test-doctor', user?.id],
@@ -1414,19 +1415,41 @@ export default function DoctorDiscovery() {
                               </div>
                             )}
 
-                            {doctor.recent_reviews && doctor.recent_reviews.length > 0 && (
-                              <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
-                                <div className="flex items-center justify-between gap-2 mb-1">
-                                  <p className="text-xs font-semibold">{doctor.recent_reviews[0].reviewer_name}</p>
-                                  <div className="flex gap-1">
-                                    {renderStars(doctor.recent_reviews[0].rating, 5)}
-                                  </div>
+                            {doctor.recent_reviews && doctor.recent_reviews.length > 0 && (() => {
+                              const isExpanded = expandedReviews.has(doctor.user_id);
+                              const visibleReviews = isExpanded ? doctor.recent_reviews : doctor.recent_reviews.slice(0, 1);
+                              return (
+                                <div className="mb-4 space-y-2">
+                                  {visibleReviews.map((review, i) => (
+                                    <div key={i} className="rounded-lg border border-border bg-muted/30 p-3">
+                                      <div className="flex items-center justify-between gap-2 mb-1">
+                                        <p className="text-xs font-semibold truncate">{review.reviewer_name}</p>
+                                        <div className="flex gap-0.5 flex-shrink-0">
+                                          {renderStars(review.rating, 5)}
+                                        </div>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground line-clamp-2">{review.comment}</p>
+                                    </div>
+                                  ))}
+                                  {doctor.recent_reviews.length > 1 && (
+                                    <button
+                                      type="button"
+                                      className="text-[11px] font-medium text-primary hover:underline"
+                                      onClick={() => setExpandedReviews((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(doctor.user_id)) next.delete(doctor.user_id);
+                                        else next.add(doctor.user_id);
+                                        return next;
+                                      })}
+                                    >
+                                      {isExpanded
+                                        ? 'Show less'
+                                        : `Show ${doctor.recent_reviews.length - 1} more review${doctor.recent_reviews.length - 1 > 1 ? 's' : ''}`}
+                                    </button>
+                                  )}
                                 </div>
-                                <p className="text-xs text-muted-foreground line-clamp-2">
-                                  {doctor.recent_reviews[0].comment}
-                                </p>
-                              </div>
-                            )}
+                              );
+                            })()}
 
                             <div className="mb-4 p-3 rounded-lg bg-success/10 border border-success/20">
                               <p className="text-sm font-semibold text-success">
