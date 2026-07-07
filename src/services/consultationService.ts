@@ -125,6 +125,25 @@ class ConsultationService {
   }
 
   /**
+   * Mark a consultation session as active once the call is live.
+   */
+  async activateSession(sessionId: string): Promise<ConsultationSession> {
+    const { data, error } = await supabase
+      .from('consultation_sessions')
+      .update({ status: 'active' })
+      .eq('id', sessionId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[ConsultationService] Error activating consultation session:', error);
+      throw new Error(`Failed to activate consultation session: ${error.message}`);
+    }
+
+    return data as ConsultationSession;
+  }
+
+  /**
    * End a consultation session
    */
   async endSession(sessionId: string, durationSeconds: number, notes?: string): Promise<ConsultationSession> {
@@ -711,7 +730,7 @@ class ConsultationService {
     const { data, error } = await supabase
       .from('consultation_sessions')
       .select('*')
-      .eq('status', 'active')
+      .in('status', ['active', 'waiting'])
       .order('started_at', { ascending: false });
 
     if (error) {

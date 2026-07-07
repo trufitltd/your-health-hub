@@ -807,6 +807,11 @@ export function ConsultationRoom({
           if (participantRole === 'doctor') {
             setHasConsultationOccurred(true);
           }
+          if (sessionData?.id) {
+            consultationService.activateSession(sessionData.id).catch((err) => {
+              console.warn('[ConsultationRoom] Failed to mark consultation session active on connect:', err);
+            });
+          }
         });
 
         webrtc.onError((error) => {
@@ -867,8 +872,11 @@ export function ConsultationRoom({
           setIsCallStarted(true);
           try {
             await consultationService.markAppointmentInProgress(appointmentId);
+            if (sessionData?.id) {
+              await consultationService.activateSession(sessionData.id);
+            }
           } catch (statusError) {
-            console.warn('[ConsultationRoom] Failed to mark appointment in progress on admit:', statusError);
+            console.warn('[ConsultationRoom] Failed to mark appointment in progress or activate session on admit:', statusError);
           }
           // For patient, add local stream tracks if peer connection exists
           if (participantRole === 'patient') {
