@@ -2069,8 +2069,26 @@ const CentralAdmin = () => {
     setIsExporting('patients');
     try {
       const patientsRows = await fetchAllPatientsForExport();
-      downloadCsvFile(`patients_${getExportDateSuffix()}.csv`, patientsRows);
-      toast({ title: 'Download started', description: `Exported ${patientsRows.length} patients.` });
+      const completedRows = patientsRows.filter((row) => {
+        const value = (row as Record<string, unknown>).post_auth_prompt_completed;
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') return ['true', '1', 'yes', 'complete'].includes(value.trim().toLowerCase());
+        return false;
+      });
+
+      const exportRows = completedRows.map((row) => {
+        const record = row as Record<string, unknown>;
+        const location = [record.city, record.state].filter((value) => Boolean(value)).join(', ');
+        return {
+          name: record.full_name || '',
+          email: record.email || '',
+          phone: record.phone_number || '',
+          location,
+        };
+      });
+
+      downloadCsvFile(`completed_patients_${getExportDateSuffix()}.csv`, exportRows);
+      toast({ title: 'Download started', description: `Exported ${exportRows.length} completed patient registrations.` });
     } catch (error: any) {
       toast({ title: 'Export failed', description: error?.message || 'Could not export patients.', variant: 'destructive' });
     } finally {
@@ -3756,7 +3774,7 @@ const CentralAdmin = () => {
                         <Button variant={patientFilter === 'incomplete' ? 'default' : 'outline'} size="sm" onClick={() => setPatientFilter('incomplete')}>Incomplete</Button>
                         <Button variant="outline" size="sm" onClick={exportPatients} disabled={isExporting !== null}>
                           {isExporting === 'patients' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                          Download CSV
+                          Download Complete Patients
                         </Button>
                       </div>
                     </div>
