@@ -134,6 +134,48 @@ const isFailedPayment = (status: string | null | undefined) => {
   return ['failed', 'error', 'abandoned', 'cancelled'].includes(normalized);
 };
 
+const buildCsv = (rows: Array<Record<string, unknown>>) => {
+  if (rows.length === 0) return '';
+  const headers = Array.from(
+    rows.reduce((set, row) => {
+      Object.keys(row).forEach((key) => set.add(key));
+      return set;
+    }, new Set<string>()),
+  );
+
+  const escapeCsvValue = (value: unknown) => {
+    if (value === null || value === undefined) return '';
+    const text =
+      typeof value === 'string'
+        ? value
+        : typeof value === 'number' || typeof value === 'boolean'
+          ? String(value)
+          : JSON.stringify(value);
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const lines = [
+    headers.join(','),
+    ...rows.map((row) => headers.map((header) => escapeCsvValue(row[header])).join(',')),
+  ];
+  return lines.join('\n');
+};
+
+const downloadCsvFile = (filename: string, rows: Array<Record<string, unknown>>) => {
+  const csv = buildCsv(rows);
+  if (!csv) return;
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
 import { useRealtimeNotifications } from '@/hooks/useRealtimeNotifications';
 import { useAppointmentReminders } from '@/hooks/useAppointmentReminders';
 
@@ -178,6 +220,7 @@ export default function COOPortal() {
   const [activeDoctorEmailSearch, setActiveDoctorEmailSearch] = useState('');
   const [patientEmailSearch, setPatientEmailSearch] = useState('');
   const [patientFilter, setPatientFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
+  const [isExportingPatients, setIsExportingPatients] = useState(false);
   const [quickMessageTarget, setQuickMessageTarget] = useState<QuickMessageTarget | null>(null);
   const [quickMessageBody, setQuickMessageBody] = useState('');
   const [isSendingQuickMessage, setIsSendingQuickMessage] = useState(false);
@@ -196,6 +239,33 @@ export default function COOPortal() {
       urgent: true,
       intensity: notificationAlertIntensity,
     });
+  };
+
+  const exportCompletePatients = () => {
+    if (!patients.length) {
+      toast({ title: 'No data', description: 'No completed patient registrations found to export.' });
+      return;
+    }
+
+    setIsExportingPatients(true);
+    try {
+      const completedRows = patients
+        .filter((patient) => patient.registration_complete)
+        .map((patient) => ({
+          name: patient.full_name || '',
+          email: patient.email || '',
+          phone: patient.phone_number || '',
+          location: [patient.city, patient.state].filter(Boolean).join(', '),
+        }));
+
+      const filename = `completed_patients_${new Date().toISOString().slice(0, 10)}.csv`;
+      downloadCsvFile(filename, completedRows);
+      toast({ title: 'Download started', description: `Exported ${completedRows.length} completed patient registrations.` });
+    } catch (error: any) {
+      toast({ title: 'Export failed', description: error?.message || 'Could not export completed patients.', variant: 'destructive' });
+    } finally {
+      setIsExportingPatients(false);
+    }
   };
 
   const allowedEmails = useMemo(() => {
@@ -1704,8 +1774,16 @@ export default function COOPortal() {
           <TabsContent value="patients" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Patient Directory</CardTitle>
-                <CardDescription>Total patients: {patients.length}</CardDescription>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <CardTitle>Patient Directory</CardTitle>
+                    <CardDescription>Total patients: {patients.length}</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={exportCompletePatients} disabled={isExportingPatients}>
+                    <Download className="w-4 h-4 mr-2" />
+                    {isExportingPatients ? 'Preparing...' : 'Download Complete Patients'}
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="pb-2">
