@@ -1,7 +1,7 @@
 import { createContext } from 'react';
 import type { User } from '@supabase/supabase-js';
 
-export type AppRole = 'patient' | 'doctor' | 'admin' | 'coo' | 'healthlink';
+export type AppRole = 'patient' | 'doctor' | 'admin' | 'coo' | 'healthlink' | 'platform_superadmin' | 'organisation_admin';
 
 export interface AuthContextType {
   user: User | null;

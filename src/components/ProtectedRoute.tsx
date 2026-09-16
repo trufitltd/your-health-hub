@@ -13,16 +13,34 @@ interface ProtectedRouteProps {
 const isFilled = (value: string | null | undefined) => !!String(value || '').trim();
 const parseAppRole = (value: unknown): AppRole => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink') {
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink' || normalized === 'platform_superadmin' || normalized === 'organisation_admin') {
     return normalized;
   }
   return 'patient';
+};
+
+const getSuperAdminEmails = (): Set<string> => {
+  const raw = import.meta.env.VITE_SUPER_ADMIN_EMAILS || '';
+  return new Set(
+    raw.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+};
+
+const resolveRole = (user: User): AppRole => {
+  const emailRole = parseAppRole(user.user_metadata?.role);
+  const superAdminEmails = getSuperAdminEmails();
+  if (superAdminEmails.has((user.email || '').toLowerCase())) {
+    return 'platform_superadmin';
+  }
+  return emailRole;
 };
 const roleDefaultPath = (role: AppRole) => {
   if (role === 'doctor') return '/doctor-portal';
   if (role === 'admin') return '/admin';
   if (role === 'coo') return '/coo';
   if (role === 'healthlink') return '/healthlink';
+  if (role === 'platform_superadmin') return '/platform-admin';
+  if (role === 'organisation_admin') return '/admin';
   return '/patient-portal';
 };
 const isConnectivityIssue = (error: unknown) => {
@@ -83,7 +101,7 @@ export function ProtectedRoute({
           console.warn('ProtectedRoute patient registration check warning:', patientError);
         }
 
-        const effectiveRole: AppRole = role || parseAppRole(user.user_metadata?.role);
+        const effectiveRole: AppRole = role || resolveRole(user);
         const doctorConnectivityError = isConnectivityIssue(doctorError);
         const patientConnectivityError = isConnectivityIssue(patientError);
 
@@ -142,8 +160,7 @@ export function ProtectedRoute({
   }
 
   if (requiredRole) {
-    const roleFromMetadata = parseAppRole(user.user_metadata?.role);
-    const effectiveRole = (role || roleFromMetadata) as AppRole;
+    const effectiveRole = (role || resolveRole(user)) as AppRole;
     if (effectiveRole !== requiredRole) {
       return <Navigate to={roleDefaultPath(effectiveRole)} replace />;
     }

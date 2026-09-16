@@ -2,7 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const VAPID_PUBLIC_KEY = Deno.env.get('VITE_VAPID_PUBLIC_KEY') ?? '';
 const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? '';
-const VAPID_SUBJECT = 'mailto:myedoctoronline@gmail.com';
+const DEFAULT_VAPID_SUBJECT = 'mailto:myedoctoronline@gmail.com';
 
 // --- Minimal VAPID / Web Push implementation using Web Crypto ---
 
@@ -20,10 +20,10 @@ function uint8ArrayToBase64url(arr: Uint8Array): string {
     .replace(/=+$/, '');
 }
 
-async function buildVapidJwt(audience: string): Promise<string> {
+async function buildVapidJwt(audience: string, vapidSubject: string): Promise<string> {
   const header = { typ: 'JWT', alg: 'ES256' };
   const now = Math.floor(Date.now() / 1000);
-  const payload = { aud: audience, exp: now + 12 * 3600, sub: VAPID_SUBJECT };
+  const payload = { aud: audience, exp: now + 12 * 3600, sub: vapidSubject };
 
   const encode = (obj: object) =>
     uint8ArrayToBase64url(new TextEncoder().encode(JSON.stringify(obj)));
@@ -53,11 +53,12 @@ async function sendPush(
   endpoint: string,
   p256dh: string,
   authKey: string,
-  payload: string
+  payload: string,
+  vapidSubject: string,
 ): Promise<{ ok: boolean; status: number }> {
   const url = new URL(endpoint);
   const audience = `${url.protocol}//${url.host}`;
-  const jwt = await buildVapidJwt(audience);
+  const jwt = await buildVapidJwt(audience, vapidSubject);
 
   // Encrypt payload using Web Push encryption (RFC 8291 / aes128gcm)
   // For simplicity we send an unencrypted payload with Content-Encoding: text/plain
@@ -189,17 +190,30 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { user_id, title, body, url } = await req.json() as {
+    const { user_id, title, body, url, organisationId } = await req.json() as {
       user_id?: string;
       title: string;
       body?: string;
       url?: string;
+      organisationId?: string;
     };
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
+
+    // Resolve VAPID subject from organisation config
+    let vapidSubject = DEFAULT_VAPID_SUBJECT;
+    if (organisationId) {
+      const { data: configRow } = await supabase
+        .from('organisation_config')
+        .select('config_value')
+        .eq('organisation_id', organisationId)
+        .eq('config_key', 'vapid_subject')
+        .maybeSingle();
+      if (configRow?.config_value) vapidSubject = configRow.config_value;
+    }
 
     const query = supabase.from('push_subscriptions').select('endpoint, p256dh, auth_key');
     if (user_id) query.eq('user_id', user_id);
@@ -213,7 +227,7 @@ Deno.serve(async (req) => {
     const payload = JSON.stringify({ title, body: body ?? '', url: url ?? '/' });
     const results = await Promise.allSettled(
       subs.map((s: { endpoint: string; p256dh: string; auth_key: string }) =>
-        sendPush(s.endpoint, s.p256dh, s.auth_key, payload)
+        sendPush(s.endpoint, s.p256dh, s.auth_key, payload, vapidSubject)
       )
     );
 

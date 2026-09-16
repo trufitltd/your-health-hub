@@ -47,6 +47,7 @@ import { PricingManagementPanel } from '@/components/admin/PricingManagementPane
 import { PaymentsManagementPanel } from '@/components/admin/PaymentsManagementPanel';
 import { ConsultationMonitor } from '@/components/admin/ConsultationMonitor';
 import AdminPatientWalletPanel from '@/components/admin/AdminPatientWalletPanel';
+import { AdminAssignmentDashboard } from '@/components/admin/AdminAssignmentDashboard';
 import { normalizeAppointmentStatus } from '@/services/marketplaceTypes';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useLocaleFormatter } from '@/lib/locale';
@@ -2465,6 +2466,7 @@ const CentralAdmin = () => {
                     { id: 'payments', label: 'Payments', icon: BadgeIcon },
                     { id: 'patient-wallets', label: 'Patient Wallets', icon: Wallet },
                     { id: 'pricing', label: 'Pricing', icon: TrendingUp },
+                    { id: 'assignments', label: 'Assignments', icon: BadgeIcon },
                     { id: 'settings', label: t('common.settings', 'Settings'), icon: Settings },
                   ].map((item) => (
                     <button
@@ -4154,6 +4156,10 @@ const CentralAdmin = () => {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              <TabsContent value="assignments" className="space-y-6">
+                <AdminAssignmentDashboard userRole={profile.role || 'admin'} userId={user.id} />
               </TabsContent>
 
               <TabsContent value="settings" className="space-y-6">

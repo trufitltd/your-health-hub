@@ -5,6 +5,7 @@ import { AvailabilityService } from '../_shared/services/AvailabilityService.ts'
 import { PaymentService } from '../_shared/services/PaymentService.ts';
 import { WalletService } from '../_shared/services/WalletService.ts';
 import { BookingService } from '../_shared/services/BookingService.ts';
+import { resolveWebhookProvider } from '../_shared/services/PaymentProviderResolver.ts';
 import { DEFAULT_BOOKING_DURATION_MINUTES } from '../_shared/marketplace-types.ts';
 
 const corsHeaders = {
@@ -329,27 +330,22 @@ serve(async (req) => {
     const signature = req.headers.get('x-paystack-signature');
 
     const serviceClient = createClient(supabaseUrl, serviceRoleKey);
-    const pricingService = new PricingService(serviceClient);
-    const availabilityService = new AvailabilityService(serviceClient);
     const paymentService = new PaymentService(serviceClient);
-    const walletService = new WalletService(serviceClient);
-    const bookingService = new BookingService(
-      serviceClient,
-      pricingService,
-      availabilityService,
-      paymentService,
-      walletService,
-    );
+    const availabilityService = new AvailabilityService(serviceClient);
 
-    const signatureValid = await paymentService.verifyWebhookSignature(rawBody, signature);
-    if (!signatureValid) {
-      return new Response(JSON.stringify({ error: 'Invalid webhook signature' }), {
-        status: 401,
+    // ── Step 1: Parse event to extract reference ──
+    // We must parse before verification because we need the reference
+    // to resolve which org's Paystack secret to verify against.
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(rawBody || '{}');
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON payload' }), {
+        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const event = JSON.parse(rawBody || '{}');
     const eventName = String(event?.event || '');
     const reference = String(event?.data?.reference || '');
 
@@ -363,6 +359,67 @@ serve(async (req) => {
       });
     }
 
+    // ── Step 2: Resolve organisation from payment BEFORE signature verification ──
+    // Each org has its own Paystack account with its own signing secret.
+    // We must identify the org to know which secret to verify against.
+    //
+    // CRITICAL: If the payment reference cannot be resolved to any known payment/appointment,
+    // we must NOT fall back to MyE credentials. An unknown reference does NOT establish
+    // MyE ownership. We reject the event to prevent cross-tenant processing.
+    let orgId: string | null = null;
+    let paymentFound = false;
+    try {
+      const payment = await paymentService.getPaymentByReference(reference);
+      if (payment?.appointment_id) {
+        paymentFound = true;
+        const { data: appointmentForOrg } = await serviceClient
+          .from('appointments')
+          .select('organisation_id')
+          .eq('id', payment.appointment_id)
+          .maybeSingle();
+        orgId = appointmentForOrg?.organisation_id || null;
+      }
+    } catch (err) {
+      // Database error — log but do NOT fall back to MyE.
+      // We cannot safely establish ownership from a broken lookup.
+      console.error(`[Paystack Webhook] Database error resolving org for reference ${reference}:`, err);
+      return new Response(JSON.stringify({
+        error: 'Unable to resolve payment reference',
+        reference,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // If the reference is completely unknown (no payment record found),
+    // do NOT fall back to MyE credentials. Return 200 per Paystack best practice
+    // (avoid retries for events we cannot process), but do NOT process any state changes.
+    if (!paymentFound) {
+      console.warn(`[Paystack Webhook] Unknown payment reference: ${reference}. No payment record found. Ignoring event safely.`);
+      return new Response(JSON.stringify({
+        success: true,
+        event: eventName,
+        ignored: true,
+        reason: 'unknown_payment_reference',
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ── Step 3: Verify signature with org-specific secret ──
+    const orgProvider = await resolveWebhookProvider(serviceClient, orgId);
+    const signatureValid = await paymentService.verifyWebhookSignature(rawBody, signature, orgProvider.secretKey);
+    if (!signatureValid) {
+      console.error(`[Paystack Webhook] Invalid signature for reference ${reference} (org: ${orgId || 'global'})`);
+      return new Response(JSON.stringify({ error: 'Invalid webhook signature' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ── Step 4: Process event (signature verified, org resolved) ──
     if (eventName === 'charge.success') {
       let payment;
       try {
@@ -375,16 +432,29 @@ serve(async (req) => {
       if (!payment) {
         console.error(`[Paystack Webhook] Payment record not found for reference: ${reference}`);
         return new Response(JSON.stringify({ error: 'Payment record not found' }), {
-          status: 200, 
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
+
+      // Create org-scoped services for this webhook processing
+      const orgPricingService = new PricingService(serviceClient, orgId);
+      const orgWalletService = new WalletService(serviceClient, orgId);
+      const bookingService = new BookingService(
+        serviceClient,
+        orgPricingService,
+        availabilityService,
+        paymentService,
+        orgWalletService,
+        undefined, // promotionService
+        orgId,
+      );
 
       const paymentType = String((payment?.metadata as Record<string, unknown> | undefined)?.type || '')
         .trim()
         .toLowerCase();
 
-      console.log(`[Paystack Webhook] Finalizing successful payment. Reference: ${reference}, Type: ${paymentType}`);
+      console.log(`[Paystack Webhook] Finalizing successful payment. Reference: ${reference}, Type: ${paymentType}, Org: ${orgId || 'global'}`);
 
       try {
         if (paymentType === 'reschedule_upgrade' || paymentType === 'reschedule_hybrid_wallet') {
@@ -437,10 +507,23 @@ serve(async (req) => {
         .trim()
         .toLowerCase();
 
+      // orgId already resolved above — reuse it
+      const failedPricingService = new PricingService(serviceClient, orgId);
+      const failedWalletService = new WalletService(serviceClient, orgId);
+      const failedBookingService = new BookingService(
+        serviceClient,
+        failedPricingService,
+        availabilityService,
+        paymentService,
+        failedWalletService,
+        undefined,
+        orgId,
+      );
+
       if (paymentType === 'reschedule_upgrade') {
         await failReschedulePayment(serviceClient, reference, 'Paystack charge.failed webhook', paymentService);
       } else {
-        await bookingService.failPayment(reference, 'Paystack charge.failed webhook');
+        await failedBookingService.failPayment(reference, 'Paystack charge.failed webhook');
       }
 
       return new Response(JSON.stringify({ success: true, event: eventName, marked: 'failed' }), {

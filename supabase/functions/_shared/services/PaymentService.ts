@@ -1,16 +1,37 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import type { PaymentIntentResult, PaystackVerifyResult } from '../marketplace-types.ts';
+import { resolvePaymentProvider, type ResolvedPaymentProvider } from './PaymentProviderResolver.ts';
 
 const hex = (buffer: ArrayBuffer) =>
   Array.from(new Uint8Array(buffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
 
 export class PaymentService {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(
+    private readonly supabase: SupabaseClient,
+    private readonly organisationId?: string | null,
+  ) {}
 
-  private getPaystackSecretKey() {
-    const value = Deno.env.get('PAYSTACK_SECRET_KEY');
-    if (!value) throw new Error('PAYSTACK_SECRET_KEY is not configured');
-    return value;
+  /**
+   * Resolve the Paystack secret key for the current organisation context.
+   * If organisationId is set, looks up org-specific config first.
+   * Falls back to global PAYSTACK_SECRET_KEY env var (MyE-Doctor backward compat).
+   */
+  private async getPaystackSecretKey(): Promise<string> {
+    const provider = await resolvePaymentProvider(this.supabase, this.organisationId);
+    if (!provider.secretKey) {
+      throw new Error(
+        `Paystack secret key is not configured${this.organisationId ? ` for organisation ${this.organisationId}` : ''}`,
+      );
+    }
+    return provider.secretKey;
+  }
+
+  /**
+   * Resolve the full payment provider configuration (including secrets).
+   * Use this when you need the complete provider context.
+   */
+  async resolveProvider(): Promise<ResolvedPaymentProvider> {
+    return resolvePaymentProvider(this.supabase, this.organisationId);
   }
 
   async createPaymentIntent(input: {
@@ -59,7 +80,8 @@ export class PaymentService {
       throw new Error(`Failed to persist payment reference on appointment: ${appointmentError.message}`);
     }
 
-    const secretKey = this.getPaystackSecretKey();
+    const provider = await this.resolveProvider();
+    const secretKey = provider.secretKey;
     const initializePayload: Record<string, unknown> = {
       email: input.email,
       amount: amountInKobo,
@@ -68,21 +90,23 @@ export class PaymentService {
       metadata,
     };
 
-    const explicitCallback = Deno.env.get('PAYSTACK_CALLBACK_URL');
-    if (explicitCallback && explicitCallback.trim().startsWith('http')) {
-      const trimmedCallback = explicitCallback.trim().replace(/\/+$/, '');
-      // If the secret already includes /patient-portal, use it as is.
-      // Otherwise, append it.
-      if (trimmedCallback.endsWith('/patient-portal')) {
-        initializePayload.callback_url = trimmedCallback;
-      } else {
-        initializePayload.callback_url = `${trimmedCallback}/patient-portal`;
-      }
+    // Use org-specific callback URL if configured, otherwise fall back to global env var
+    if (provider.callbackUrl) {
+      initializePayload.callback_url = provider.callbackUrl.endsWith('/patient-portal')
+        ? provider.callbackUrl
+        : `${provider.callbackUrl}/patient-portal`;
     } else {
-      const baseUrl = (Deno.env.get('APP_URL') || Deno.env.get('SITE_URL') || '').trim().replace(/\/+$/, '');
-      if (baseUrl && baseUrl.startsWith('http')) {
-        // Fallback to base domain + portal path
-        initializePayload.callback_url = `${baseUrl}/patient-portal`;
+      const explicitCallback = Deno.env.get('PAYSTACK_CALLBACK_URL');
+      if (explicitCallback && explicitCallback.trim().startsWith('http')) {
+        const trimmedCallback = explicitCallback.trim().replace(/\/+$/, '');
+        initializePayload.callback_url = trimmedCallback.endsWith('/patient-portal')
+          ? trimmedCallback
+          : `${trimmedCallback}/patient-portal`;
+      } else {
+        const baseUrl = (Deno.env.get('APP_URL') || Deno.env.get('SITE_URL') || '').trim().replace(/\/+$/, '');
+        if (baseUrl && baseUrl.startsWith('http')) {
+          initializePayload.callback_url = `${baseUrl}/patient-portal`;
+        }
       }
     }
 
@@ -143,7 +167,7 @@ export class PaymentService {
   }
 
   async verifyPayment(reference: string): Promise<PaystackVerifyResult> {
-    const secretKey = this.getPaystackSecretKey();
+    const secretKey = await this.getPaystackSecretKey();
     const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
       method: 'GET',
       headers: {
@@ -170,9 +194,9 @@ export class PaymentService {
     };
   }
 
-  async verifyWebhookSignature(rawBody: string, signature: string | null): Promise<boolean> {
+  async verifyWebhookSignature(rawBody: string, signature: string | null, webhookSecretOverride?: string): Promise<boolean> {
     if (!signature) return false;
-    const secretKey = this.getPaystackSecretKey();
+    const secretKey = webhookSecretOverride || await this.getPaystackSecretKey();
 
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -217,14 +241,25 @@ export class PaymentService {
 
     if (error) throw new Error(`Failed to mark payment success: ${error.message}`);
 
-    // Keep appointment state in sync with successful payment in case webhook/client
-    // confirmation path misses explicit appointment promotion.
+    // ── #3: Keep appointment state in sync with successful payment ──
+    // For internal-assignment appointments (no doctor_id, has service_type),
+    // move to pending_assignment so ClinicianAssignmentService can assign.
+    // For standard appointments, move to pending_approval.
     const appointmentId = existing?.appointment_id ? String(existing.appointment_id) : '';
     if (appointmentId) {
-      const { error: appointmentUpdateError } = await this.supabase
+      const { data: appointment } = await this.supabase
+        .from('appointments')
+        .select('doctor_id, service_type')
+        .eq('id', appointmentId)
+        .maybeSingle();
+
+      const isInternalAssignment = appointment && !appointment.doctor_id && !!appointment.service_type;
+      const targetStatus = isInternalAssignment ? 'pending_assignment' : 'pending_approval';
+
+      const { error: appointmentUpdateError, count } = await this.supabase
         .from('appointments')
         .update({
-          status: 'pending_approval',
+          status: targetStatus,
           slot_locked_until: null,
           updated_at: new Date().toISOString()
         })
@@ -237,10 +272,52 @@ export class PaymentService {
           'payment processing',
           'payment-processing',
           'pending',
-        ]);
+        ])
+        .select('id');
 
       if (appointmentUpdateError) {
         throw new Error(`Failed to sync appointment status after payment success: ${appointmentUpdateError.message}`);
+      }
+
+      // #6/#13: Payment after reservation expiry (late payment)
+      // If the update matched 0 rows, the appointment was likely cleaned up
+      // (status changed to 'cancelled' by expired lock cleanup). The payment
+      // succeeded but the slot reservation expired.
+      //
+      // Recovery path:
+      // 1. Move to pending_assignment with late_payment metadata
+      // 2. ClinicianAssignmentService attempts assignment
+      // 3. If capacity available: normal flow (appointment gets clinician)
+      // 4. If capacity unavailable: assignment fails, retry mechanism keeps
+      //    trying. Manual/admin intervention required to resolve.
+      // 5. The appointment has a paid_scheduling_exception flag in metadata
+      //    for operational visibility.
+      if (count === 0 && isInternalAssignment) {
+        const { data: currentAppt } = await this.supabase
+          .from('appointments')
+          .select('status, metadata')
+          .eq('id', appointmentId)
+          .maybeSingle();
+
+        if (currentAppt && currentAppt.status === 'cancelled') {
+          const existingMetadata = (currentAppt.metadata || {}) as Record<string, unknown>;
+          await this.supabase
+            .from('appointments')
+            .update({
+              status: 'pending_assignment',
+              slot_locked_until: null,
+              updated_at: new Date().toISOString(),
+              metadata: {
+                ...existingMetadata,
+                late_payment_recovery: true,
+                late_payment_detected_at: new Date().toISOString(),
+                original_slot_expired: true,
+                paid_scheduling_exception: true,
+              },
+            })
+            .eq('id', appointmentId)
+            .eq('status', 'cancelled');
+        }
       }
     }
   }

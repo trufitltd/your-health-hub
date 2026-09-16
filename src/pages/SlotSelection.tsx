@@ -42,6 +42,15 @@ interface LocationState {
   specialty?: string;
   profilePicture?: string;
   consultationLanguage?: string;
+  // Internal assignment fields
+  organisationId?: string;
+  serviceType?: string;
+  serviceName?: string;
+  serviceDescription?: string;
+  defaultDuration?: number;
+  consultationMode?: string;
+  basePrice?: number;
+  currency?: string;
 }
 
 type BookedAppointmentRow = AppointmentIntervalRow & {
@@ -108,6 +117,7 @@ export default function SlotSelection() {
   const state = location.state as LocationState | null;
   const queryDoctorId = new URLSearchParams(location.search).get('doctor') || undefined;
   const selectedDoctorId = state?.doctorId || queryDoctorId;
+  const isInternalAssignment = !selectedDoctorId && !!state?.serviceType;
 
   const { data: doctorInfo } = useQuery({
     queryKey: ['slot-selection-doctor-info', selectedDoctorId],
@@ -178,8 +188,10 @@ export default function SlotSelection() {
               <div className="text-center">
                 <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
                 <p className="text-muted-foreground mb-4">{t('slotSelection.noDoctorSelected', 'No doctor selected')}</p>
-                <Button onClick={() => navigate('/doctor-discovery')}>
-                  {t('slotSelection.backToDoctorDiscovery', 'Back to Doctor Discovery')}
+                <Button onClick={() => navigate(isInternalAssignment ? `/service-discovery?organisationId=${state?.organisationId}` : '/doctor-discovery')}>
+                  {isInternalAssignment
+                    ? t('slotSelection.backToServiceSelection', 'Back to Service Selection')
+                    : t('slotSelection.backToDoctorDiscovery', 'Back to Doctor Discovery')}
                 </Button>
               </div>
             </CardContent>
@@ -674,7 +686,9 @@ export default function SlotSelection() {
 
     try {
       const booking = await BookingService.initiateBooking({
-        doctorId: selectedDoctorId,
+        doctorId: selectedDoctorId || undefined,
+        serviceType: isInternalAssignment ? state?.serviceType : undefined,
+        organisationId: isInternalAssignment ? state?.organisationId : undefined,
         preferredDate: selectedDate,
         preferredTime: selectedTime || undefined,
         duration: selectedDuration,
@@ -696,17 +710,19 @@ export default function SlotSelection() {
       if (effectivePaymentMethod === 'promotion' || booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
         paystackFlowActiveRef.current = false;
         setIsConfirming(false);
-        toast({
-          title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
-          description: effectivePaymentMethod === 'promotion' 
+        const successMessage = booking.pendingAssignment
+          ? 'Your booking has been submitted. A clinician will be assigned shortly.'
+          : effectivePaymentMethod === 'promotion' 
             ? t('slotSelection.toast.promotionBookingSuccessDescription', 'Your free promotional consultation has been booked and is now pending doctor approval.')
             : walletChargedAmount > 0
             ? `Wallet charged ${formatCurrency(walletChargedAmount, displayedCurrency)}. Your booking is now pending doctor approval.`
-
             : t(
               'slotSelection.toast.walletBookingSuccessDescription',
               'Your booking has been paid from wallet and is now pending doctor approval.',
-            ),
+            );
+        toast({
+          title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
+          description: successMessage,
         });
         setTimeout(() => {
           navigate('/patient-portal?tab=appointments');

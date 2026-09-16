@@ -2,14 +2,23 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDoctorType, roundMoney } from '../marketplace-types.ts';
 
 export class WalletService {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(
+    private readonly supabase: SupabaseClient,
+    private readonly organisationId?: string | null,
+  ) {}
 
   private async ensureWallet(doctorId: string, currency = 'NGN') {
-    const { data: existing, error } = await this.supabase
+    let query = this.supabase
       .from('doctor_wallet')
       .select('*')
       .eq('doctor_id', doctorId)
       .maybeSingle();
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data: existing, error } = await query;
 
     if (error) throw new Error(`Failed to load doctor wallet: ${error.message}`);
 
@@ -62,7 +71,7 @@ export class WalletService {
   }
 
   private async getPlatformFeeRule(doctorType: 'GP' | 'Specialist') {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('platform_fee_rules')
       .select('*')
       .eq('doctor_type', doctorType)
@@ -70,6 +79,12 @@ export class WalletService {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw new Error(`Failed loading platform fee rules: ${error.message}`);
     return data;

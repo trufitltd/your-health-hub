@@ -75,15 +75,28 @@ serve(async (req) => {
       });
     }
 
-    const pricingService = new PricingService(serviceClient);
-    const availabilityService = new AvailabilityService(serviceClient);
-    const walletService = new WalletService(serviceClient);
+    // Resolve organisation from the appointment's doctor
+    let organisationId: string | null = null;
+    if (payment.appointment_id) {
+      const { data: apt } = await serviceClient
+        .from('appointments')
+        .select('organisation_id')
+        .eq('id', payment.appointment_id)
+        .maybeSingle();
+      organisationId = apt?.organisation_id || null;
+    }
+
+    const pricingService = new PricingService(serviceClient, organisationId);
+    const availabilityService = new AvailabilityService(serviceClient, organisationId);
+    const walletService = new WalletService(serviceClient, organisationId);
     const bookingService = new BookingService(
       serviceClient,
       pricingService,
       availabilityService,
       paymentService,
       walletService,
+      undefined as any,
+      organisationId,
     );
 
     const result = await bookingService.finalizeSuccessfulPayment(reference, {
