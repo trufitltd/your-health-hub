@@ -43,6 +43,13 @@ export class PaymentService {
     currency?: string;
     metadata?: Record<string, unknown>;
   }): Promise<PaymentIntentResult> {
+    const email = String(input.email || '').trim();
+    if (!email) {
+      throw new Error(
+        'PATIENT_EMAIL_REQUIRED: Cannot initialize Paystack payment without a valid patient email.',
+      );
+    }
+
     const reference = `APT-${Date.now()}-${input.appointmentId.slice(0, 8)}`;
     const amount = Number(input.amount || 0);
     const amountInKobo = Math.round(amount * 100);
@@ -82,6 +89,18 @@ export class PaymentService {
 
     const provider = await this.resolveProvider();
     const secretKey = provider.secretKey;
+
+    // Safe diagnostic logging (no secrets or tokens)
+    console.log('[PaymentService] createPaymentIntent', {
+      appointmentId: input.appointmentId,
+      organisationId: provider.organisationId,
+      hasEmail: email.length > 0,
+      patientId: input.patientId,
+      providerType: provider.provider,
+      isGlobal: provider.isGlobal,
+      bookingPath: input.doctorId ? 'doctor_select' : 'internal_assignment',
+    });
+
     const initializePayload: Record<string, unknown> = {
       email: input.email,
       amount: amountInKobo,

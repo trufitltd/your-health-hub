@@ -38,14 +38,28 @@ const extractFunctionErrorMessage = async (error: unknown): Promise<string> => {
   return fallback;
 };
 
+const getAuthHeaders = async (): Promise<Record<string, string> | undefined> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    return { Authorization: `Bearer ${session.access_token}` };
+  }
+
+  // Fallback: force a fresh session fetch from Supabase (handles expired refresh tokens)
+  const { data: { session: freshSession } } = await supabase.auth.getSession();
+  if (freshSession?.access_token) {
+    return { Authorization: `Bearer ${freshSession.access_token}` };
+  }
+
+  return undefined;
+};
+
 export const BookingService = {
   async initiateBooking(input: BookingInitiateRequest): Promise<BookingInitiateResponse> {
-    const { data: { session } } = await supabase.auth.getSession();
+    const authHeaders = await getAuthHeaders();
+
     const { data, error } = await supabase.functions.invoke('booking-initiate', {
       body: input,
-      headers: session?.access_token ? {
-        Authorization: `Bearer ${session.access_token}`,
-      } : undefined,
+      headers: authHeaders,
     });
 
     if (error) {
@@ -58,12 +72,11 @@ export const BookingService = {
   },
 
   async confirmPayment(reference: string): Promise<{ appointmentId?: string; alreadyProcessed?: boolean }> {
-    const { data: { session } } = await supabase.auth.getSession();
+    const authHeaders = await getAuthHeaders();
+
     const { data, error } = await supabase.functions.invoke('booking-payment-confirm', {
       body: { reference },
-      headers: session?.access_token ? {
-        Authorization: `Bearer ${session.access_token}`,
-      } : undefined,
+      headers: authHeaders,
     });
 
     if (error) {

@@ -246,27 +246,13 @@ export default function DoctorDiscovery() {
     queryFn: async () => {
       if (!user?.id) return false;
 
-      if (isTestPatientName(user.user_metadata?.full_name)) {
-        return true;
-      }
+      const { data } = await supabase
+        .from('patient_registrations')
+        .select('is_test_patient')
+        .eq('user_id', user.id)
+        .maybeSingle();
 
-      const [patientRegistrationResult, profileResult] = await Promise.all([
-        supabase
-          .from('patient_registrations')
-          .select('full_name')
-          .eq('user_id', user.id)
-          .maybeSingle(),
-        supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', user.id)
-          .maybeSingle(),
-      ]);
-
-      const registrationName = patientRegistrationResult.data?.full_name;
-      const profileName = profileResult.data?.full_name;
-
-      return isTestPatientName(registrationName) || isTestPatientName(profileName);
+      return !!data?.is_test_patient;
     },
     enabled: !!user?.id,
     staleTime: 60 * 1000,

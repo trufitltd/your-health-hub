@@ -452,12 +452,12 @@ export default function SpecialistsPage() {
     queryKey: ['specialists-can-view-test-doctor', user?.id],
     queryFn: async () => {
       if (!user?.id) return false;
-      if (isTestPatientName(user.user_metadata?.full_name)) return true;
-      const [patientResult, profileResult] = await Promise.all([
-        supabase.from('patient_registrations').select('full_name').eq('user_id', user.id).maybeSingle(),
-        supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
-      ]);
-      return isTestPatientName(patientResult.data?.full_name) || isTestPatientName(profileResult.data?.full_name);
+      const { data } = await supabase
+        .from('patient_registrations')
+        .select('is_test_patient')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      return !!data?.is_test_patient;
     },
     enabled: !!user?.id,
     staleTime: 60 * 1000,
