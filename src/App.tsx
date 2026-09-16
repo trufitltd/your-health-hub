@@ -20,6 +20,7 @@ import Install from "./pages/Install";
 import PatientPortal from "./pages/PatientPortal";
 import DoctorPortal from "./pages/DoctorPortal";
 import DoctorDiscovery from "./pages/DoctorDiscovery";
+import ServiceDiscovery from "./pages/ServiceDiscovery";
 import SlotSelection from "./pages/SlotSelection";
 import Consultation from "./pages/Consultation";
 import AdminLogin from "./pages/AdminLogin";
@@ -39,6 +40,8 @@ import Careers from "./pages/Careers";
 import AgentAuth from "./pages/AgentAuth";
 import NotFound from "./pages/NotFound";
 import CompleteRegistration from "./pages/CompleteRegistration";
+import PlatformAdmin from "./pages/PlatformAdmin";
+import PlatformAdminLogin from "./pages/PlatformAdminLogin";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import ScrollToTop from "@/components/ScrollToTop";
 
@@ -252,6 +255,7 @@ const App = () => (
                 }
               />
               <Route path="/doctor-discovery" element={<DoctorDiscovery />} />
+              <Route path="/service-discovery" element={<ServiceDiscovery />} />
               <Route path="/slot-selection" element={<SlotSelection />} />
               <Route path="/services" element={<Services />} />
               <Route path="/specialists" element={<Specialists />} />
@@ -269,15 +273,38 @@ const App = () => (
               <Route path="/consultation/:appointmentId" element={<Consultation />} />
               <Route path="/verify/:code" element={<VerifyPrescription />} />
               <Route path="/admin/login" element={<AdminLogin />} />
-              <Route path="/admin" element={<CentralAdmin />} />
+              <Route
+                path="/admin"
+                element={
+                  <ProtectedRoute requiredRole="admin">
+                    <CentralAdmin />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="/coo/login" element={<CooLogin />} />
-              <Route path="/coo" element={<COOPortal />} />
+              <Route
+                path="/coo"
+                element={
+                  <ProtectedRoute requiredRole="coo">
+                    <COOPortal />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="/healthlink/login" element={<HealthLinkLogin />} />
               <Route
                 path="/healthlink"
                 element={
                   <ProtectedRoute requiredRole="healthlink">
                     <HealthLinkPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="/platform-admin/login" element={<PlatformAdminLogin />} />
+              <Route
+                path="/platform-admin"
+                element={
+                  <ProtectedRoute requiredRole="platform_superadmin">
+                    <PlatformAdmin />
                   </ProtectedRoute>
                 }
               />

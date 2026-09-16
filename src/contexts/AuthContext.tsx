@@ -7,10 +7,26 @@ import type { AppRole } from './authContextValue';
 
 const parseAppRole = (rawRole: unknown): AppRole => {
   const normalized = String(rawRole || '').trim().toLowerCase();
-  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink') {
+  if (normalized === 'doctor' || normalized === 'patient' || normalized === 'admin' || normalized === 'coo' || normalized === 'healthlink' || normalized === 'platform_superadmin' || normalized === 'organisation_admin') {
     return normalized;
   }
   return 'patient';
+};
+
+const getSuperAdminEmails = (): Set<string> => {
+  const raw = import.meta.env.VITE_SUPER_ADMIN_EMAILS || '';
+  return new Set(
+    raw.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+};
+
+const resolveRole = (user: User): AppRole => {
+  const emailRole = parseAppRole(user.user_metadata?.role);
+  const superAdminEmails = getSuperAdminEmails();
+  if (superAdminEmails.has((user.email || '').toLowerCase())) {
+    return 'platform_superadmin';
+  }
+  return emailRole;
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -27,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (currentUser) {
           setUser(currentUser);
-          const userRole = parseAppRole(currentUser.user_metadata?.role);
+          const userRole = resolveRole(currentUser);
           setRole(userRole);
           localStorage.setItem('userRole', userRole);
         }
@@ -47,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (currentUser) {
           setUser(currentUser);
-          const userRole = parseAppRole(currentUser.user_metadata?.role);
+          const userRole = resolveRole(currentUser);
           setRole(userRole);
           localStorage.setItem('userRole', userRole);
         } else {

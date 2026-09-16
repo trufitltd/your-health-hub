@@ -75,7 +75,7 @@ serve(async (req) => {
       console.warn('[payment-initialize] profile lookup failed, falling back to auth email:', profileError.message);
     }
 
-    const paymentService = new PaymentService(serviceClient);
+    const paymentService = new PaymentService(serviceClient, appointment.organisation_id || null);
 
     const { data: existingPendingPaystack, error: pendingLookupError } = await serviceClient
       .from('payments')

@@ -31,6 +31,7 @@ export interface PriceCalculationInput {
   consultationType?: string;
   tierId?: string | null;
   tierName?: string | null;
+  serviceType?: string;
 }
 
 export interface PriceCalculationResult {
@@ -44,7 +45,8 @@ export interface PriceCalculationResult {
 export interface BookingInitiateInput {
   patientId: string;
   patientEmail: string;
-  doctorId: string;
+  doctorId?: string;
+  serviceType?: string;
   preferredDate?: string;
   preferredTime?: string;
   duration?: number;
@@ -81,6 +83,7 @@ export interface BookingInitiateResult {
   paidWithWallet: boolean;
   walletChargedAmount?: number;
   paystackAmountDue?: number;
+  pendingAssignment?: boolean;
 }
 
 export interface PricePreviewInput {
@@ -113,6 +116,7 @@ export interface PaystackVerifyResult {
 
 export type AppointmentStatus =
   | 'pending_payment'
+  | 'pending_assignment'
   | 'pending_approval'
   | 'confirmed'
   | 'in_progress'
@@ -145,6 +149,7 @@ export const normalizeAppointmentStatusRaw = (status?: string | null) => {
     normalized === 'pending_doctor_acceptance' ||
     normalized === 'pending_approval'
   ) return 'pending_approval';
+  if (normalized === 'pending_assignment' || normalized === 'pending clinician assignment') return 'pending_assignment';
   if (normalized === 'canceled') return 'cancelled';
   if (normalized === 'rejected' || normalized === 'declined' || normalized === 'expired') return 'cancelled';
   if (normalized === 'inprogress') return 'in_progress';

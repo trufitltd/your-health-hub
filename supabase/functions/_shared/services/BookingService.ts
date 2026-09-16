@@ -18,6 +18,7 @@ import { AvailabilityService } from './AvailabilityService.ts';
 import { PaymentService } from './PaymentService.ts';
 import { WalletService } from './WalletService.ts';
 import { PromotionService } from './PromotionService.ts';
+import { ClinicianAssignmentService } from './ClinicianAssignmentService.ts';
 
 type DoctorTierRow = {
   id: string;
@@ -55,6 +56,7 @@ export class BookingService {
     private readonly paymentService: PaymentService,
     private readonly walletService: WalletService,
     private readonly promotionService: PromotionService,
+    private readonly organisationId?: string | null,
   ) {}
 
   private async getDoctorContext(doctorId: string) {
@@ -155,6 +157,152 @@ export class BookingService {
   private isDisallowedPatientName(name: string | null | undefined) {
     const normalized = String(name || '').trim().toLowerCase();
     return normalized === 'user';
+  }
+
+  private timeToMinutes(time: string | null): number {
+    if (!time) return 0;
+    const parts = time.split(':').map(Number);
+    return (parts[0] || 0) * 60 + (parts[1] || 0);
+  }
+
+  /**
+   * #6: Revalidate a slot for internal-assignment bookings.
+   * Uses the same eligibility pipeline as ClinicianAssignmentService:
+   *   1. Service exists and is active
+   *   2. At least one eligible clinician (specialty match)
+   *   3. Clinician has a schedule for the requested day
+   *   4. No conflicting appointment for any eligible clinician
+   *
+   * Returns { available: true } or { available: false, reason: string }.
+   */
+  private async revalidateSlotForInternalAssignment(
+    organisationId: string,
+    serviceName: string,
+    date: string,
+    time: string,
+    durationMinutes: number,
+  ): Promise<{ available: boolean; reason?: string }> {
+    // Step 1: Verify service exists and is active
+    const { data: orgService } = await this.supabase
+      .from('organisation_services')
+      .select('id, required_specialties')
+      .eq('organisation_id', organisationId)
+      .eq('name', serviceName)
+      .eq('active', true)
+      .maybeSingle();
+
+    if (!orgService) {
+      return { available: false, reason: 'Service not found or inactive' };
+    }
+
+    const requiredSpecialties: string[] = Array.isArray(orgService.required_specialties)
+      ? orgService.required_specialties
+      : [];
+
+    // Step 2: Find eligible clinicians (same logic as ClinicianAssignmentService)
+    const { data: orgDoctors } = await this.supabase
+      .from('doctors')
+      .select('id, user_id')
+      .eq('organisation_id', organisationId)
+      .eq('is_active', true);
+
+    if (!orgDoctors || orgDoctors.length === 0) {
+      return { available: false, reason: 'No active clinicians in this organisation' };
+    }
+
+    let eligibleUserIds: string[] = [];
+
+    if (requiredSpecialties.length === 0) {
+      eligibleUserIds = orgDoctors.map((d) => d.user_id);
+    } else {
+      const userIds = orgDoctors.map((d) => d.user_id);
+      const { data: registrations } = await this.supabase
+        .from('doctor_registrations')
+        .select('user_id, specialty')
+        .in('user_id', userIds);
+
+      const regMap = new Map<string, string>();
+      (registrations || []).forEach((r: any) => {
+        regMap.set(r.user_id, (r.specialty || '').toLowerCase().trim());
+      });
+
+      const normalizedRequired = requiredSpecialties.map((s) => s.toLowerCase().trim());
+
+      eligibleUserIds = orgDoctors
+        .filter((doc) => {
+          const specialty = regMap.get(doc.user_id) || '';
+          return normalizedRequired.some((req) => {
+            if (req === 'gp' || req === 'general practice' || req === 'general practitioner') {
+              return specialty === 'gp' || specialty === 'general practice' || specialty === 'general practitioner';
+            }
+            return specialty.includes(req) || req.includes(specialty);
+          });
+        })
+        .map((doc) => doc.user_id);
+    }
+
+    if (eligibleUserIds.length === 0) {
+      return { available: false, reason: 'No clinicians qualified for this service' };
+    }
+
+    // Step 3: Check schedules for the requested day
+    const dayOfWeek = new Date(date).getDay();
+    const { data: schedules } = await this.supabase
+      .from('doctor_schedules')
+      .select('doctor_id')
+      .in('doctor_id', eligibleUserIds)
+      .eq('organisation_id', organisationId)
+      .eq('day_of_week', dayOfWeek)
+      .eq('active', true);
+
+    if (!schedules || schedules.length === 0) {
+      return { available: false, reason: 'No clinicians available on this day' };
+    }
+
+    const scheduledUserIds = schedules.map((s) => s.doctor_id);
+
+    // Step 4: Check for conflicting appointments
+    // Includes pending_payment with active slot_locked_until — these hold capacity
+    // for the requesting patient. Without this, two patients could simultaneously
+    // pass revalidation for the last available slot.
+    const requestedStart = this.timeToMinutes(time);
+    const requestedEnd = requestedStart + durationMinutes;
+
+    const { data: conflicts } = await this.supabase
+      .from('appointments')
+      .select('doctor_id, time, duration_minutes, status, slot_locked_until')
+      .in('doctor_id', scheduledUserIds)
+      .eq('date', date)
+      .in('status', ['confirmed', 'pending_approval', 'in_progress', 'completed', 'pending_assignment', 'pending_payment']);
+
+    // Count remaining capacity: eligible clinicians with no conflicting appointment
+    // Capacity = eligible_scheduled_clinicians - occupied_by_active_appointments
+    let remainingCapacity = 0;
+
+    for (const doctorUserId of scheduledUserIds) {
+      const doctorConflicts = (conflicts || []).filter((c: any) => c.doctor_id === doctorUserId);
+      const hasConflict = doctorConflicts.some((c: any) => {
+        const conflictStart = this.timeToMinutes(c.time);
+        const conflictEnd = conflictStart + (c.duration_minutes || 30);
+        const overlaps = requestedStart < conflictEnd && requestedEnd > conflictStart;
+        if (!overlaps) return false;
+        // For pending_payment, only conflict if the lock is still active
+        if (c.status === 'pending_payment') {
+          return !c.slot_locked_until || new Date(c.slot_locked_until) > new Date();
+        }
+        return true;
+      });
+
+      if (!hasConflict) {
+        remainingCapacity++;
+      }
+    }
+
+    if (remainingCapacity > 0) {
+      return { available: true };
+    }
+
+    return { available: false, reason: 'No clinicians available at the requested time' };
   }
 
   private async calculatePriceForDoctor(input: {
@@ -263,6 +411,53 @@ export class BookingService {
 
   private async moveAppointmentToApprovalReady(appointmentId: string, paymentReference?: string | null) {
     console.log('[BookingService] moveAppointmentToApprovalReady started', { appointmentId, paymentReference });
+
+    // Check if this is an internal assignment appointment (no doctor, has service_type)
+    const { data: aptCheck } = await this.supabase
+      .from('appointments')
+      .select('doctor_id, service_type, organisation_id')
+      .eq('id', appointmentId)
+      .maybeSingle();
+
+    const isInternalAssignment = aptCheck && !aptCheck.doctor_id && !!aptCheck.service_type;
+
+    if (isInternalAssignment) {
+      // Move to pending_assignment and trigger auto-assignment
+      const updatePayload: Record<string, unknown> = {
+        status: 'pending_assignment',
+        slot_locked_until: null,
+      };
+      if (paymentReference) {
+        updatePayload.payment_reference = paymentReference;
+      }
+
+      const { error } = await this.supabase
+        .from('appointments')
+        .update(updatePayload)
+        .eq('id', appointmentId);
+
+      if (error) {
+        console.error('[BookingService] moveAppointmentToApprovalReady failed for internal assignment:', error.message);
+        throw new Error(`Failed to move to pending_assignment: ${error.message}`);
+      }
+
+      // Auto-trigger clinician assignment (non-blocking — failures handled by retry mechanism)
+      try {
+        const assignmentService = new ClinicianAssignmentService(this.supabase);
+        const result = await assignmentService.assignClinician(appointmentId);
+        if (result.success) {
+          console.log('[BookingService] Auto-assignment succeeded', { appointmentId, doctorId: result.doctorId });
+        } else {
+          console.warn('[BookingService] Auto-assignment failed, will be retried', { appointmentId, error: result.error });
+        }
+      } catch (assignError) {
+        console.warn('[BookingService] Auto-assignment threw error, will be retried', { appointmentId, error: String(assignError) });
+      }
+
+      return;
+    }
+
+    // Standard flow: move to pending_approval
     const updatePayload: Record<string, unknown> = {
       status: 'pending_approval',
       slot_locked_until: null,
@@ -316,20 +511,28 @@ export class BookingService {
   async initiateBooking(input: BookingInitiateInput): Promise<BookingInitiateResult> {
     console.log('[BookingService] initiateBooking started', { patientId: input.patientId, doctorId: input.doctorId });
     if (!input.patientId) throw new Error('Missing patientId');
-    if (!input.doctorId) throw new Error('Missing doctorId');
+    if (!input.doctorId && !input.serviceType) throw new Error('Missing doctorId or serviceType');
 
+    const isInternalAssignment = !input.doctorId && !!input.serviceType;
+
+    // ── #8: Cleanup expired pending_payment locks ──
+    // This expires abandoned bookings that never completed payment.
+    // For internal assignment, we clean up org-wide expired locks.
     try {
-      console.log('[BookingService] Cleaning up expired locks...');
-      await this.availabilityService.cleanupExpiredPendingLocks(input.doctorId);
+      if (input.doctorId) {
+        await this.availabilityService.cleanupExpiredPendingLocks(input.doctorId);
+      } else if (isInternalAssignment && this.organisationId) {
+        // For internal assignment, clean up all expired locks for this org
+        // (no specific doctor to filter by)
+        await this.availabilityService.cleanupExpiredPendingLocks();
+      }
     } catch (e) {
       console.warn('[BookingService] cleanupExpiredPendingLocks failed:', e);
     }
 
     console.log('[BookingService] Fetching context and flags...');
-    const doctor = await this.getDoctorContext(input.doctorId);
     const patient = await this.getPatientContext(input.patientId);
     const pricingFeatureFlags = await this.pricingService.getFeatureFlags();
-    console.log('[BookingService] Context fetched', { doctorName: doctor.doctorName, patientName: patient.patientName });
 
     if (this.isDisallowedPatientName(patient.patientName)) {
       throw new Error('Invalid patient name. Please update your profile before booking.');
@@ -350,8 +553,22 @@ export class BookingService {
       throw new Error('Date and time are required');
     }
 
+    // For internal assignment: use service-based pricing from organisation_services
+    if (isInternalAssignment) {
+      return this.initiateInternalAssignmentBooking({
+        input,
+        patient,
+        pricingFeatureFlags,
+        requestedDuration,
+      });
+    }
+
+    // Standard patient-select flow (MyE-Doctor)
+    const doctor = await this.getDoctorContext(input.doctorId!);
+    console.log('[BookingService] Context fetched', { doctorName: doctor.doctorName, patientName: patient.patientName });
+
     const check = await this.availabilityService.validateAvailability({
-      doctorId: input.doctorId,
+      doctorId: input.doctorId!,
       date: input.preferredDate,
       time: input.preferredTime,
       durationMinutes: requestedDuration,
@@ -372,7 +589,7 @@ export class BookingService {
       : DEFAULT_CONSULTATION_TYPE;
 
     const { consultationType, price, isPromotion, promotionType, currency } = await this.calculatePriceForDoctor({
-      doctorId: input.doctorId,
+      doctorId: input.doctorId!,
       patientId: input.patientId,
       duration: slot.durationMinutes,
       consultationType: normalizedConsultationType,
@@ -413,7 +630,7 @@ export class BookingService {
       .insert({
         patient_id: input.patientId,
         patient_name: patient.patientName,
-        doctor_id: input.doctorId,
+        doctor_id: input.doctorId!,
         specialist_name: doctor.doctorName,
         date: slot.date,
         time: slot.time,
@@ -428,6 +645,7 @@ export class BookingService {
         duration_minutes: slot.durationMinutes,
         is_promotion: isPromotion,
         promotion_type: promotionType,
+        organisation_id: this.organisationId || null,
       })
       .select('*')
       .single();
@@ -436,12 +654,212 @@ export class BookingService {
       throw new Error(`Failed creating pending appointment: ${appointmentError.message}`);
     }
 
-    const amount = Number(appointment.final_price || price.finalPrice);
+    return this.processPayment({
+      appointment,
+      amount: Number(appointment.final_price || price.finalPrice),
+      isPromotion,
+      promotionType,
+      currency,
+      slot,
+      consultationType,
+      patientId: input.patientId,
+      requestedPaymentMethod,
+      basePaymentMetadata: {
+        appointment_date: slot.date,
+        appointment_time: slot.time,
+        duration_minutes: slot.durationMinutes,
+        consultation_type: consultationType,
+      },
+    });
+  }
+
+  private async initiateInternalAssignmentBooking(params: {
+    input: BookingInitiateInput;
+    patient: { patientName: string | null };
+    pricingFeatureFlags: Record<FeatureFlagName, boolean>;
+    requestedDuration: number;
+  }): Promise<BookingInitiateResult> {
+    const { input, patient, pricingFeatureFlags, requestedDuration } = params;
+
+    console.log('[BookingService] initiateInternalAssignmentBooking started', { serviceType: input.serviceType });
+
+    const slot = {
+      date: input.preferredDate!,
+      time: input.preferredTime!,
+      durationMinutes: requestedDuration,
+    };
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Phase 6B.3: Atomic capacity reservation via RPC
+    // The RPC validates org, service, membership, clinician capacity, and
+    // creates the pending_payment appointment in a single transaction.
+    // This eliminates the TOCTOU race between revalidation and insert.
+    // ══════════════════════════════════════════════════════════════════════
+    const consultationMode = pricingFeatureFlags.consultation_type_pricing
+      ? (input.consultationType || 'video')
+      : 'video';
+
+    const { data: rpcResult, error: rpcError } = await this.supabase.rpc(
+      'reserve_internal_assignment_slot',
+      {
+        p_patient_id: input.patientId,
+        p_organisation_id: this.organisationId,
+        p_service_name: input.serviceType,
+        p_preferred_date: slot.date,
+        p_preferred_time: slot.time,
+        p_duration_minutes: slot.durationMinutes,
+        p_patient_name: patient.patientName,
+        p_notes: input.notes || null,
+        p_consultation_mode: consultationMode,
+      },
+    );
+
+    if (rpcError) {
+      throw new Error(`Atomic reservation failed: ${rpcError.message}`);
+    }
+
+    const result = rpcResult as Record<string, unknown>;
+    if (!result.success) {
+      throw new Error(result.error || 'SLOT_NO_LONGER_AVAILABLE');
+    }
+
+    const appointmentId = result.appointment_id as string;
+    const finalPrice = Number(result.final_price);
+    const currency = (result.currency as string) || 'NGN';
+
+    // Load the created appointment for payment processing
+    const { data: appointment, error: appointmentError } = await this.supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', appointmentId)
+      .maybeSingle();
+
+    if (appointmentError || !appointment) {
+      throw new Error(`Failed loading reserved appointment: ${appointmentError?.message || 'not found'}`);
+    }
+
+    // For zero-price bookings, move to pending_assignment (not pending_approval)
+    if (finalPrice === 0) {
+      await this.supabase
+        .from('appointments')
+        .update({ status: 'pending_assignment', slot_locked_until: null })
+        .eq('id', appointmentId);
+
+      return {
+        appointmentId,
+        finalPrice: 0,
+        currency,
+        slot,
+        paymentInitialization: null,
+        paymentMethod: 'paystack',
+        paidWithWallet: false,
+        walletChargedAmount: 0,
+        paystackAmountDue: 0,
+        pendingAssignment: true,
+      };
+    }
+
+    // Check for promotional eligibility (skipped for internal assignment — no doctorId)
+    const isPromotion = false;
+    const promotionType: string | undefined = undefined;
+
+    const normalizedConsultationType = pricingFeatureFlags.consultation_type_pricing
+      ? (input.consultationType || consultationMode)
+      : DEFAULT_CONSULTATION_TYPE;
+
+    const requestedPaymentMethod: 'paystack' | 'wallet' | 'hybrid' = input.paymentMethod === 'wallet'
+      ? 'wallet'
+      : input.paymentMethod === 'hybrid'
+      ? 'hybrid'
+      : 'paystack';
+
+    try {
+      const paymentResult = await this.processPayment({
+        appointment,
+        amount: finalPrice,
+        isPromotion,
+        promotionType,
+        currency,
+        slot,
+        consultationType: normalizedConsultationType,
+        patientId: input.patientId,
+        requestedPaymentMethod,
+        basePaymentMetadata: {
+          appointment_date: slot.date,
+          appointment_time: slot.time,
+          duration_minutes: slot.durationMinutes,
+          consultation_type: normalizedConsultationType,
+          service_type: input.serviceType,
+        },
+        pendingAssignment: true,
+      });
+
+      return paymentResult;
+    } catch (paymentError) {
+      // ════════════════════════════════════════════════════════════════════
+      // Phase 6B.3 #12: Paystack initialization failure after reservation
+      // Release the reservation immediately so capacity is not held for
+      // the full 30-minute TTL unnecessarily.
+      // ════════════════════════════════════════════════════════════════════
+      console.warn('[BookingService] Payment init failed after reservation, releasing', {
+        appointmentId,
+        error: String(paymentError),
+      });
+
+      try {
+        await this.supabase.rpc('release_reservation_on_payment_failure', {
+          p_appointment_id: appointmentId,
+        });
+      } catch (releaseError) {
+        console.warn('[BookingService] Failed to release reservation:', String(releaseError));
+      }
+
+      throw paymentError;
+    }
+  }
+
+  private async processPayment(params: {
+    appointment: any;
+    amount: number;
+    isPromotion: boolean;
+    promotionType?: string;
+    currency: string;
+    slot: { date: string; time: string; durationMinutes: number };
+    consultationType: string;
+    patientId: string;
+    patientEmail?: string;
+    requestedPaymentMethod: 'paystack' | 'wallet' | 'hybrid';
+    basePaymentMetadata: Record<string, unknown>;
+    pendingAssignment?: boolean;
+  }): Promise<BookingInitiateResult> {
+    const {
+      appointment, amount, isPromotion, promotionType, currency, slot,
+      consultationType, patientId, requestedPaymentMethod, basePaymentMetadata,
+      pendingAssignment,
+    } = params;
+
+    const isInternalAssignment = !!pendingAssignment;
+
+    // Determine the target status after payment
+    const postPaymentStatus = isInternalAssignment ? 'pending_assignment' : 'pending_approval';
+
+    // Helper to move appointment to post-payment status
+    const moveToPostPaymentStatus = async (apptId: string, ref?: string | null) => {
+      if (isInternalAssignment) {
+        // For internal assignment, go to pending_assignment
+        const updatePayload: Record<string, unknown> = { status: 'pending_assignment', slot_locked_until: null };
+        if (ref) updatePayload.payment_reference = ref;
+        const { error } = await this.supabase.from('appointments').update(updatePayload).eq('id', apptId);
+        if (error) throw new Error(`Failed to move to pending_assignment: ${error.message}`);
+      } else {
+        await this.moveAppointmentToApprovalReady(apptId, ref);
+      }
+    };
 
     // Handle zero-price promotional bookings
     if (amount === 0 && isPromotion) {
       try {
-        await this.moveAppointmentToApprovalReady(appointment.id, `PROMO-${promotionType}-${Date.now()}`);
+        await moveToPostPaymentStatus(appointment.id, `PROMO-${promotionType}-${Date.now()}`);
 
         return {
           appointmentId: appointment.id,
@@ -449,10 +867,11 @@ export class BookingService {
           currency,
           slot,
           paymentInitialization: null,
-          paymentMethod: 'paystack', // Default
+          paymentMethod: 'paystack',
           paidWithWallet: false,
           walletChargedAmount: 0,
           paystackAmountDue: 0,
+          pendingAssignment: isInternalAssignment || undefined,
         };
       } catch (promoConfirmError) {
         await this.supabase
@@ -462,13 +881,6 @@ export class BookingService {
         throw new Error(`Failed to confirm promotional booking: ${promoConfirmError instanceof Error ? promoConfirmError.message : String(promoConfirmError)}`);
       }
     }
-
-    const basePaymentMetadata = {
-      appointment_date: slot.date,
-      appointment_time: slot.time,
-      duration_minutes: slot.durationMinutes,
-      consultation_type: consultationType,
-    };
 
     const cancelPendingAppointment = async () => {
       await this.supabase
@@ -483,7 +895,7 @@ export class BookingService {
 
       const { error: walletPaymentInitError } = await this.supabase.from('payments').insert({
         appointment_id: appointment.id,
-        patient_id: input.patientId,
+        patient_id: patientId,
         amount,
         status: 'pending',
         provider_reference: walletReference,
@@ -507,7 +919,7 @@ export class BookingService {
         const { data: walletDebitData, error: walletDebitError } = await this.supabase.rpc(
           'debit_patient_wallet_for_booking',
           {
-            p_patient_id: input.patientId,
+            p_patient_id: patientId,
             p_appointment_id: appointment.id,
             p_amount: amount,
             p_narration: `Appointment payment from wallet (${appointment.id})`,
@@ -547,18 +959,21 @@ export class BookingService {
         }
 
         try {
-          await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+          await moveToPostPaymentStatus(appointment.id, walletReference);
         } catch (confirmError: any) {
           throw new Error(`Failed to confirm wallet booking: ${confirmError?.message || confirmError}`);
         }
 
-        await this.walletService.addPendingEarning({
-          id: appointment.id,
-          doctor_id: appointment.doctor_id,
-          final_price: amount,
-          currency,
-          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
-        });
+        // Only add pending earning when doctor is assigned (not for internal assignment)
+        if (appointment.doctor_id) {
+          await this.walletService.addPendingEarning({
+            id: appointment.id,
+            doctor_id: appointment.doctor_id,
+            final_price: amount,
+            currency,
+            price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+          });
+        }
 
         return {
           appointmentId: appointment.id,
@@ -570,13 +985,14 @@ export class BookingService {
           paidWithWallet: true,
           walletChargedAmount: chargedAmount,
           paystackAmountDue: 0,
+          pendingAssignment: isInternalAssignment || undefined,
         };
       } catch (walletFlowError) {
         const message = walletFlowError instanceof Error ? walletFlowError.message : String(walletFlowError);
 
         if (chargedAmount > 0) {
           const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
-            p_patient_id: input.patientId,
+            p_patient_id: patientId,
             p_appointment_id: appointment.id,
             p_amount: chargedAmount,
             p_narration: `Rollback for failed wallet booking (${appointment.id})`,
@@ -618,7 +1034,7 @@ export class BookingService {
         const walletDebitResponse = await this.supabase.rpc(
           'debit_patient_wallet_for_booking_up_to',
           {
-            p_patient_id: input.patientId,
+            p_patient_id: patientId,
             p_appointment_id: appointment.id,
             p_amount: amount,
             p_narration: `Hybrid booking wallet debit (${appointment.id})`,
@@ -639,7 +1055,7 @@ export class BookingService {
           const { data: walletRow, error: walletLookupError } = await this.supabase
             .from('patient_wallet')
             .select('available_balance')
-            .eq('patient_id', input.patientId)
+            .eq('patient_id', patientId)
             .maybeSingle();
 
           if (walletLookupError) {
@@ -651,7 +1067,7 @@ export class BookingService {
             const fallbackDebitResponse = await this.supabase.rpc(
               'debit_patient_wallet_for_booking',
               {
-                p_patient_id: input.patientId,
+                p_patient_id: patientId,
                 p_appointment_id: appointment.id,
                 p_amount: fallbackChargeAmount,
                 p_narration: `Hybrid booking wallet debit (${appointment.id})`,
@@ -678,7 +1094,7 @@ export class BookingService {
         if (walletChargedAmount > 0) {
           const { error: walletPaymentInitError } = await this.supabase.from('payments').insert({
             appointment_id: appointment.id,
-            patient_id: input.patientId,
+            patient_id: patientId,
             amount: walletChargedAmount,
             status: 'pending',
             provider_reference: walletReference,
@@ -727,18 +1143,21 @@ export class BookingService {
           }
 
           try {
-            await this.moveAppointmentToApprovalReady(appointment.id, walletReference);
+            await moveToPostPaymentStatus(appointment.id, walletReference);
           } catch (confirmError: any) {
             throw new Error(`Failed to confirm wallet-only hybrid booking: ${confirmError?.message || confirmError}`);
           }
 
-          await this.walletService.addPendingEarning({
-            id: appointment.id,
-            doctor_id: appointment.doctor_id,
-            final_price: amount,
-            currency,
-            price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
-          });
+          // Only add pending earning when doctor is assigned
+          if (appointment.doctor_id) {
+            await this.walletService.addPendingEarning({
+              id: appointment.id,
+              doctor_id: appointment.doctor_id,
+              final_price: amount,
+              currency,
+              price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+            });
+          }
 
           return {
             appointmentId: appointment.id,
@@ -750,6 +1169,7 @@ export class BookingService {
             paidWithWallet: true,
             walletChargedAmount,
             paystackAmountDue: 0,
+            pendingAssignment: isInternalAssignment || undefined,
           };
         }
 
@@ -765,9 +1185,9 @@ export class BookingService {
 
         const paymentInitialization = await this.paymentService.createPaymentIntent({
           appointmentId: appointment.id,
-          patientId: input.patientId,
-          doctorId: input.doctorId,
-          email: input.patientEmail,
+          patientId: patientId,
+          doctorId: appointment.doctor_id || null,
+          email: params.patientEmail || '',
           amount: paystackAmountDue,
           currency,
           metadata: paystackMetadata,
@@ -789,7 +1209,7 @@ export class BookingService {
 
         if (walletChargedAmount > 0) {
           const { error: rollbackError } = await this.supabase.rpc('credit_patient_wallet_adjustment', {
-            p_patient_id: input.patientId,
+            p_patient_id: patientId,
             p_appointment_id: appointment.id,
             p_amount: walletChargedAmount,
             p_narration: `Rollback for failed hybrid booking (${appointment.id})`,
@@ -819,9 +1239,9 @@ export class BookingService {
 
     const paymentInitialization = await this.paymentService.createPaymentIntent({
       appointmentId: appointment.id,
-      patientId: input.patientId,
-      doctorId: input.doctorId,
-      email: input.patientEmail,
+      patientId: patientId,
+      doctorId: appointment.doctor_id || null,
+      email: params.patientEmail || '',
       amount,
       currency,
       metadata: { ...basePaymentMetadata, currency },
@@ -837,6 +1257,7 @@ export class BookingService {
       paidWithWallet: false,
       walletChargedAmount: 0,
       paystackAmountDue: amount,
+      pendingAssignment: isInternalAssignment || undefined,
     };
   }
 
@@ -856,6 +1277,19 @@ export class BookingService {
     if (!appointment) throw new Error('Appointment not found for payment');
 
     const status = normalizeAppointmentStatusRaw(appointment.status);
+    if (status === 'pending_assignment') {
+      // Appointment already in pending_assignment — try assignment in case previous attempt failed
+      try {
+        const assignmentService = new ClinicianAssignmentService(this.supabase);
+        const result = await assignmentService.assignClinician(appointment.id);
+        if (result.success) {
+          console.log('[BookingService] Re-triggered assignment succeeded', { appointmentId: appointment.id });
+        }
+      } catch {
+        // Assignment will be retried by the retry mechanism
+      }
+      return { appointmentId: appointment.id, alreadyProcessed: true };
+    }
     if (status === 'pending_approval' || status === 'confirmed' || status === 'completed' || status === 'in_progress') {
       return { appointmentId: appointment.id, alreadyProcessed: true };
     }
@@ -876,18 +1310,30 @@ export class BookingService {
 
     if (isAlreadySuccessfulInDb) {
       // Payment already verified — just ensure appointment is promoted
-      try {
-        await this.moveAppointmentToApprovalReady(appointment.id);
-      } catch (confirmError: any) {
-        throw new Error(`Failed to confirm appointment after payment: ${confirmError?.message || confirmError}`);
+      const isInternalAssignment = !appointment.doctor_id && !!appointment.service_type;
+      if (isInternalAssignment) {
+        // For internal assignment, move to pending_assignment
+        await this.supabase
+          .from('appointments')
+          .update({ status: 'pending_assignment', slot_locked_until: null })
+          .eq('id', appointment.id);
+      } else {
+        try {
+          await this.moveAppointmentToApprovalReady(appointment.id);
+        } catch (confirmError: any) {
+          throw new Error(`Failed to confirm appointment after payment: ${confirmError?.message || confirmError}`);
+        }
       }
-      await this.walletService.addPendingEarning({
-        id: appointment.id,
-        doctor_id: appointment.doctor_id,
-        final_price: Number(appointment.final_price || 0),
-        currency: appointment.currency,
-        price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
-      });
+      // Only add pending earning when doctor is assigned
+      if (appointment.doctor_id) {
+        await this.walletService.addPendingEarning({
+          id: appointment.id,
+          doctor_id: appointment.doctor_id,
+          final_price: Number(appointment.final_price || 0),
+          currency: appointment.currency,
+          price_breakdown: (appointment.price_breakdown || {}) as Record<string, unknown>,
+        });
+      }
       return { appointmentId: appointment.id, alreadyProcessed: false };
     }
 

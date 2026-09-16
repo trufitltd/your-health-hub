@@ -11,7 +11,7 @@ type PricingRuleRow = {
   id: string;
   pricing_profile_id: string;
   rule_type: 'base' | 'modifier';
-  condition_type: 'doctor_type' | 'duration' | 'tier' | 'consultation_type';
+  condition_type: 'doctor_type' | 'duration' | 'tier' | 'consultation_type' | 'service_type';
   condition_value: string;
   price_action: 'set' | 'add' | 'multiply';
   amount: number;
@@ -61,12 +61,21 @@ const applyAction = (
 };
 
 export class PricingService {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(
+    private readonly supabase: SupabaseClient,
+    private readonly organisationId?: string | null,
+  ) {}
 
   async getFeatureFlags(): Promise<Record<FeatureFlagName, boolean>> {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('pricing_feature_flags')
       .select('feature_name, enabled');
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn('[PricingService] Failed loading feature flags, using defaults:', error.message);
@@ -84,7 +93,7 @@ export class PricingService {
   }
 
   async getActivePricingProfile() {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('pricing_profiles')
       .select('*')
       .eq('active', true)
@@ -93,6 +102,12 @@ export class PricingService {
       .limit(1)
       .maybeSingle();
 
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
+
     if (error) throw new Error(`Failed to load active pricing profile: ${error.message}`);
     if (!data) throw new Error('No active pricing profile configured');
 
@@ -100,12 +115,18 @@ export class PricingService {
   }
 
   async getActiveRules(pricingProfileId: string): Promise<PricingRuleRow[]> {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('pricing_rules')
       .select('*')
       .eq('pricing_profile_id', pricingProfileId)
       .eq('active', true)
       .order('priority', { ascending: true });
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw new Error(`Failed to load pricing rules: ${error.message}`);
     return (data || []) as PricingRuleRow[];
@@ -135,23 +156,34 @@ export class PricingService {
     const featureFlags = await this.getFeatureFlags();
     const rules = await this.getActiveRules(profile.id);
 
+    let durationsQuery = this.supabase
+      .from('appointment_duration_options')
+      .select('value_minutes')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .order('value_minutes', { ascending: true });
+
+    let consultationTypesQuery = this.supabase
+      .from('consultation_types')
+      .select('name')
+      .eq('active', true)
+      .order('name', { ascending: true });
+
+    let tiersQuery = this.supabase
+      .from('doctor_tiers')
+      .select('id,name')
+      .eq('active', true)
+      .order('experience_min', { ascending: true });
+
+    if (this.organisationId) {
+      consultationTypesQuery = consultationTypesQuery.eq('organisation_id', this.organisationId);
+      tiersQuery = tiersQuery.eq('organisation_id', this.organisationId);
+    }
+
     const [durationsResponse, consultationTypesResponse, tiersResponse] = await Promise.all([
-      this.supabase
-        .from('appointment_duration_options')
-        .select('value_minutes')
-        .eq('active', true)
-        .order('sort_order', { ascending: true })
-        .order('value_minutes', { ascending: true }),
-      this.supabase
-        .from('consultation_types')
-        .select('name')
-        .eq('active', true)
-        .order('name', { ascending: true }),
-      this.supabase
-        .from('doctor_tiers')
-        .select('id,name')
-        .eq('active', true)
-        .order('experience_min', { ascending: true }),
+      durationsQuery,
+      consultationTypesQuery,
+      tiersQuery,
     ]);
 
     if (durationsResponse.error) {
@@ -345,6 +377,32 @@ export class PricingService {
   }
 
   async calculatePrice(input: PriceCalculationInput): Promise<PriceCalculationResult> {
+    // Org-aware service pricing: if organisationId is set and a serviceType is provided,
+    // use organisation_services.base_price as the authoritative price.
+    // This prevents dual-pricing where admin sees Price A but the rules engine charges Price B.
+    if (this.organisationId && input.serviceType) {
+      const serviceTypeName = normalizeValue(input.serviceType);
+      const { data: orgService, error: orgServiceError } = await this.supabase
+        .from('organisation_services')
+        .select('base_price, currency')
+        .eq('organisation_id', this.organisationId)
+        .eq('active', true)
+        .ilike('name', serviceTypeName)
+        .maybeSingle();
+
+      if (!orgServiceError && orgService && Number(orgService.base_price || 0) > 0) {
+        const finalPrice = roundMoney(Number(orgService.base_price));
+        return {
+          base: finalPrice,
+          modifiers: [],
+          finalPrice,
+          pricingProfileId: null,
+          featureFlags: await this.getFeatureFlags(),
+        };
+      }
+      // If no matching service or price is 0, fall through to rules-based pricing
+    }
+
     const profile = await this.getActivePricingProfile();
     const featureFlags = await this.getFeatureFlags();
     const rules = await this.getActiveRules(profile.id);
@@ -413,6 +471,18 @@ export class PricingService {
       );
 
       if (consultationRule) current = this.applyRule(current, consultationRule, modifiers);
+    }
+
+    if (input.serviceType) {
+      const serviceTypeName = normalizeValue(input.serviceType);
+      const serviceTypeRule = rules.find(
+        (rule) =>
+          rule.rule_type === 'modifier' &&
+          rule.condition_type === 'service_type' &&
+          normalizeValue(rule.condition_value) === serviceTypeName,
+      );
+
+      if (serviceTypeRule) current = this.applyRule(current, serviceTypeRule, modifiers);
     }
 
     return {

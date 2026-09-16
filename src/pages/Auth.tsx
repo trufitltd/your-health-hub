@@ -1035,13 +1035,25 @@ export default function AuthPage() {
         }
 
         // Redirect based on role
-        navigate(
-          userRole === 'doctor'
-            ? '/doctor-portal'
-            : userRole === 'healthlink'
-            ? '/healthlink'
-            : '/patient-portal'
+        const superAdminEmails = new Set(
+          (import.meta.env.VITE_SUPER_ADMIN_EMAILS || '')
+            .split(',')
+            .map((e: string) => e.trim().toLowerCase())
+            .filter(Boolean)
         );
+        const isSuperAdmin = superAdminEmails.has((data.user?.email || '').toLowerCase());
+
+        if (isSuperAdmin) {
+          navigate('/platform-admin');
+        } else if (userRole === 'admin' || userRole === 'coo' || userRole === 'platform_superadmin') {
+          navigate('/admin');
+        } else if (userRole === 'doctor') {
+          navigate('/doctor-portal');
+        } else if (userRole === 'healthlink') {
+          navigate('/healthlink');
+        } else {
+          navigate('/patient-portal');
+        }
       }
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? (err as { message?: string }).message : String(err);

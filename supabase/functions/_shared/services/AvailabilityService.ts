@@ -42,7 +42,10 @@ const BUSY_STATUSES = new Set([
 ]);
 
 export class AvailabilityService {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(
+    private readonly supabase: SupabaseClient,
+    private readonly organisationId?: string | null,
+  ) {}
 
   private async rollbackExpiredHybridWalletContribution(appointmentId: string, patientId: string) {
     const { data: hybridPaymentRows, error: hybridPaymentLookupError } = await this.supabase
@@ -153,11 +156,17 @@ export class AvailabilityService {
   }
 
   async getDurationPricingEnabled() {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('pricing_feature_flags')
       .select('enabled')
       .eq('feature_name', 'duration_pricing')
       .maybeSingle();
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn('[AvailabilityService] duration_pricing flag query failed, defaulting to true');
@@ -251,7 +260,7 @@ export class AvailabilityService {
   }
 
   private async getSchedulesForDay(doctorId: string, dayIndex: number) {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('doctor_schedules')
       .select('*')
       .eq('doctor_id', doctorId)
@@ -259,16 +268,28 @@ export class AvailabilityService {
       .eq('is_available', true)
       .order('start_time', { ascending: true });
 
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
+
     if (error) throw new Error(`Failed to load doctor schedules: ${error.message}`);
     return data || [];
   }
 
   private async getAppointmentsForDate(doctorId: string, date: string) {
-    const { data, error } = await this.supabase
+    let query = this.supabase
       .from('appointments')
       .select('id, time, duration_minutes, status, slot_locked_until')
       .eq('doctor_id', doctorId)
       .eq('date', date);
+
+    if (this.organisationId) {
+      query = query.eq('organisation_id', this.organisationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw new Error(`Failed to load doctor appointments for availability check: ${error.message}`);
 

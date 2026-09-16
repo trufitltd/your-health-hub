@@ -1,7 +1,7 @@
 export type DoctorType = 'GP' | 'Specialist';
 
 export type PricingRuleType = 'base' | 'modifier';
-export type PricingConditionType = 'doctor_type' | 'duration' | 'tier' | 'consultation_type';
+export type PricingConditionType = 'doctor_type' | 'duration' | 'tier' | 'consultation_type' | 'service_type';
 export type PricingAction = 'set' | 'add' | 'multiply';
 
 export type FeatureFlagName = 'duration_pricing' | 'tier_pricing' | 'consultation_type_pricing';
@@ -117,7 +117,9 @@ export interface PriceCalculationResult {
 }
 
 export interface BookingInitiateRequest {
-  doctorId: string;
+  doctorId?: string;
+  serviceType?: string;
+  organisationId?: string;
   preferredDate?: string;
   preferredTime?: string;
   duration?: number;
@@ -147,6 +149,7 @@ export interface BookingInitiateResponse {
   paidWithWallet: boolean;
   walletChargedAmount?: number;
   paystackAmountDue?: number;
+  pendingAssignment?: boolean;
 }
 
 export interface PatientWalletWithdrawalRequest {
@@ -198,6 +201,7 @@ export interface PricePreviewResponse {
 
 export type AppointmentStatus =
   | 'pending_payment'
+  | 'pending_assignment'
   | 'pending_approval'
   | 'confirmed'
   | 'in_progress'
@@ -215,6 +219,7 @@ export type RescheduleRequestStatus =
 
 const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
   pending_payment: 'Pending Payment',
+  pending_assignment: 'Pending Assignment',
   pending_approval: 'Pending Approval',
   confirmed: 'Confirmed',
   in_progress: 'In Progress',
@@ -288,6 +293,7 @@ export const isSlotBlockingAppointmentStatus = (status?: string | null) => {
   const normalized = normalizeAppointmentStatusRaw(status);
   return (
     normalized === 'pending_payment' ||
+    normalized === 'pending_assignment' ||
     normalized === 'pending_approval' ||
     normalized === 'confirmed' ||
     normalized === 'in_progress' ||
