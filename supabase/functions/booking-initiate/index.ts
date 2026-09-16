@@ -68,6 +68,23 @@ serve(async (req) => {
         .eq('id', payload.doctorId)
         .maybeSingle();
       organisationId = doctorRow?.organisation_id || null;
+
+      // ── Test Doctor booking authorization ──
+      // Only authorised test patients can book test doctors.
+      // Ordinary patients cannot book test doctors even with manual UUID submission.
+      const { data: canBook } = await serviceClient.rpc('can_book_doctor', {
+        p_patient_id: user.id,
+        p_doctor_id: payload.doctorId,
+      });
+
+      if (canBook === false) {
+        return new Response(JSON.stringify({
+          error: 'This doctor is not available for booking',
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
     } else if (isInternalAssignment && payload.organisationId) {
       // ── #1: Trusted tenant validation ──
       // The browser-provided organisationId is a CLAIMED context.

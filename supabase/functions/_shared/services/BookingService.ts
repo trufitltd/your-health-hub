@@ -663,6 +663,7 @@ export class BookingService {
       slot,
       consultationType,
       patientId: input.patientId,
+      patientEmail: input.patientEmail,
       requestedPaymentMethod,
       basePaymentMetadata: {
         appointment_date: slot.date,
@@ -1183,11 +1184,22 @@ export class BookingService {
           ...(walletChargedAmount > 0 ? { wallet_payment_reference: walletReference } : {}),
         };
 
+        const hybridPatientEmail = String(params.patientEmail || '').trim();
+        if (!hybridPatientEmail) {
+          console.error('[BookingService] PATIENT_EMAIL_REQUIRED', {
+            appointmentId: appointment.id,
+            patientId,
+            bookingPath: 'hybrid',
+          });
+          await cancelPendingAppointment();
+          throw new Error('PATIENT_EMAIL_REQUIRED: Patient email is required to initialize payment. Please update your profile and try again.');
+        }
+
         const paymentInitialization = await this.paymentService.createPaymentIntent({
           appointmentId: appointment.id,
           patientId: patientId,
           doctorId: appointment.doctor_id || null,
-          email: params.patientEmail || '',
+          email: hybridPatientEmail,
           amount: paystackAmountDue,
           currency,
           metadata: paystackMetadata,
@@ -1237,11 +1249,25 @@ export class BookingService {
       }
     }
 
+    const patientEmail = String(params.patientEmail || '').trim();
+    if (!patientEmail) {
+      console.error('[BookingService] PATIENT_EMAIL_REQUIRED', {
+        appointmentId: appointment.id,
+        patientId,
+        bookingPath: isInternalAssignment ? 'internal_assignment' : 'doctor_select',
+      });
+      await this.supabase
+        .from('appointments')
+        .update({ status: 'cancelled', slot_locked_until: null })
+        .eq('id', appointment.id);
+      throw new Error('PATIENT_EMAIL_REQUIRED: Patient email is required to initialize payment. Please update your profile and try again.');
+    }
+
     const paymentInitialization = await this.paymentService.createPaymentIntent({
       appointmentId: appointment.id,
       patientId: patientId,
       doctorId: appointment.doctor_id || null,
-      email: params.patientEmail || '',
+      email: patientEmail,
       amount,
       currency,
       metadata: { ...basePaymentMetadata, currency },
