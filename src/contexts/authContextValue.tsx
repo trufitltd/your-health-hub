@@ -6,6 +6,7 @@ export type AppRole = 'patient' | 'doctor' | 'admin' | 'coo' | 'healthlink' | 'p
 export interface AuthContextType {
   user: User | null;
   role: AppRole | null;
+  effectivePermissions: Set<AppRole>;
   isLoading: boolean;
   signOut: () => Promise<void>;
 }

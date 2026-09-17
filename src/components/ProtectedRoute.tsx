@@ -61,7 +61,7 @@ export function ProtectedRoute({
   requiredRole,
   requireCompletedRegistration = false,
 }: ProtectedRouteProps) {
-  const { user, role, isLoading } = useAuth();
+  const { user, role, effectivePermissions, isLoading } = useAuth();
   const location = useLocation();
   const [checkingRegistration, setCheckingRegistration] = useState(false);
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
@@ -161,7 +161,8 @@ export function ProtectedRoute({
 
   if (requiredRole) {
     const effectiveRole = (role || resolveRole(user)) as AppRole;
-    if (effectiveRole !== requiredRole) {
+    const hasPermission = effectivePermissions.has(requiredRole);
+    if (!hasPermission) {
       return <Navigate to={roleDefaultPath(effectiveRole)} replace />;
     }
   }

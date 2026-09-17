@@ -59,15 +59,6 @@ export default function HealthLinkLogin() {
         return;
       }
 
-      if (!roleAllowed) {
-        await supabase.auth.updateUser({
-          data: {
-            ...(user?.user_metadata || {}),
-            role: 'healthlink',
-          },
-        });
-      }
-
       localStorage.setItem('userRole', 'healthlink');
       toast({ title: 'Success', description: 'Welcome to HealthLink Portal.' });
       navigate('/healthlink');

@@ -4159,7 +4159,7 @@ const CentralAdmin = () => {
               </TabsContent>
 
               <TabsContent value="assignments" className="space-y-6">
-                <AdminAssignmentDashboard userRole={profile.role || 'admin'} userId={user.id} />
+                <AdminAssignmentDashboard userRole="admin" userId={user.id} />
               </TabsContent>
 
               <TabsContent value="settings" className="space-y-6">

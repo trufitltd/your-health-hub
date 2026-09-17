@@ -20,6 +20,13 @@ const getSuperAdminEmails = (): Set<string> => {
   );
 };
 
+const getAdminEmails = (): Set<string> => {
+  const raw = import.meta.env.VITE_ADMIN_EMAILS || '';
+  return new Set(
+    raw.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+};
+
 const resolveRole = (user: User): AppRole => {
   const emailRole = parseAppRole(user.user_metadata?.role);
   const superAdminEmails = getSuperAdminEmails();
@@ -29,9 +36,32 @@ const resolveRole = (user: User): AppRole => {
   return emailRole;
 };
 
+const resolveEffectivePermissions = (user: User): Set<AppRole> => {
+  const permissions = new Set<AppRole>();
+  const metadataRole = parseAppRole(user.user_metadata?.role);
+  permissions.add(metadataRole);
+
+  const userEmail = (user.email || '').toLowerCase();
+  const superAdminEmails = getSuperAdminEmails();
+  const adminEmails = getAdminEmails();
+
+  if (superAdminEmails.has(userEmail)) {
+    permissions.add('platform_superadmin');
+  }
+  if (adminEmails.has(userEmail)) {
+    permissions.add('admin');
+  }
+  if (metadataRole === 'admin') {
+    permissions.add('admin');
+  }
+
+  return permissions;
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [effectivePermissions, setEffectivePermissions] = useState<Set<AppRole>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -45,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(currentUser);
           const userRole = resolveRole(currentUser);
           setRole(userRole);
+          setEffectivePermissions(resolveEffectivePermissions(currentUser));
           localStorage.setItem('userRole', userRole);
         }
       } catch (error) {
@@ -65,10 +96,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(currentUser);
           const userRole = resolveRole(currentUser);
           setRole(userRole);
+          setEffectivePermissions(resolveEffectivePermissions(currentUser));
           localStorage.setItem('userRole', userRole);
         } else {
           setUser(null);
           setRole(null);
+          setEffectivePermissions(new Set());
           localStorage.removeItem('userRole');
         }
       }
@@ -81,11 +114,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
     setUser(null);
     setRole(null);
+    setEffectivePermissions(new Set());
     localStorage.removeItem('userRole');
   };
 
   return (
-    <AuthContext.Provider value={{ user, role, isLoading, signOut }}>
+    <AuthContext.Provider value={{ user, role, effectivePermissions, isLoading, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -26,8 +26,17 @@ const Index = () => {
   // Redirect authenticated users to their portals
   useEffect(() => {
     if (!isLoading && user && role) {
-      const portalPath = role === 'doctor' ? '/doctor-portal' : '/patient-portal';
-      navigate(portalPath, { replace: true });
+      if (role === 'doctor') {
+        navigate('/doctor-portal', { replace: true });
+      } else if (role === 'admin' || role === 'coo') {
+        navigate('/admin', { replace: true });
+      } else if (role === 'platform_superadmin') {
+        navigate('/platform-admin', { replace: true });
+      } else if (role === 'healthlink') {
+        navigate('/healthlink', { replace: true });
+      } else {
+        navigate('/patient-portal', { replace: true });
+      }
     }
   }, [user, role, isLoading, navigate]);
 
