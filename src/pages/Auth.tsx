@@ -17,7 +17,7 @@ import { useActivePatientPromotion } from '@/hooks/useActivePatientPromotion';
 
 type AuthMode = 'login' | 'register' | 'verify' | 'reset';
 type UserRole = 'patient' | 'doctor' | 'agent';
-type SignInRole = UserRole | 'healthlink';
+type SignInRole = UserRole | 'healthlink' | 'admin' | 'coo' | 'platform_superadmin' | 'organisation_admin';
 type CountryPhoneCode = { iso: string; name: string; dialCode: string };
 import { MIN_SPECIALIST_RATE_NGN } from '@/services/marketplaceTypes';
 
@@ -412,6 +412,7 @@ export default function AuthPage() {
     if (rawRole === 'doctor') return 'doctor';
     if (rawRole === 'patient') return 'patient';
     if (rawRole === 'healthlink') return 'healthlink';
+    if (rawRole === 'admin' || rawRole === 'coo' || rawRole === 'platform_superadmin' || rawRole === 'organisation_admin') return rawRole as SignInRole;
     return null;
   };
 
@@ -1029,23 +1030,37 @@ export default function AuthPage() {
         }
 
         const redirectPath = searchParams.get('redirect');
-        if (redirectPath && userRole === 'patient') {
-          navigate(redirectPath);
-          return;
+        if (redirectPath) {
+          const allowedPrefixes = ['/admin', '/coo', '/healthlink', '/doctor-portal', '/patient-portal', '/platform-admin'];
+          const isAllowed = allowedPrefixes.some((prefix) => redirectPath === prefix || redirectPath.startsWith(prefix + '/'));
+          if (isAllowed) {
+            navigate(redirectPath);
+            return;
+          }
         }
 
-        // Redirect based on role
+        // Redirect based on effective permissions
+        const userEmail = (data.user?.email || '').toLowerCase();
         const superAdminEmails = new Set(
           (import.meta.env.VITE_SUPER_ADMIN_EMAILS || '')
             .split(',')
             .map((e: string) => e.trim().toLowerCase())
             .filter(Boolean)
         );
-        const isSuperAdmin = superAdminEmails.has((data.user?.email || '').toLowerCase());
+        const adminEmails = new Set(
+          (import.meta.env.VITE_ADMIN_EMAILS || '')
+            .split(',')
+            .map((e: string) => e.trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const isSuperAdmin = superAdminEmails.has(userEmail);
+        const isAdmin = adminEmails.has(userEmail) || userRole === 'admin';
 
-        if (isSuperAdmin) {
+        if (isSuperAdmin && isAdmin) {
+          navigate('/admin');
+        } else if (isSuperAdmin) {
           navigate('/platform-admin');
-        } else if (userRole === 'admin' || userRole === 'coo' || userRole === 'platform_superadmin') {
+        } else if (isAdmin) {
           navigate('/admin');
         } else if (userRole === 'doctor') {
           navigate('/doctor-portal');

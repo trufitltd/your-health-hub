@@ -118,11 +118,11 @@ function getConfigBool(configs: OrganisationConfig[], key: string, defaultValue 
 type View = 'dashboard' | 'list' | 'create' | 'detail';
 
 function PlatformAdminLayout({ children }: { children: React.ReactNode }) {
-  const { user, role, signOut } = useAuth();
+  const { user, role, effectivePermissions, signOut } = useAuth();
   const navigate = useNavigate();
 
   if (!user) return <Navigate to="/platform-admin/login" replace />;
-  if (role !== 'platform_superadmin') return <Navigate to="/" replace />;
+  if (!effectivePermissions.has('platform_superadmin')) return <Navigate to="/" replace />;
 
   return (
     <div className="min-h-screen bg-muted/30">
