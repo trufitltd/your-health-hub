@@ -707,10 +707,12 @@ export default function SlotSelection() {
         ?? (booking.paymentInitialization ? Number(booking.paymentInitialization.amountInKobo || 0) / 100 : 0),
       );
 
-      if (effectivePaymentMethod === 'promotion' || booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0) {
+      if (effectivePaymentMethod === 'promotion' || booking.paidWithWallet || booking.paymentMethod === 'wallet' || paystackAmountDue <= 0 || booking.testBypass) {
         paystackFlowActiveRef.current = false;
         setIsConfirming(false);
-        const successMessage = booking.pendingAssignment
+        const successMessage = booking.testBypass
+          ? 'Test mode — payment bypassed. Your booking is now pending doctor approval.'
+          : booking.pendingAssignment
           ? 'Your booking has been submitted. A clinician will be assigned shortly.'
           : effectivePaymentMethod === 'promotion' 
             ? t('slotSelection.toast.promotionBookingSuccessDescription', 'Your free promotional consultation has been booked and is now pending doctor approval.')
@@ -721,7 +723,7 @@ export default function SlotSelection() {
               'Your booking has been paid from wallet and is now pending doctor approval.',
             );
         toast({
-          title: t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
+          title: booking.testBypass ? 'Test booking successful' : t('slotSelection.toast.walletBookingSuccessTitle', 'Booking successful'),
           description: successMessage,
         });
         setTimeout(() => {

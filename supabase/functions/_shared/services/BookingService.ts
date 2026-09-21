@@ -841,6 +841,74 @@ export class BookingService {
 
     const isInternalAssignment = !!pendingAssignment;
 
+    // ── Test mode payment bypass ──────────────────────────────────────────
+    // If MYE_TEST_MODE_ENABLED=true and this is the authorized Test Patient
+    // booking the designated Test Doctor, skip Paystack entirely.
+    const testModeEnabled = Deno.env.get('MYE_TEST_MODE_ENABLED') === 'true';
+    if (testModeEnabled) {
+      const testPatientId = Deno.env.get('MYE_TEST_PATIENT_USER_ID') || '';
+      const testDoctorId = Deno.env.get('MYE_TEST_DOCTOR_USER_ID') || '';
+      if (patientId === testPatientId && appointment.doctor_id === testDoctorId) {
+        console.log('[BookingService] TEST_PAYMENT_BYPASS', {
+          appointment_id: appointment.id,
+          test_patient_user_id: patientId,
+          test_doctor_id: testDoctorId,
+          timestamp: new Date().toISOString(),
+        });
+
+        const testRef = `TEST-BYPASS-${Date.now()}-${appointment.id.slice(0, 8)}`;
+
+        // Create payment record with explicit test bypass marker
+        await this.supabase.from('payments').insert({
+          appointment_id: appointment.id,
+          patient_id: patientId,
+          amount,
+          currency,
+          status: 'completed',
+          provider: 'test_bypass',
+          payment_method: 'test_bypass',
+          payment_reference: testRef,
+          provider_reference: testRef,
+          metadata: {
+            test_mode: true,
+            payment_bypassed: true,
+            reason: 'authorized_test_patient_test_doctor_pair',
+          },
+        });
+
+        // Move appointment to post-payment status (pending_approval)
+        const postPaymentStatus = isInternalAssignment ? 'pending_assignment' : 'pending_approval';
+        const { error: statusError } = await this.supabase
+          .from('appointments')
+          .update({
+            status: postPaymentStatus,
+            slot_locked_until: null,
+            payment_reference: testRef,
+          })
+          .eq('id', appointment.id);
+
+        if (statusError) {
+          throw new Error(`Failed to finalize test bypass booking: ${statusError.message}`);
+        }
+
+        // Do NOT add wallet earning for test bypass
+        return {
+          appointmentId: appointment.id,
+          finalPrice: amount,
+          currency,
+          slot,
+          paymentInitialization: null,
+          paymentMethod: 'paystack',
+          paidWithWallet: false,
+          walletChargedAmount: 0,
+          paystackAmountDue: 0,
+          pendingAssignment: isInternalAssignment || undefined,
+          testBypass: true,
+        };
+      }
+    }
+    // ── End test mode bypass ──────────────────────────────────────────────
+
     // Determine the target status after payment
     const postPaymentStatus = isInternalAssignment ? 'pending_assignment' : 'pending_approval';
 

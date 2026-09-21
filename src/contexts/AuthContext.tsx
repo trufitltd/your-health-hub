@@ -27,6 +27,13 @@ const getAdminEmails = (): Set<string> => {
   );
 };
 
+const getCooEmails = (): Set<string> => {
+  const raw = import.meta.env.VITE_COO_EMAILS || '';
+  return new Set(
+    raw.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+};
+
 const resolveRole = (user: User): AppRole => {
   const emailRole = parseAppRole(user.user_metadata?.role);
   const superAdminEmails = getSuperAdminEmails();
@@ -44,6 +51,7 @@ const resolveEffectivePermissions = (user: User): Set<AppRole> => {
   const userEmail = (user.email || '').toLowerCase();
   const superAdminEmails = getSuperAdminEmails();
   const adminEmails = getAdminEmails();
+  const cooEmails = getCooEmails();
 
   if (superAdminEmails.has(userEmail)) {
     permissions.add('platform_superadmin');
@@ -51,8 +59,14 @@ const resolveEffectivePermissions = (user: User): Set<AppRole> => {
   if (adminEmails.has(userEmail)) {
     permissions.add('admin');
   }
+  if (cooEmails.has(userEmail)) {
+    permissions.add('coo');
+  }
   if (metadataRole === 'admin') {
     permissions.add('admin');
+  }
+  if (metadataRole === 'coo') {
+    permissions.add('coo');
   }
 
   return permissions;

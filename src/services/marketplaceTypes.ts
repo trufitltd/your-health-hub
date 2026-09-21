@@ -150,6 +150,7 @@ export interface BookingInitiateResponse {
   walletChargedAmount?: number;
   paystackAmountDue?: number;
   pendingAssignment?: boolean;
+  testBypass?: boolean;
 }
 
 export interface PatientWalletWithdrawalRequest {

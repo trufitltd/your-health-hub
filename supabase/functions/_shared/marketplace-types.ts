@@ -84,6 +84,7 @@ export interface BookingInitiateResult {
   walletChargedAmount?: number;
   paystackAmountDue?: number;
   pendingAssignment?: boolean;
+  testBypass?: boolean;
 }
 
 export interface PricePreviewInput {

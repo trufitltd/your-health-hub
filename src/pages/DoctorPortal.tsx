@@ -2044,9 +2044,10 @@ ${ePrescription}
       refetch();
     } catch (error) {
       console.error('Failed to reschedule appointment:', error);
+      const message = error instanceof Error ? error.message : String(error);
       toast({
         title: 'Reschedule failed',
-        description: 'Could not reschedule this appointment. Please try again.',
+        description: message || 'Could not reschedule this appointment. Please try again.',
         variant: 'destructive',
       });
     } finally {
